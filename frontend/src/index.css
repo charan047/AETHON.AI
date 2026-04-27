@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+  body { @apply bg-slate-950 text-slate-100 font-sans; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-slate-900; }
+  ::-webkit-scrollbar-thumb { @apply bg-slate-600 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-slate-500; }
+}
+
+@layer components {
+  .card { @apply bg-slate-900 border border-slate-800 rounded-xl; }
+  .card-hover { @apply hover:border-slate-700 transition-colors duration-200; }
+  .btn { @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed; }
+  .btn-primary { @apply btn bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-900/30; }
+  .btn-secondary { @apply btn bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700; }
+  .btn-danger { @apply btn bg-red-900/30 hover:bg-red-900/50 text-red-400 border border-red-900/50; }
+  .btn-ghost { @apply btn hover:bg-slate-800 text-slate-400 hover:text-slate-200; }
+  .input { @apply w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500 transition-colors; }
+  .label { @apply block text-sm font-medium text-slate-400 mb-1.5; }
+  .badge { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium; }
+  .badge-green { @apply badge bg-emerald-900/40 text-emerald-400 border border-emerald-900/60; }
+  .badge-red { @apply badge bg-red-900/40 text-red-400 border border-red-900/60; }
+  .badge-blue { @apply badge bg-blue-900/40 text-blue-400 border border-blue-900/60; }
+  .badge-yellow { @apply badge bg-yellow-900/40 text-yellow-400 border border-yellow-900/60; }
+  .badge-purple { @apply badge bg-violet-900/40 text-violet-400 border border-violet-900/60; }
+  .badge-gray { @apply badge bg-slate-800 text-slate-400 border border-slate-700; }
+}
+
+.react-flow__node { cursor: pointer; }
+.react-flow__edge-path { stroke: #6d28d9; stroke-width: 2; }
+.react-flow__edge.animated .react-flow__edge-path { stroke-dasharray: 5; animation: dashdraw 0.5s linear infinite; }
+@keyframes dashdraw { from { stroke-dashoffset: 10; } to { stroke-dashoffset: 0; } }
+
+.log-entry { animation: fadeIn 0.2s ease-in-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
