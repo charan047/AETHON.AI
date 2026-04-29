@@ -6,6 +6,9 @@ import importlib
 import builtins
 import httpx
 import ast
+import json
+
+from config import settings
 
 # Modules users are allowed to import inside custom tool code
 _ALLOWED_IMPORTS = {
@@ -84,10 +87,75 @@ def parse_tool_params(code: str) -> list[dict]:
 
 
 def execute_custom_tool_code(code: str, **kwargs) -> tuple[str, str | None]:
-    """Sandbox-execute custom tool code with keyword arguments.
+    """Execute custom tool code in the Docker execution sandbox.
 
     Returns (output_string, error_string_or_None).
     """
+    try:
+        import docker
+    except ImportError:
+        return "", "Docker SDK is not installed. Run pip install -r requirements.txt."
+
+    invocation = f"""
+import json
+
+_tool_kwargs = {json.dumps(kwargs, default=str)}
+_tool_result = run(**_tool_kwargs)
+if isinstance(_tool_result, str):
+    print(_tool_result)
+else:
+    print(json.dumps(_tool_result, default=str))
+"""
+    wrapped_code = f"{code}\n\n{invocation}"
+
+    try:
+        client = docker.from_env()
+        try:
+            client.images.get(settings.docker_execution_image)
+        except Exception:
+            return "", (
+                f"Docker execution image '{settings.docker_execution_image}' is missing. "
+                "Build it with: docker build -t platform-executor:latest -f backend/tools/docker/Dockerfile.execution backend/tools/docker/"
+            )
+
+        container = None
+        try:
+            container = client.containers.run(
+                image=settings.docker_execution_image,
+                command=["python", "-c", wrapped_code],
+                mem_limit="128m",
+                cpu_period=100000,
+                cpu_quota=50000,
+                network_disabled=True,
+                detach=True,
+                stdout=True,
+                stderr=True,
+                environment={
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "PYTHONUNBUFFERED": "1",
+                },
+                security_opt=["no-new-privileges"],
+                cap_drop=["ALL"],
+                read_only=True,
+                tmpfs={"/tmp": "rw,noexec,nosuid,size=32m"},
+            )
+            result = container.wait(timeout=30)
+            output = container.logs(stdout=True, stderr=True).decode("utf-8", errors="replace")[:10000]
+            if result.get("StatusCode", 1) != 0:
+                return "", output
+            return output, None
+        finally:
+            if container is not None:
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    pass
+    except Exception as e:
+        return "", str(e)
+
+
+def execute_custom_tool_code_in_process(code: str, **kwargs) -> tuple[str, str | None]:
+    """Legacy in-process executor kept only for local debugging; runtime uses Docker."""
     namespace: dict = {"__builtins__": _build_safe_namespace()}
     try:
         exec(code, namespace)  # noqa: S102
@@ -217,7 +285,18 @@ TOOL_REGISTRY = {
     "text_analysis": text_analysis,
 }
 
-BUILTIN_TOOL_IDS = set(TOOL_REGISTRY.keys())
+SPECIAL_TOOL_IDS = {
+    "github",
+    "email",
+    "slack",
+    "telegram",
+    "notifications",
+    "code_execution",
+    "code_review",
+    "web_intelligence",
+    "research",
+}
+BUILTIN_TOOL_IDS = set(TOOL_REGISTRY.keys()) | SPECIAL_TOOL_IDS
 
 
 def get_tools(tool_ids: list[str], custom_tool_defs: list = None):

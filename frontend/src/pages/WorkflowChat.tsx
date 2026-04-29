@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { workflowsApi, executionsApi } from '../api/client'
 import { useWebSocket } from '../hooks/useWebSocket'
+import { FeedbackBar } from '../components/executions/FeedbackBar'
 import { Send, Copy, Check, ArrowLeft, Bot, User, Loader2, Zap, MessageSquare } from 'lucide-react'
 import { clsx } from 'clsx'
 import toast from 'react-hot-toast'
@@ -110,6 +111,11 @@ export function WorkflowChat() {
     tool_result:   'text-amber-300',
   }
 
+  const feedbackAgentId = workflow?.nodes
+    ?.filter(node => node.type === 'agentNode' && node.data?.agent_id)
+    .slice(-1)[0]
+    ?.data.agent_id as string | undefined
+
   return (
     <div className="flex flex-col h-screen bg-slate-950">
       {/* Header */}
@@ -174,6 +180,7 @@ export function WorkflowChat() {
                   <span>·</span>
                   <span>${ex.cost.toFixed(5)}</span>
                 </div>
+                <FeedbackBar executionId={ex.id} agentId={feedbackAgentId || null} output={ex.output_message} />
               </div>
             </div>
           </div>

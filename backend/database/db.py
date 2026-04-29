@@ -24,7 +24,7 @@ async def get_db():
 
 
 async def init_db():
-    from database.models import Agent, Workflow, Execution, Message  # noqa
+    from database.models import Agent, Workflow, WorkflowVersion, WebhookEndpoint, Execution, ExecutionCostLog, Message, CompanyProfile, UserIntegration, AgentFeedback, AgentReputation  # noqa
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Legacy SQLite-only migration. With Alembic + Postgres, schema changes

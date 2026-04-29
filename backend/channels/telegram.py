@@ -79,12 +79,14 @@ class TelegramChannel:
                 if runner:
                     response, tokens = await runner.run(
                         user_message,
+                        user_id=user_id,
                         thread_id=f"telegram-{user_id}",
                         broadcast=self.ws_manager.broadcast if self.ws_manager else None,
+                        execution_id=execution_id,
                     )
                     await update.message.reply_text(response or "I processed your request but have no response.")
                 else:
-                    await update.message.reply_text("No Telegram-enabled agent configured.")
+                    await update.message.reply_text("No Telegram-enabled agent could handle that request.")
             except Exception as e:
                 logger.error(f"Agent error: {e}")
                 await update.message.reply_text(f"Error processing your request: {str(e)[:200]}")

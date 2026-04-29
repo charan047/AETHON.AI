@@ -5,9 +5,16 @@ from typing import TypedDict, Annotated
 import json
 import re
 import logging
+from datetime import datetime
+from sqlalchemy import select
 
 from runtime.agent_runner import AgentRunner, build_llm, _extract_text
+from runtime.condition_evaluator import ConditionEvaluator
+from runtime.parallel_executor import ParallelExecutor
 from config import settings
+from database.db import AsyncSessionLocal
+from database.models import Execution, ExecutionStatus
+from services.hitl_service import HITLService
 
 logger = logging.getLogger(__name__)
 
@@ -19,18 +26,238 @@ class WorkflowState(TypedDict):
     agent_outputs: dict
 
 
+class WorkflowExecutionStopped(Exception):
+    def __init__(self, status: str, output: str):
+        self.status = status
+        self.output = output
+        super().__init__(output)
+
+
 class WorkflowExecutor:
-    def __init__(self, workflow, agents_map: dict, ws_manager=None, custom_tool_defs=None):
+    def __init__(
+        self,
+        workflow,
+        agents_map: dict,
+        ws_manager=None,
+        user_id: str | None = None,
+        custom_tool_defs=None,
+        memory_service=None,
+        memory_configs=None,
+        hitl_service=None,
+    ):
         self.workflow = workflow
         self.agents_map = agents_map
         self.ws_manager = ws_manager
+        self.user_id = user_id
         self._custom_tool_defs = custom_tool_defs or []
+        self.memory_service = memory_service
+        self.memory_configs = memory_configs or {}
+        self.hitl_service = hitl_service or HITLService()
         self._runners: dict[str, AgentRunner] = {}
 
     def _get_runner(self, agent_id: str) -> AgentRunner:
         if agent_id not in self._runners:
-            self._runners[agent_id] = AgentRunner(self.agents_map[agent_id], self._custom_tool_defs)
+            self._runners[agent_id] = AgentRunner(
+                self.agents_map[agent_id],
+                self._custom_tool_defs,
+                memory_service=self.memory_service,
+                memory_config=self.memory_configs.get(agent_id),
+            )
         return self._runners[agent_id]
+
+    @staticmethod
+    def _is_hitl_node(node: dict) -> bool:
+        data = node.get("data", {}) or {}
+        node_config = node.get("config", {}) or {}
+        data_config = data.get("config", {}) or {}
+        return node.get("type") == "approval" or bool(
+            node.get("hitl_enabled")
+            or node_config.get("hitl_enabled")
+            or data.get("hitl_enabled")
+            or data_config.get("hitl_enabled")
+        )
+
+    def _is_executable_node(self, node: dict) -> bool:
+        if node.get("type") == "condition":
+            return True
+        if node.get("type") == "parallel_group":
+            return True
+        if self._is_hitl_node(node):
+            return True
+        return node.get("data", {}).get("agent_id") in self.agents_map
+
+    @staticmethod
+    def _parallel_agent_ids(node: dict) -> list[str]:
+        data = node.get("data", {}) or {}
+        agent_ids = data.get("agent_ids") or node.get("agent_ids") or []
+        return [agent_id for agent_id in agent_ids if agent_id]
+
+    def _node_by_id(self) -> dict[str, dict]:
+        return {node["id"]: node for node in self.workflow.nodes or []}
+
+    def _edge_map(self) -> dict[str, str]:
+        return {edge["source"]: edge["target"] for edge in self.workflow.edges or []}
+
+    def _first_node(self) -> dict | None:
+        nodes = self.workflow.nodes or []
+        if not nodes:
+            return None
+        node_by_id = {node["id"]: node for node in nodes}
+        targets = {edge["target"] for edge in self.workflow.edges or []}
+        for node in nodes:
+            if self._is_executable_node(node) and node["id"] not in targets:
+                return node
+        for node in nodes:
+            if self._is_executable_node(node):
+                return node
+        return None
+
+    def _ordered_nodes(self) -> list[dict]:
+        nodes = self.workflow.nodes or []
+        edges = self.workflow.edges or []
+        if not nodes:
+            return []
+
+        node_by_id = {node["id"]: node for node in nodes}
+        edge_map = {edge["source"]: edge["target"] for edge in edges}
+        executable_ids = {node["id"] for node in nodes if self._is_executable_node(node)}
+        targets = set(edge_map.values())
+        start_candidates = [node["id"] for node in nodes if node["id"] in executable_ids and node["id"] not in targets]
+        start_node = start_candidates[0] if start_candidates else next(iter(executable_ids), None)
+
+        ordered = []
+        seen = set()
+        current = start_node
+        while current and current not in seen:
+            if current in executable_ids:
+                ordered.append(node_by_id[current])
+            seen.add(current)
+            current = edge_map.get(current)
+
+        for node in nodes:
+            if node["id"] in executable_ids and node["id"] not in seen:
+                ordered.append(node)
+        return ordered
+
+    async def _update_execution_status(
+        self,
+        execution_id: str,
+        status: str,
+        output_message: str | None = None,
+        completed: bool = False,
+    ) -> None:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Execution).where(Execution.id == execution_id))
+            execution = result.scalar_one_or_none()
+            if not execution:
+                return
+            execution.status = status
+            if output_message is not None:
+                execution.output_message = output_message
+            if completed:
+                execution.completed_at = datetime.utcnow()
+            await db.commit()
+
+    async def _handle_hitl_node(
+        self,
+        node: dict,
+        execution_id: str,
+        previous_output: str,
+        agent_outputs: dict[str, str],
+    ) -> None:
+        data = node.get("data", {}) or {}
+        hitl_config = {
+            **(node.get("config") or {}),
+            **(node.get("hitl_config") or {}),
+            **(data.get("config") or {}),
+            **(data.get("hitl_config") or {}),
+        }
+        title = data.get("title") or hitl_config.get("title") or "Review required before continuing"
+        description = data.get("description") or hitl_config.get("description") or ""
+        timeout_hours = data.get("timeout_hours") or hitl_config.get("timeout_hours")
+        context_data = {
+            "previous_output": previous_output,
+            "agent_outputs": agent_outputs,
+        }
+
+        approval = await self.hitl_service.create_approval_request(
+            workflow_id=self.workflow.id,
+            execution_id=execution_id,
+            node_id=node["id"],
+            title=title,
+            description=description,
+            context_data=context_data,
+            agent_id=data.get("agent_id") or hitl_config.get("agent_id"),
+            timeout_hours=timeout_hours,
+        )
+
+        if self.ws_manager:
+            await self.ws_manager.broadcast(
+                {
+                    "type": "workflow_paused",
+                    "execution_id": execution_id,
+                    "approval_id": approval.id,
+                    "node_id": node["id"],
+                }
+            )
+        await self._update_execution_status(execution_id, ExecutionStatus.waiting_approval.value)
+
+        timeout_seconds = int((timeout_hours or settings.hitl_timeout_hours) * 3600)
+        decision = await self.hitl_service.wait_for_decision(
+            approval_id=approval.id,
+            resume_token=approval.resume_token,
+            timeout_seconds=timeout_seconds,
+        )
+
+        if decision.get("decision") == "approved":
+            await self._update_execution_status(execution_id, ExecutionStatus.running.value)
+            if self.ws_manager:
+                await self.ws_manager.broadcast(
+                    {
+                        "type": "workflow_resumed",
+                        "execution_id": execution_id,
+                        "approval_id": approval.id,
+                        "node_id": node["id"],
+                    }
+                )
+            return
+
+        if decision.get("decision") == "rejected":
+            reason = decision.get("comment") or "Rejected by reviewer"
+            output = f"Workflow rejected: {reason}"
+            await self._update_execution_status(
+                execution_id,
+                ExecutionStatus.rejected.value,
+                output_message=output,
+                completed=True,
+            )
+            if self.ws_manager:
+                await self.ws_manager.broadcast(
+                    {
+                        "type": "workflow_rejected",
+                        "execution_id": execution_id,
+                        "approval_id": approval.id,
+                        "reason": reason,
+                    }
+                )
+            raise WorkflowExecutionStopped(ExecutionStatus.rejected.value, output)
+
+        output = "Workflow timed out waiting for human approval."
+        await self._update_execution_status(
+            execution_id,
+            ExecutionStatus.timed_out.value,
+            output_message=output,
+            completed=True,
+        )
+        if self.ws_manager:
+            await self.ws_manager.broadcast(
+                {
+                    "type": "workflow_timed_out",
+                    "execution_id": execution_id,
+                    "approval_id": approval.id,
+                }
+            )
+        raise WorkflowExecutionStopped(ExecutionStatus.timed_out.value, output)
 
     def _build_graph(self):
         nodes = self.workflow.nodes or []
@@ -118,7 +345,12 @@ class WorkflowExecutor:
                             })
 
                     response, tokens = await r.run(
-                        task, thread_id=f"{execution_id}-{node_id}", broadcast=broadcast
+                        task,
+                        user_id=self.user_id,
+                        thread_id=f"{execution_id}-{node_id}",
+                        broadcast=broadcast,
+                        workflow_id=self.workflow.id,
+                        execution_id=execution_id,
                     )
 
                     if self.ws_manager:
@@ -229,7 +461,14 @@ class WorkflowExecutor:
                 if self.ws_manager:
                     await self.ws_manager.broadcast({**event, "execution_id": _eid, "node_id": _nid})
 
-            response, tokens = await runner.run(task, thread_id=f"{execution_id}-{node_id}", broadcast=_broadcast)
+            response, tokens = await runner.run(
+                task,
+                user_id=self.user_id,
+                thread_id=f"{execution_id}-{node_id}",
+                broadcast=_broadcast,
+                workflow_id=self.workflow.id,
+                execution_id=execution_id,
+            )
             total_tokens += tokens
             agent_outputs[name] = response
 
@@ -277,37 +516,155 @@ class WorkflowExecutor:
         if mode == "orchestrator":
             return await self._run_orchestrator(input_message, execution_id)
 
-        # --- Sequential / pipeline execution ---
-        graph, plan = self._build_graph()
-
-        if not graph:
+        # --- Sequential / dynamically routed pipeline execution ---
+        current_node = self._first_node()
+        if not current_node:
             return "No valid workflow graph could be built. Make sure all nodes have agents assigned and the workflow is saved.", 0
+
+        node_by_id = self._node_by_id()
+        edge_map = self._edge_map()
+        condition_evaluator = ConditionEvaluator(ws_broadcaster=self.ws_manager)
+        max_cycles = int(getattr(self.workflow, "max_cycles", 10) or 10)
+        visit_counts: dict[str, int] = {}
+
+        def get_next_node(current_id: str) -> dict | None:
+            next_node_id = edge_map.get(current_id)
+            return node_by_id.get(next_node_id) if next_node_id else None
+
+        plan = []
+        for node in self.workflow.nodes or []:
+            if not self._is_executable_node(node):
+                continue
+            data = node.get("data", {}) or {}
+            if node.get("type") == "condition":
+                plan.append(data.get("label") or "Condition")
+            elif node.get("type") == "parallel_group":
+                plan.append(data.get("label") or "Parallel group")
+            elif self._is_hitl_node(node):
+                plan.append(data.get("title") or "Human approval")
+            else:
+                agent_id = data.get("agent_id")
+                plan.append(self.agents_map[agent_id].name)
 
         if self.ws_manager:
             await self.ws_manager.broadcast({
                 "type": "workflow_plan",
                 "execution_id": execution_id,
-                "plan": [p["agent"] for p in plan],
+                "plan": plan,
             })
 
-        initial_state: WorkflowState = {
-            "messages": [HumanMessage(content=input_message)],
-            "execution_id": execution_id,
-            "current_node": "",
-            "agent_outputs": {},
-        }
-
         total_tokens = 0
-        final_output = ""
+        previous_output = input_message
+        agent_outputs: dict[str, str] = {}
 
-        async for chunk in graph.astream(initial_state, {"recursion_limit": 50}):
-            for node_id, node_state in chunk.items():
-                if node_id == "__end__":
-                    continue
-                msgs = node_state.get("messages", [])
-                if msgs:
-                    last = msgs[-1]
-                    if hasattr(last, "content"):
-                        final_output = _extract_text(last.content)
+        while current_node is not None:
+            node_id = current_node["id"]
+            visit_counts[node_id] = visit_counts.get(node_id, 0) + 1
+            if visit_counts[node_id] > max_cycles:
+                raise RuntimeError("Workflow cycle limit exceeded")
 
-        return final_output, total_tokens
+            if current_node.get("type") == "condition":
+                data = {**(current_node.get("data", {}) or {}), "id": node_id}
+                target_node_id = await condition_evaluator.evaluate(data, previous_output)
+                current_node = node_by_id.get(target_node_id) if target_node_id else get_next_node(node_id)
+                continue
+
+            if current_node.get("type") == "parallel_group":
+                data = current_node.get("data", {}) or {}
+                parallel_agent_ids = self._parallel_agent_ids(current_node)
+                if agent_outputs:
+                    context = "\n\n".join(f"[{name} output]:\n{output}" for name, output in agent_outputs.items())
+                    task = f"Previous agent outputs:\n{context}\n\nOriginal task: {input_message}"
+                else:
+                    task = previous_output
+
+                parallel_executor = ParallelExecutor(
+                    ws_broadcaster=self.ws_manager,
+                    custom_tool_defs=self._custom_tool_defs,
+                    memory_service=self.memory_service,
+                    memory_configs=self.memory_configs,
+                    user_id=self.user_id,
+                )
+                response = await parallel_executor.execute_parallel_group(
+                    agent_ids=parallel_agent_ids,
+                    input_message=task,
+                    thread_id=f"{execution_id}-{node_id}",
+                    execution_id=execution_id,
+                    workflow_id=self.workflow.id,
+                    merge_strategy=data.get("merge_strategy", "concatenate"),
+                    merge_separator=data.get("merge_separator", "\n\n---\n\n"),
+                )
+                total_tokens += parallel_executor.last_token_count
+                previous_output = response
+                agent_outputs[data.get("label") or node_id] = response
+
+                if self.ws_manager:
+                    await self.ws_manager.broadcast(
+                        {
+                            "type": "parallel_group_done",
+                            "node_id": node_id,
+                            "label": data.get("label") or "Parallel group",
+                            "response": response[:500],
+                            "tokens": parallel_executor.last_token_count,
+                            "execution_id": execution_id,
+                        }
+                    )
+                current_node = get_next_node(node_id)
+                continue
+
+            if self._is_hitl_node(current_node):
+                await self._handle_hitl_node(
+                    node=current_node,
+                    execution_id=execution_id,
+                    previous_output=previous_output,
+                    agent_outputs=agent_outputs,
+                )
+                current_node = get_next_node(node_id)
+                continue
+
+            agent_id = current_node.get("data", {}).get("agent_id")
+            runner = self._get_runner(agent_id)
+            agent_name = self.agents_map[agent_id].name
+
+            if agent_outputs:
+                context = "\n\n".join(f"[{name} output]:\n{output}" for name, output in agent_outputs.items())
+                task = f"Previous agent outputs:\n{context}\n\nOriginal task: {input_message}"
+            else:
+                task = previous_output
+
+            async def broadcast(event, _node_id=node_id):
+                if self.ws_manager:
+                    await self.ws_manager.broadcast(
+                        {
+                            **event,
+                            "execution_id": execution_id,
+                            "node_id": _node_id,
+                        }
+                    )
+
+            response, tokens = await runner.run(
+                task,
+                user_id=self.user_id,
+                thread_id=f"{execution_id}-{node_id}",
+                broadcast=broadcast,
+                workflow_id=self.workflow.id,
+                execution_id=execution_id,
+            )
+            total_tokens += tokens
+            previous_output = response
+            agent_outputs[agent_name] = response
+
+            if self.ws_manager:
+                await self.ws_manager.broadcast(
+                    {
+                        "type": "agent_done",
+                        "agent": agent_name,
+                        "node_id": node_id,
+                        "response": response[:500],
+                        "tokens": tokens,
+                        "execution_id": execution_id,
+                    }
+                )
+            current_node = get_next_node(node_id)
+
+        return previous_output, total_tokens

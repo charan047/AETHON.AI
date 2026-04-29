@@ -11,7 +11,7 @@ from database import get_db
 from database.models import Agent, Workflow, Execution
 from auth.security import decode_token
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter()
 
 
 @router.websocket("/ws")
@@ -35,7 +35,10 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
 
 
 @router.get("/stats")
-async def get_stats(db: AsyncSession = Depends(get_db)):
+async def get_stats(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     agents_count = await db.scalar(select(func.count(Agent.id)))
     workflows_count = await db.scalar(select(func.count(Workflow.id)))
     executions_count = await db.scalar(select(func.count(Execution.id)))
@@ -66,7 +69,11 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/recent-executions")
-async def recent_executions(limit: int = 10, db: AsyncSession = Depends(get_db)):
+async def recent_executions(
+    limit: int = 10,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(
         select(Execution).order_by(Execution.started_at.desc()).limit(limit)
     )
@@ -90,5 +97,5 @@ async def recent_executions(limit: int = 10, db: AsyncSession = Depends(get_db))
 
 
 @router.get("/logs")
-async def get_buffered_logs():
+async def get_buffered_logs(current_user: User = Depends(get_current_user)):
     return list(ws_manager.log_buffer)

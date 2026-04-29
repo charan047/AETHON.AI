@@ -1,0 +1,121 @@
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import case, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from auth.dependencies import get_current_user, require_admin
+from database import get_db
+from database.models import ToolCallLog, User
+from tools.registry import tool_registry
+
+
+router = APIRouter()
+
+
+@router.get("/catalog")
+async def get_tool_catalog():
+    """Public catalog of platform tools and metadata."""
+    return tool_registry.get_available_tools()
+
+
+@router.get("/health")
+async def get_tool_health(current_user: User = Depends(require_admin)):
+    """Admin-only health status for every registered tool."""
+    await tool_registry.run_health_checks()
+    return [
+        {
+            "name": item["name"],
+            "category": item["category"],
+            "health": item["health"],
+            "requires_auth": item["requires_auth"],
+        }
+        for item in tool_registry.get_available_tools()
+    ]
+
+
+@router.get("/analytics")
+async def get_tool_analytics(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Usage analytics for the current user's tool calls."""
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    failed_count = func.sum(case((ToolCallLog.success == False, 1), else_=0))  # noqa: E712
+    total_count = func.count(ToolCallLog.id)
+    result = await db.execute(
+        select(
+            ToolCallLog.tool_name,
+            total_count.label("calls"),
+            func.avg(ToolCallLog.duration_ms).label("avg_duration_ms"),
+            failed_count.label("failed_calls"),
+        )
+        .where(ToolCallLog.user_id == current_user.id, ToolCallLog.created_at >= since)
+        .group_by(ToolCallLog.tool_name)
+        .order_by(total_count.desc())
+    )
+
+    tools = []
+    for row in result.all():
+        calls = int(row.calls or 0)
+        failed = int(row.failed_calls or 0)
+        tools.append(
+            {
+                "tool_name": row.tool_name,
+                "calls": calls,
+                "avg_duration_ms": int(row.avg_duration_ms or 0),
+                "error_rate": failed / calls if calls else 0,
+                "cost_attribution": 0,
+            }
+        )
+
+    return {
+        "window": "7d",
+        "most_used_tools_this_week": tools,
+        "avg_duration_per_tool": {item["tool_name"]: item["avg_duration_ms"] for item in tools},
+        "error_rate_per_tool": {item["tool_name"]: item["error_rate"] for item in tools},
+        "cost_attribution_per_tool": {item["tool_name"]: item["cost_attribution"] for item in tools},
+    }
+
+
+@router.get("/analytics/agents/{agent_id}")
+async def get_agent_tool_analytics(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Tool usage breakdown for one agent."""
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    failed_count = func.sum(case((ToolCallLog.success == False, 1), else_=0))  # noqa: E712
+    total_count = func.count(ToolCallLog.id)
+    result = await db.execute(
+        select(
+            ToolCallLog.tool_name,
+            ToolCallLog.function_name,
+            total_count.label("calls"),
+            func.avg(ToolCallLog.duration_ms).label("avg_duration_ms"),
+            failed_count.label("failed_calls"),
+        )
+        .where(
+            ToolCallLog.user_id == current_user.id,
+            ToolCallLog.agent_id == agent_id,
+            ToolCallLog.created_at >= since,
+        )
+        .group_by(ToolCallLog.tool_name, ToolCallLog.function_name)
+        .order_by(total_count.desc())
+    )
+
+    return {
+        "agent_id": agent_id,
+        "window": "7d",
+        "tools": [
+            {
+                "tool_name": row.tool_name,
+                "function_name": row.function_name,
+                "calls": int(row.calls or 0),
+                "avg_duration_ms": int(row.avg_duration_ms or 0),
+                "error_rate": (int(row.failed_calls or 0) / int(row.calls or 1)),
+            }
+            for row in result.all()
+        ],
+    }

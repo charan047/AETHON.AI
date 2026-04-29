@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { monitoringApi, executionsApi } from '../api/client'
 import { useWebSocket } from '../hooks/useWebSocket'
@@ -16,6 +17,29 @@ const EVENT_BADGES: Record<string, string> = {
   stream_chunk: 'bg-slate-800 text-slate-400 border-slate-700',
   telegram_message: 'bg-cyan-900/40 text-cyan-400 border-cyan-900/60',
   workflow_plan: 'bg-indigo-900/40 text-indigo-400 border-indigo-900/60',
+  ws_connected: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
+  ws_disconnected: 'bg-slate-800 text-slate-400 border-slate-700',
+  hitl_requested: 'bg-amber-900/40 text-amber-400 border-amber-900/60',
+  hitl_approved: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
+  hitl_rejected: 'bg-red-900/40 text-red-400 border-red-900/60',
+  hitl_timed_out: 'bg-slate-800 text-slate-400 border-slate-700',
+  agent_retry: 'bg-yellow-900/40 text-yellow-400 border-yellow-900/60',
+  agent_retry_succeeded: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
+  agent_retry_exhausted: 'bg-red-900/40 text-red-400 border-red-900/60',
+  workflow_paused: 'bg-amber-900/40 text-amber-400 border-amber-900/60',
+  workflow_resumed: 'bg-cyan-900/40 text-cyan-400 border-cyan-900/60',
+  workflow_rejected: 'bg-red-900/40 text-red-400 border-red-900/60',
+  workflow_timed_out: 'bg-slate-800 text-slate-400 border-slate-700',
+  workflow_scheduled_trigger: 'bg-cyan-900/40 text-cyan-400 border-cyan-900/60',
+  workflow_webhook_trigger: 'bg-cyan-900/40 text-cyan-400 border-cyan-900/60',
+  workflow_rolled_back: 'bg-violet-900/40 text-violet-400 border-violet-900/60',
+  parallel_group_started: 'bg-fuchsia-900/40 text-fuchsia-400 border-fuchsia-900/60',
+  parallel_group_completed: 'bg-fuchsia-900/40 text-fuchsia-400 border-fuchsia-900/60',
+  parallel_group_done: 'bg-fuchsia-900/40 text-fuchsia-400 border-fuchsia-900/60',
+  condition_evaluated: 'bg-indigo-900/40 text-indigo-400 border-indigo-900/60',
+  in_app_notification: 'bg-cyan-900/40 text-cyan-400 border-cyan-900/60',
+  budget_warning: 'bg-amber-900/40 text-amber-400 border-amber-900/60',
+  budget_exceeded: 'bg-red-900/40 text-red-400 border-red-900/60',
 }
 
 function eventContent(ev: WsEvent): string {
@@ -33,6 +57,29 @@ function eventContent(ev: WsEvent): string {
     case 'tool_result': return `${ev.tool}: ${String(ev.output || '').slice(0, 100)}`
     case 'stream_chunk': return `${ev.agent}: ${String(ev.content || '').slice(0, 80)}`
     case 'telegram_message': return `@${ev.from}: ${String(ev.content || '').slice(0, 80)}`
+    case 'ws_connected': return `Realtime connected · ${ev.connection_count || 1} connection(s)`
+    case 'ws_disconnected': return `Realtime disconnected · ${ev.connection_count || 0} connection(s)`
+    case 'hitl_requested': return `Approval requested: ${ev.title || ev.approval_id || 'review needed'}`
+    case 'hitl_approved': return `Approval ${ev.approval_id || ''} approved`
+    case 'hitl_rejected': return `Approval ${ev.approval_id || ''} rejected`
+    case 'hitl_timed_out': return `Approval ${ev.approval_id || ''} timed out`
+    case 'agent_retry': return `${ev.agent_name || ev.agent || 'Agent'} retrying attempt ${ev.attempt}/${ev.max_retries}`
+    case 'agent_retry_succeeded': return `${ev.agent_name || ev.agent || 'Agent'} succeeded after retry ${ev.attempt}`
+    case 'agent_retry_exhausted': return `${ev.agent_name || ev.agent || 'Agent'} exhausted retries: ${ev.error || 'unknown error'}`
+    case 'workflow_paused': return `Workflow paused for approval`
+    case 'workflow_resumed': return `Workflow resumed`
+    case 'workflow_rejected': return `Workflow rejected by reviewer`
+    case 'workflow_timed_out': return `Workflow timed out waiting for approval`
+    case 'workflow_scheduled_trigger': return `Scheduled workflow triggered`
+    case 'workflow_webhook_trigger': return `${ev.source || 'Webhook'} triggered workflow`
+    case 'workflow_rolled_back': return `Workflow rolled back to v${ev.target_version || 'previous'}`
+    case 'parallel_group_started': return `Parallel group started with ${ev.agent_count || 'multiple'} agent(s)`
+    case 'parallel_group_completed':
+    case 'parallel_group_done': return `Parallel group completed · ${ev.succeeded || 0} succeeded · ${ev.failed || 0} failed`
+    case 'condition_evaluated': return `Condition matched ${ev.matched_condition || 'default'} → ${ev.target_node_id || 'next node'}`
+    case 'in_app_notification': return `Notification: ${ev.title || ev.message || 'new item'}`
+    case 'budget_warning': return `Budget warning: $${ev.monthly_spend || 0} of $${ev.monthly_budget || 0}`
+    case 'budget_exceeded': return `Budget exceeded: $${ev.monthly_spend || 0} of $${ev.monthly_budget || 0}`
     default: return JSON.stringify(ev).slice(0, 100)
   }
 }
@@ -186,6 +233,14 @@ export function Monitoring() {
   const statusColor: Record<string, string> = {
     completed: 'text-emerald-400', failed: 'text-red-400',
     running: 'text-blue-400', pending: 'text-yellow-400',
+    waiting_approval: 'text-amber-400',
+    rejected: 'text-red-400',
+    timed_out: 'text-slate-500',
+  }
+  const statusLabel: Record<string, string> = {
+    waiting_approval: 'Awaiting Approval',
+    rejected: 'Rejected by Human',
+    timed_out: 'Timed Out',
   }
 
   return (
@@ -239,7 +294,13 @@ export function Monitoring() {
               >
                 <div className="truncate font-medium text-slate-300">{ex.workflow_name}</div>
                 <div className="flex items-center justify-between mt-0.5">
-                  <span className={statusColor[ex.status] || 'text-slate-600'}>{ex.status}</span>
+                  {ex.status === 'waiting_approval' ? (
+                    <Link to="/approvals" className="rounded-full bg-amber-900/30 px-2 py-0.5 text-[11px] text-amber-300 hover:bg-amber-900/50" onClick={e => e.stopPropagation()}>
+                      Awaiting Approval
+                    </Link>
+                  ) : (
+                    <span className={statusColor[ex.status] || 'text-slate-600'}>{statusLabel[ex.status] || ex.status}</span>
+                  )}
                   {ex.status === 'completed' && (
                     <span
                       className="text-emerald-600 hover:text-emerald-400 transition-colors"

@@ -1,8 +1,9 @@
 from auth.dependencies import get_current_user, require_editor, require_admin
+from auth.org_context import OrgContext, check_plan_limit, get_org_context
 from database.models import User
 from fastapi import Depends
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, field_validator
@@ -13,8 +14,9 @@ import re
 
 from database import get_db
 from database.models import CustomTool
+from middleware.rate_limit import limiter
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter(dependencies=[Depends(get_current_user), Depends(get_org_context)])
 
 DEFAULT_CODE = '''\
 def run(query: str, max_results: int = 3) -> str:
@@ -85,17 +87,18 @@ async def parse_params(body: ParseParamsBody):
 
 
 @router.get("", response_model=list[ToolResponse])
-async def list_tools(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(CustomTool).order_by(CustomTool.created_at.desc()))
+async def list_tools(db: AsyncSession = Depends(get_db), ctx: OrgContext = Depends(get_org_context)):
+    result = await db.execute(select(CustomTool).where(CustomTool.org_id == ctx.org.id).order_by(CustomTool.created_at.desc()))
     return result.scalars().all()
 
 
 @router.post("", response_model=ToolResponse, status_code=201)
-async def create_tool(data: ToolCreate, db: AsyncSession = Depends(get_db)):
-    existing = await db.execute(select(CustomTool).where(CustomTool.name == data.name))
+async def create_tool(data: ToolCreate, db: AsyncSession = Depends(get_db), ctx: OrgContext = Depends(get_org_context)):
+    await check_plan_limit("custom_tools", ctx.org, db)
+    existing = await db.execute(select(CustomTool).where(CustomTool.name == data.name, CustomTool.org_id == ctx.org.id))
     if existing.scalar_one_or_none():
         raise HTTPException(400, f"A tool named '{data.name}' already exists")
-    ct = CustomTool(id=str(uuid4()), **data.model_dump())
+    ct = CustomTool(id=str(uuid4()), org_id=ctx.org.id, **data.model_dump())
     db.add(ct)
     await db.commit()
     await db.refresh(ct)
@@ -103,8 +106,8 @@ async def create_tool(data: ToolCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{tool_id}", response_model=ToolResponse)
-async def get_tool(tool_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(CustomTool).where(CustomTool.id == tool_id))
+async def get_tool(tool_id: str, db: AsyncSession = Depends(get_db), ctx: OrgContext = Depends(get_org_context)):
+    result = await db.execute(select(CustomTool).where(CustomTool.id == tool_id, CustomTool.org_id == ctx.org.id))
     ct = result.scalar_one_or_none()
     if not ct:
         raise HTTPException(404, "Tool not found")
@@ -112,8 +115,8 @@ async def get_tool(tool_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/{tool_id}", response_model=ToolResponse)
-async def update_tool(tool_id: str, data: ToolUpdate, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(CustomTool).where(CustomTool.id == tool_id))
+async def update_tool(tool_id: str, data: ToolUpdate, db: AsyncSession = Depends(get_db), ctx: OrgContext = Depends(get_org_context)):
+    result = await db.execute(select(CustomTool).where(CustomTool.id == tool_id, CustomTool.org_id == ctx.org.id))
     ct = result.scalar_one_or_none()
     if not ct:
         raise HTTPException(404, "Tool not found")
@@ -126,8 +129,8 @@ async def update_tool(tool_id: str, data: ToolUpdate, db: AsyncSession = Depends
 
 
 @router.delete("/{tool_id}", status_code=204)
-async def delete_tool(tool_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(CustomTool).where(CustomTool.id == tool_id))
+async def delete_tool(tool_id: str, db: AsyncSession = Depends(get_db), ctx: OrgContext = Depends(get_org_context)):
+    result = await db.execute(select(CustomTool).where(CustomTool.id == tool_id, CustomTool.org_id == ctx.org.id))
     ct = result.scalar_one_or_none()
     if not ct:
         raise HTTPException(404, "Tool not found")
@@ -136,8 +139,15 @@ async def delete_tool(tool_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{tool_id}/test")
-async def test_tool(tool_id: str, body: TestInput, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(CustomTool).where(CustomTool.id == tool_id))
+@limiter.limit("30/minute")
+async def test_tool(
+    request: Request,
+    tool_id: str,
+    body: TestInput,
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    result = await db.execute(select(CustomTool).where(CustomTool.id == tool_id, CustomTool.org_id == ctx.org.id))
     ct = result.scalar_one_or_none()
     if not ct:
         raise HTTPException(404, "Tool not found")

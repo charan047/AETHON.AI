@@ -1,15 +1,36 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Brain, Check, MessageSquare, Plus, Trash2, Wrench, X } from 'lucide-react'
 import { agentsApi } from '../api/client'
-import { Bot, Plus, Trash2, Edit3, MessageSquare, Brain, Wrench, X, Check, ChevronDown } from 'lucide-react'
-import { clsx } from 'clsx'
-import toast from 'react-hot-toast'
+import { AgentAvatar } from '../components/ui/AgentAvatar'
+import { GlowCard } from '../components/ui/GlowCard'
+import { StatusBadge } from '../components/ui/StatusBadge'
+import { AgentMemoryPanel } from '../components/agents/AgentMemoryPanel'
+import { ReputationCard } from '../components/agents/ReputationCard'
+import { SkeletonCard } from '../components/ui/Skeleton'
 import type { Agent } from '../types'
+import toast from 'react-hot-toast'
+import { clsx } from 'clsx'
 
 const DEFAULTS: Partial<Agent> = {
-  name: '', role: '', description: '', system_prompt: '', model: 'claude-sonnet-4-6',
-  tools: [], memory_enabled: true, memory_window: 10, max_tokens: 2000,
-  temperature: 0.7, max_iterations: 10, timeout: 120, telegram_enabled: false,
+  name: '',
+  role: '',
+  description: '',
+  system_prompt: '',
+  model: 'llama-3.3-70b-versatile',
+  tools: [],
+  memory_enabled: true,
+  memory_window: 10,
+  max_tokens: 2000,
+  temperature: 0.7,
+  max_iterations: 10,
+  timeout: 120,
+  max_retries: 3,
+  retry_delay_seconds: 5,
+  retry_backoff_multiplier: 2.0,
+  retry_on_timeout: true,
+  telegram_enabled: false,
 }
 
 function AgentForm({ initial, onSave, onCancel, models, tools }: {
@@ -22,113 +43,81 @@ function AgentForm({ initial, onSave, onCancel, models, tools }: {
   const [form, setForm] = useState<Partial<Agent>>({ ...DEFAULTS, ...initial })
   const set = (k: keyof Agent, v: unknown) => setForm(f => ({ ...f, [k]: v }))
   const toggleTool = (id: string) => {
-    const curr = form.tools || []
-    set('tools', curr.includes(id) ? curr.filter(t => t !== id) : [...curr, id])
+    const current = form.tools || []
+    set('tools', current.includes(id) ? current.filter(t => t !== id) : [...current, id])
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-5 border-b border-slate-800">
-          <h2 className="text-lg font-semibold text-slate-100">{initial.id ? 'Edit Agent' : 'Create Agent'}</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xl">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-white/[0.08] bg-obsidian-900">
+        <div className="flex items-center justify-between border-b border-white/[0.08] p-5">
+          <div>
+            <h2 className="text-lg font-semibold text-white">{initial.id ? 'Configure teammate' : 'Add teammate'}</h2>
+            <p className="text-xs text-obsidian-500">Define the role, tools, model, and operating constraints.</p>
+          </div>
           <button onClick={onCancel} className="btn-ghost p-1.5"><X size={18} /></button>
         </div>
 
-        <div className="p-5 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Name *</label>
-              <input className="input" placeholder="Research Agent" value={form.name} onChange={e => set('name', e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Role *</label>
-              <input className="input" placeholder="researcher" value={form.role} onChange={e => set('role', e.target.value)} />
-            </div>
-          </div>
+        <div className="space-y-5 p-5">
+          {initial.id && <ReputationCard agent={initial as Agent} />}
 
-          <div>
-            <label className="label">Description</label>
-            <input className="input" placeholder="A brief description..." value={form.description} onChange={e => set('description', e.target.value)} />
+          <div className="grid gap-4 md:grid-cols-2">
+            <div><label className="label">Name</label><input className="input" value={form.name} onChange={e => set('name', e.target.value)} /></div>
+            <div><label className="label">Role</label><input className="input" value={form.role} onChange={e => set('role', e.target.value)} /></div>
           </div>
+          <div><label className="label">Description</label><input className="input" value={form.description} onChange={e => set('description', e.target.value)} /></div>
+          <div><label className="label">System Prompt</label><textarea className="input min-h-[140px] resize-y" value={form.system_prompt} onChange={e => set('system_prompt', e.target.value)} /></div>
 
-          <div>
-            <label className="label">System Prompt *</label>
-            <textarea className="input min-h-[120px] resize-y" placeholder="You are a helpful AI agent that..." value={form.system_prompt} onChange={e => set('system_prompt', e.target.value)} />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid gap-4 md:grid-cols-2">
             <div>
               <label className="label">Model</label>
               <select className="input" value={form.model} onChange={e => set('model', e.target.value)}>
-                {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
               </select>
             </div>
             <div>
               <label className="label">Temperature ({form.temperature})</label>
-              <input type="range" min="0" max="1" step="0.1" className="w-full mt-2 accent-violet-500"
-                value={form.temperature} onChange={e => set('temperature', parseFloat(e.target.value))} />
+              <input type="range" min="0" max="1" step="0.1" className="w-full accent-accent-500" value={form.temperature} onChange={e => set('temperature', parseFloat(e.target.value))} />
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <label className="label">Max Tokens</label>
-              <input type="number" className="input" value={form.max_tokens} onChange={e => set('max_tokens', parseInt(e.target.value))} />
-            </div>
-            <div>
-              <label className="label">Max Iterations</label>
-              <input type="number" className="input" value={form.max_iterations} onChange={e => set('max_iterations', parseInt(e.target.value))} />
-            </div>
-            <div>
-              <label className="label">Timeout (s)</label>
-              <input type="number" className="input" value={form.timeout} onChange={e => set('timeout', parseInt(e.target.value))} />
-            </div>
+          <div className="grid gap-4 md:grid-cols-4">
+            <div><label className="label">Tokens</label><input type="number" className="input" value={form.max_tokens} onChange={e => set('max_tokens', parseInt(e.target.value))} /></div>
+            <div><label className="label">Iterations</label><input type="number" className="input" value={form.max_iterations} onChange={e => set('max_iterations', parseInt(e.target.value))} /></div>
+            <div><label className="label">Timeout</label><input type="number" className="input" value={form.timeout} onChange={e => set('timeout', parseInt(e.target.value))} /></div>
+            <div><label className="label">Retries</label><input type="number" min={0} max={10} className="input" value={form.max_retries} onChange={e => set('max_retries', parseInt(e.target.value))} /></div>
           </div>
 
-          {/* Tools */}
           <div>
             <label className="label">Tools</label>
-            <div className="grid grid-cols-2 gap-2">
-              {tools.map(t => (
-                <button key={t.id} type="button"
-                  onClick={() => toggleTool(t.id)}
-                  className={clsx('flex items-center gap-2 p-2.5 rounded-lg border text-sm text-left transition-colors',
-                    (form.tools || []).includes(t.id)
-                      ? 'bg-violet-900/30 border-violet-600/50 text-violet-300'
-                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
+            <div className="grid gap-2 md:grid-cols-2">
+              {tools.map(tool => (
+                <button key={tool.id} type="button" onClick={() => toggleTool(tool.id)}
+                  className={clsx('rounded-xl border p-3 text-left text-sm transition-all duration-150',
+                    (form.tools || []).includes(tool.id)
+                      ? 'border-accent-400/40 bg-accent-400/10 text-accent-100 shadow-glow-sm'
+                      : 'border-white/[0.08] bg-white/[0.03] text-obsidian-300 hover:bg-white/[0.05]'
                   )}>
-                  <Wrench size={14} />
-                  <div>
-                    <div className="font-medium">{t.name}</div>
-                    <div className="text-xs opacity-60">{t.description}</div>
-                  </div>
+                  <div className="flex items-center gap-2 font-medium"><Wrench size={14} /> {tool.name}</div>
+                  <div className="mt-1 line-clamp-1 text-xs opacity-60">{tool.description}</div>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Toggles */}
-          <div className="flex gap-6">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <div className={clsx('w-10 h-5 rounded-full transition-colors relative', form.memory_enabled ? 'bg-violet-600' : 'bg-slate-700')}
-                onClick={() => set('memory_enabled', !form.memory_enabled)}>
-                <div className={clsx('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', form.memory_enabled ? 'translate-x-5' : 'translate-x-0.5')} />
-              </div>
-              <span className="text-sm text-slate-300">Memory</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <div className={clsx('w-10 h-5 rounded-full transition-colors relative', form.telegram_enabled ? 'bg-blue-600' : 'bg-slate-700')}
-                onClick={() => set('telegram_enabled', !form.telegram_enabled)}>
-                <div className={clsx('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', form.telegram_enabled ? 'translate-x-5' : 'translate-x-0.5')} />
-              </div>
-              <span className="text-sm text-slate-300">Telegram</span>
-            </label>
+          <div className="flex flex-wrap gap-5">
+            {(['memory_enabled', 'telegram_enabled', 'retry_on_timeout'] as const).map(key => (
+              <label key={key} className="flex cursor-pointer items-center gap-2 text-sm text-obsidian-200">
+                <input type="checkbox" className="accent-accent-500" checked={Boolean(form[key])} onChange={e => set(key, e.target.checked)} />
+                {key.replace(/_/g, ' ')}
+              </label>
+            ))}
           </div>
         </div>
 
-        <div className="flex gap-3 p-5 border-t border-slate-800">
+        <div className="flex gap-3 border-t border-white/[0.08] p-5">
           <button className="btn-primary flex-1" onClick={() => onSave(form)}>
-            <Check size={16} /> {initial.id ? 'Update Agent' : 'Create Agent'}
+            <Check size={16} /> {initial.id ? 'Save configuration' : 'Add teammate'}
           </button>
           <button className="btn-secondary" onClick={onCancel}>Cancel</button>
         </div>
@@ -140,19 +129,19 @@ function AgentForm({ initial, onSave, onCancel, models, tools }: {
 export function Agents() {
   const qc = useQueryClient()
   const [editing, setEditing] = useState<Partial<Agent> | null>(null)
-
+  const [memoryAgent, setMemoryAgent] = useState<Agent | null>(null)
   const { data: agents = [], isLoading } = useQuery({ queryKey: ['agents'], queryFn: agentsApi.list })
   const { data: models = [] } = useQuery({ queryKey: ['models'], queryFn: agentsApi.getModels })
   const { data: tools = [] } = useQuery({ queryKey: ['tools'], queryFn: agentsApi.getTools })
 
   const createMut = useMutation({
     mutationFn: agentsApi.create,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['agents'] }); setEditing(null); toast.success('Agent created!') },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['agents'] }); setEditing(null); toast.success('Agent created') },
     onError: (e: any) => toast.error(e.response?.data?.detail || 'Failed to create agent'),
   })
   const updateMut = useMutation({
     mutationFn: ({ id, ...data }: Partial<Agent>) => agentsApi.update(id!, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['agents'] }); setEditing(null); toast.success('Agent updated!') },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['agents'] }); setEditing(null); toast.success('Agent updated') },
     onError: (e: any) => toast.error(e.response?.data?.detail || 'Failed to update agent'),
   })
   const deleteMut = useMutation({
@@ -160,100 +149,78 @@ export function Agents() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['agents'] }); toast.success('Agent deleted') },
   })
 
-  const handleSave = (data: Partial<Agent>) => {
-    if (editing?.id) updateMut.mutate({ ...data, id: editing.id })
-    else createMut.mutate(data)
-  }
+  const handleSave = (data: Partial<Agent>) => editing?.id ? updateMut.mutate({ ...data, id: editing.id }) : createMut.mutate(data)
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+    <div className="space-y-6 p-6 animate-fade-in">
+      <div className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-100">Agents</h1>
-          <p className="text-slate-400 text-sm mt-1">Create and manage AI agents with configurable tools and behavior</p>
+          <h1 className="text-4xl font-semibold tracking-[-0.05em] text-white">Your Team</h1>
+          <p className="mt-2 text-sm text-obsidian-400">AI employees working for you 24/7.</p>
         </div>
-        <button className="btn-primary" onClick={() => setEditing({})}>
-          <Plus size={16} /> New Agent
-        </button>
+        <button className="btn-primary h-11" onClick={() => setEditing({})}><Plus size={16} /> Add Agent</button>
       </div>
 
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[...Array(3)].map((_, i) => <div key={i} className="card h-48 animate-pulse bg-slate-800/50" />)}
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {[...Array(6)].map((_, i) => <SkeletonCard key={i} className="h-72" />)}
         </div>
       ) : !agents.length ? (
-        <div className="text-center py-20">
-          <Bot size={48} className="mx-auto text-slate-700 mb-4" />
-          <div className="text-slate-400 font-medium">No agents yet</div>
-          <div className="text-slate-600 text-sm mt-1 mb-4">Create your first AI agent to get started</div>
-          <button className="btn-primary" onClick={() => setEditing({})}>
-            <Plus size={16} /> Create Agent
-          </button>
-        </div>
+        <GlowCard className="py-24 text-center">
+          <div className="mx-auto mb-5 grid h-20 w-20 place-items-center rounded-2xl border border-accent-400/20 bg-accent-400/10 text-accent-300"><UsersIcon /></div>
+          <div className="text-lg font-medium text-white">Your team is empty - create your first AI employee</div>
+          <p className="mt-2 text-sm text-obsidian-500">Start with one teammate, then let the company grow around real work.</p>
+          <button className="btn-primary mt-6" onClick={() => setEditing({})}><Plus size={16} /> Create Agent</button>
+        </GlowCard>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {agents.map(agent => (
-            <div key={agent.id} className="card card-hover p-5 flex flex-col gap-3">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-violet-900/40 border border-violet-800/40 flex items-center justify-center">
-                    <Bot size={20} className="text-violet-400" />
-                  </div>
-                  <div>
-                    <div className="font-semibold text-slate-100">{agent.name}</div>
-                    <div className="text-xs text-slate-500">{agent.role}</div>
-                  </div>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {agents.map((agent, index) => (
+            <GlowCard key={agent.id} glowColor={index % 2 ? 'cyan' : 'indigo'} className={clsx('p-5 text-center', agent.is_active && 'animate-border-glow')}>
+              <div className="flex justify-center"><AgentAvatar name={agent.name} size="xl" running={false} /></div>
+              <h3 className="mt-4 text-xl font-semibold tracking-[-0.03em] text-white">{agent.name}</h3>
+              <p className="mt-1 text-sm text-obsidian-400">{agent.role}</p>
+              {agent.description && <p className="mx-auto mt-2 line-clamp-2 max-w-xs text-xs leading-5 text-obsidian-500">{agent.description}</p>}
+
+              <div className="mt-4 flex justify-center"><StatusBadge status={agent.is_active ? 'active' : 'idle'} /></div>
+
+              <div className="mt-5 grid grid-cols-3 gap-2">
+                <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-2 py-2">
+                  <div className="truncate font-mono text-[11px] text-cyan-300">{agent.model.split('-').slice(0, 2).join('-')}</div>
+                  <div className="mt-1 text-[10px] uppercase tracking-wide text-obsidian-500">Model</div>
                 </div>
-                <div className="flex gap-1">
-                  {agent.telegram_enabled && <span className="badge badge-blue">TG</span>}
-                  <span className={agent.is_active ? 'badge-green badge' : 'badge-gray badge'}>
-                    {agent.is_active ? 'Active' : 'Inactive'}
-                  </span>
+                <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-2 py-2">
+                  <div className="font-mono text-[11px] text-accent-300">{agent.tools?.length ?? 0}</div>
+                  <div className="mt-1 text-[10px] uppercase tracking-wide text-obsidian-500">Tools</div>
+                </div>
+                <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-2 py-2">
+                  <div className="font-mono text-[11px] text-emerald-300">{agent.memory_enabled ? 'On' : 'Off'}</div>
+                  <div className="mt-1 text-[10px] uppercase tracking-wide text-obsidian-500">Memory</div>
                 </div>
               </div>
 
-              {agent.description && <p className="text-sm text-slate-500 line-clamp-2">{agent.description}</p>}
-
-              <div className="flex flex-wrap gap-1.5">
-                <span className="badge badge-purple">{agent.model.split('-').slice(0,2).join('-')}</span>
-                {agent.memory_enabled && <span className="badge badge-blue"><Brain size={10} className="mr-1" />Memory</span>}
-                {(agent.tools || []).map(t => {
-                  const found = tools.find((tool: {id: string; name: string}) => tool.id === t)
-                  const label = found?.name ?? t.replace(/_/g, ' ')
-                  return <span key={t} className="badge badge-gray">{label}</span>
-                })}
+              <div className="mt-5 flex gap-2">
+                <button className="btn-secondary flex-1 text-xs" onClick={() => setEditing(agent)}>Configure</button>
+                <Link to="/workflows" className="btn-secondary flex-1 text-xs"><MessageSquare size={13} /> Chat</Link>
+                <button className="btn-secondary px-3 text-xs" onClick={() => setMemoryAgent(agent)}><Brain size={13} /></button>
+                <button className="btn-danger px-3 text-xs" onClick={() => confirm(`Delete agent "${agent.name}"?`) && deleteMut.mutate(agent.id)}><Trash2 size={13} /></button>
               </div>
-
-              <div className="grid grid-cols-3 gap-2 text-center border-t border-slate-800 pt-3">
-                <div><div className="text-xs text-slate-500">Temp</div><div className="text-sm font-medium text-slate-300">{agent.temperature}</div></div>
-                <div><div className="text-xs text-slate-500">Tokens</div><div className="text-sm font-medium text-slate-300">{agent.max_tokens}</div></div>
-                <div><div className="text-xs text-slate-500">Iter</div><div className="text-sm font-medium text-slate-300">{agent.max_iterations}</div></div>
-              </div>
-
-              <div className="flex gap-2 mt-auto">
-                <button className="btn-secondary flex-1 text-xs" onClick={() => setEditing(agent)}>
-                  <Edit3 size={13} /> Edit
-                </button>
-                <button className="btn-danger text-xs px-3" onClick={() => {
-                  if (confirm(`Delete agent "${agent.name}"?`)) deleteMut.mutate(agent.id)
-                }}>
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            </div>
+            </GlowCard>
           ))}
         </div>
       )}
 
-      {editing !== null && (
-        <AgentForm
-          initial={editing}
-          onSave={handleSave}
-          onCancel={() => setEditing(null)}
-          models={models}
-          tools={tools}
-        />
-      )}
+      {editing !== null && <AgentForm initial={editing} onSave={handleSave} onCancel={() => setEditing(null)} models={models} tools={tools} />}
+      {memoryAgent && <AgentMemoryPanel agent={memoryAgent} onClose={() => setMemoryAgent(null)} />}
+    </div>
+  )
+}
+
+function UsersIcon() {
+  return (
+    <div className="flex -space-x-3">
+      <AgentAvatar name="Research" size="md" />
+      <AgentAvatar name="Ops" size="md" />
+      <AgentAvatar name="Sales" size="md" />
     </div>
   )
 }

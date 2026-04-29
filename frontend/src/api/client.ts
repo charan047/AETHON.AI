@@ -1,7 +1,62 @@
 import axios from 'axios'
-import type { Agent, Workflow, Execution, Stats, Template } from '../types'
+import type {
+  Agent,
+  Workflow,
+  Execution,
+  Stats,
+  Template,
+  ApprovalRequest,
+  AgentMemoryConfig,
+  AgentMemoryStats,
+  AgentMemoryItem,
+  OnboardingStatus,
+  CompanyProfile,
+  CompanyProfileInput,
+  CompanyState,
+  CompanyYamlApplySummary,
+  CompanyYamlPreview,
+  CompanyYamlValidation,
+  BusinessSummary,
+  UserIntegration,
+  AgentFeedback,
+  AgentReputation,
+  FeedbackType,
+  DashboardSummary,
+  WorkflowVersion,
+  WorkflowVersionDetail,
+  WorkflowVersionDiff,
+  AnalyticsCosts,
+  AnalyticsOverview,
+  AnalyticsPerformance,
+  AnalyticsTools,
+  EvalCase,
+  EvalInsights,
+  EvalRun,
+  EvalRunsResponse,
+  EvalSuite,
+  BillingPlan,
+  BillingPlanResponse,
+  BillingUsageSummary,
+  MarketplaceCategory,
+  MarketplaceInstall,
+  MarketplaceListing,
+  MarketplaceListingType,
+  MarketplaceSearchResponse,
+  ScoringMethod,
+} from '../types'
 
-const api = axios.create({ baseURL: '/api' })
+export const api = axios.create({ baseURL: '/api', withCredentials: true })
+
+api.interceptors.response.use(
+  response => response,
+  error => {
+    const payload = error?.response?.data
+    if (error?.response?.status === 429 && payload?.code === 'plan_limit_reached') {
+      window.dispatchEvent(new CustomEvent('plan-limit-hit', { detail: payload }))
+    }
+    return Promise.reject(error)
+  },
+)
 
 // Agents
 export const agentsApi = {
@@ -12,6 +67,9 @@ export const agentsApi = {
   delete: (id: string) => api.delete(`/agents/${id}`),
   getModels: () => api.get<{id: string; name: string; provider: string}[]>('/agents/meta/models').then(r => r.data),
   getTools: () => api.get<{id: string; name: string; description: string}[]>('/agents/meta/tools').then(r => r.data),
+  getMemoryConfig: (id: string) => api.get<AgentMemoryConfig>(`/agents/${id}/memory-config`).then(r => r.data),
+  updateMemoryConfig: (id: string, data: Partial<AgentMemoryConfig>) =>
+    api.put<AgentMemoryConfig>(`/agents/${id}/memory-config`, data).then(r => r.data),
 }
 
 // Workflows
@@ -22,6 +80,13 @@ export const workflowsApi = {
   update: (id: string, data: Partial<Workflow>) => api.put<Workflow>(`/workflows/${id}`, data).then(r => r.data),
   delete: (id: string) => api.delete(`/workflows/${id}`),
   getTemplates: () => api.get<Template[]>('/workflows/templates').then(r => r.data),
+  versions: (id: string) => api.get<WorkflowVersion[]>(`/workflows/${id}/versions`).then(r => r.data),
+  version: (id: string, version: number) =>
+    api.get<WorkflowVersionDetail>(`/workflows/${id}/versions/${version}`).then(r => r.data),
+  diff: (id: string, a: number, b: number) =>
+    api.get<WorkflowVersionDiff>(`/workflows/${id}/versions/diff`, { params: { a, b } }).then(r => r.data),
+  rollback: (id: string, targetVersion: number) =>
+    api.post<Workflow>(`/workflows/${id}/rollback`, { target_version: targetVersion, confirm: true }).then(r => r.data),
 }
 
 // Executions
@@ -63,4 +128,182 @@ export const monitoringApi = {
   recentExecutions: (limit = 10) =>
     api.get('/monitoring/recent-executions', { params: { limit } }).then(r => r.data),
   logs: () => api.get('/monitoring/logs').then(r => r.data),
+}
+
+// HITL Approvals
+export const approvalsApi = {
+  pending: () => api.get<ApprovalRequest[]>('/approvals/pending').then(r => r.data),
+  history: (limit = 50, offset = 0) =>
+    api.get<ApprovalRequest[]>('/approvals/history', { params: { limit, offset } }).then(r => r.data),
+  approve: (id: string, comment?: string) =>
+    api.post<ApprovalRequest>(`/approvals/${id}/approve`, { comment }).then(r => r.data),
+  reject: (id: string, comment?: string) =>
+    api.post<ApprovalRequest>(`/approvals/${id}/reject`, { comment }).then(r => r.data),
+}
+
+// Agent memory
+export const memoryApi = {
+  stats: (agentId: string) => api.get<AgentMemoryStats>(`/memory/agents/${agentId}/stats`).then(r => r.data),
+  history: (agentId: string, lastN = 10) =>
+    api.get<AgentMemoryItem[]>(`/memory/agents/${agentId}/history`, { params: { last_n: lastN } }).then(r => r.data),
+  clearAgent: (agentId: string) => api.delete<{deleted: number}>(`/memory/agents/${agentId}`).then(r => r.data),
+}
+
+// First-run onboarding
+export const onboardingApi = {
+  status: () => api.get<OnboardingStatus>('/onboarding/status').then(r => r.data),
+  saveCompanyProfile: (data: CompanyProfileInput) =>
+    api.post<CompanyProfile>('/onboarding/company-profile', data).then(r => r.data),
+  generateTeam: (companyProfileId: string, selectedRoles: string[]) =>
+    api.post<Agent[]>('/onboarding/generate-team', {
+      company_profile_id: companyProfileId,
+      selected_roles: selectedRoles,
+    }).then(r => r.data),
+  complete: () =>
+    api.post<{ onboarding_complete: boolean; redirect: string }>('/onboarding/complete').then(r => r.data),
+}
+
+// Company OS
+export const companyApi = {
+  profile: () => api.get<CompanyState>('/company/profile').then(r => r.data),
+  updateProfile: (data: Partial<CompanyProfile>) =>
+    api.put<CompanyProfile>('/company/profile', data).then(r => r.data),
+  exportYaml: () => api.get<string>('/company/yaml', { responseType: 'text' }).then(r => r.data),
+  validateYaml: (yamlContent: string) =>
+    api.post<CompanyYamlValidation>('/company/yaml/validate', { yaml_content: yamlContent }).then(r => r.data),
+  previewYaml: (yamlContent: string) =>
+    api.post<CompanyYamlPreview>('/company/yaml/preview', { yaml_content: yamlContent }).then(r => r.data),
+  applyYaml: (yamlContent: string) =>
+    api.post<CompanyYamlApplySummary>('/company/yaml/apply', { yaml_content: yamlContent }).then(r => r.data),
+}
+
+// Business context engine
+export const businessApi = {
+  context: () => api.get<{ context: string }>('/business/context').then(r => r.data),
+  summary: () => api.get<BusinessSummary>('/business/summary').then(r => r.data),
+  updateRevenue: (data: { monthly_revenue: number; runway_months?: number | null }) =>
+    api.put<BusinessSummary>('/business/revenue', data).then(r => r.data),
+  addGoal: (goal: string) => api.post<BusinessSummary>('/business/goals', { goal }).then(r => r.data),
+  updateGoal: (index: number, goal: string) =>
+    api.put<BusinessSummary>(`/business/goals/${index}`, { goal }).then(r => r.data),
+  deleteGoal: (index: number) => api.delete<BusinessSummary>(`/business/goals/${index}`).then(r => r.data),
+}
+
+export const integrationsApi = {
+  list: () => api.get<UserIntegration[]>('/integrations').then(r => r.data),
+  createGitHub: (data: { name: string; access_token: string; default_repo?: string }) =>
+    api.post<UserIntegration>('/integrations/github', data).then(r => r.data),
+  createEmail: (data: {
+    name: string
+    smtp_host: string
+    smtp_port: number
+    smtp_user: string
+    smtp_password: string
+    imap_host: string
+    imap_port: number
+    from_name?: string
+  }) => api.post<UserIntegration>('/integrations/email', data).then(r => r.data),
+  test: (id: string) => api.post<UserIntegration>(`/integrations/${id}/test`).then(r => r.data),
+  delete: (id: string) => api.delete(`/integrations/${id}`),
+}
+
+export const feedbackApi = {
+  record: (
+    executionId: string,
+    agentId: string,
+    data: { feedback_type: FeedbackType; edited_output?: string; comment?: string },
+  ) => api.post<AgentReputation>(`/feedback/executions/${executionId}/agents/${agentId}`, data).then(r => r.data),
+  reputation: (agentId: string) => api.get<AgentReputation>(`/feedback/agents/${agentId}/reputation`).then(r => r.data),
+  history: (agentId: string, limit = 20) =>
+    api.get<AgentFeedback[]>(`/feedback/agents/${agentId}/history`, { params: { limit } }).then(r => r.data),
+  learnings: (agentId: string) =>
+    api.get<{ learning_notes: AgentReputation['learning_notes'] }>(`/feedback/agents/${agentId}/learnings`).then(r => r.data),
+}
+
+export const dashboardApi = {
+  summary: () => api.get<DashboardSummary>('/dashboard/summary').then(r => r.data),
+}
+
+export const analyticsApi = {
+  overview: (periodDays = 30) =>
+    api.get<AnalyticsOverview>('/analytics/overview', { params: { period_days: periodDays } }).then(r => r.data),
+  costs: (periodDays = 30) =>
+    api.get<AnalyticsCosts>('/analytics/costs', { params: { period_days: periodDays } }).then(r => r.data),
+  performance: () => api.get<AnalyticsPerformance>('/analytics/performance').then(r => r.data),
+  tools: (periodDays = 30) =>
+    api.get<AnalyticsTools>('/analytics/tools', { params: { period_days: periodDays } }).then(r => r.data),
+}
+
+export const evalsApi = {
+  suites: () => api.get<EvalSuite[]>('/evals/suites').then(r => r.data),
+  createSuite: (data: { name: string; description?: string; agent_id: string; pass_threshold: number }) =>
+    api.post<EvalSuite>('/evals/suites', data).then(r => r.data),
+  suite: (id: string) => api.get<EvalSuite>(`/evals/suites/${id}`).then(r => r.data),
+  updateSuite: (id: string, data: Partial<Pick<EvalSuite, 'name' | 'description' | 'status' | 'pass_threshold'>>) =>
+    api.put<EvalSuite>(`/evals/suites/${id}`, data).then(r => r.data),
+  deleteSuite: (id: string) => api.delete(`/evals/suites/${id}`),
+  createCase: (suiteId: string, data: {
+    name: string
+    description?: string
+    input: string
+    expected_output?: string
+    scoring_method: ScoringMethod
+    scoring_config?: Record<string, unknown>
+    weight: number
+    tags?: string
+  }) => api.post<EvalCase>(`/evals/suites/${suiteId}/cases`, data).then(r => r.data),
+  updateCase: (suiteId: string, caseId: string, data: Partial<EvalCase>) =>
+    api.put<EvalCase>(`/evals/suites/${suiteId}/cases/${caseId}`, data).then(r => r.data),
+  deleteCase: (suiteId: string, caseId: string) => api.delete(`/evals/suites/${suiteId}/cases/${caseId}`),
+  bulkCases: (suiteId: string, cases: unknown[]) =>
+    api.post<{ created: number; cases: EvalCase[] }>(`/evals/suites/${suiteId}/cases/bulk`, { cases }).then(r => r.data),
+  generateFromHistory: (suiteId: string, data: { agent_id?: string; count?: number }) =>
+    api.post<{ created: number; cases: EvalCase[] }>(`/evals/suites/${suiteId}/cases/generate-from-history`, data).then(r => r.data),
+  runSuite: (suiteId: string, data: { triggered_by?: string; notes?: string }) =>
+    api.post<EvalRun | { run_id: string; task_id: string; status: string; message: string }>(`/evals/suites/${suiteId}/run`, data).then(r => r.data),
+  runCase: (suiteId: string, caseId: string) =>
+    api.post<EvalRun>(`/evals/suites/${suiteId}/cases/${caseId}/run`).then(r => r.data),
+  run: (runId: string) => api.get<EvalRun>(`/evals/runs/${runId}`).then(r => r.data),
+  runs: (suiteId: string, limit = 20) =>
+    api.get<EvalRunsResponse>(`/evals/suites/${suiteId}/runs`, { params: { limit } }).then(r => r.data),
+  insights: (suiteId: string) => api.get<EvalInsights>(`/evals/suites/${suiteId}/insights`).then(r => r.data),
+  ciToken: () => api.get<{ ci_token: string; key_prefix: string; message: string }>('/evals/ci/token').then(r => r.data),
+}
+
+export const billingApi = {
+  usage: () => api.get<BillingUsageSummary>('/billing/usage').then(r => r.data),
+  plan: () => api.get<BillingPlanResponse>('/billing/plan').then(r => r.data),
+  plans: () => api.get<BillingPlan[]>('/billing/plans').then(r => r.data),
+  upgrade: (targetPlan: string) =>
+    api.post<{ message: string; current_plan: string; target_plan: string }>('/billing/upgrade', {
+      target_plan: targetPlan,
+    }).then(r => r.data),
+}
+
+export const marketplaceApi = {
+  search: (params: {
+    query?: string
+    category?: MarketplaceCategory | 'all'
+    type?: MarketplaceListingType | 'all'
+    sort_by?: 'popular' | 'newest' | 'rating'
+    limit?: number
+    offset?: number
+  }) => api.get<MarketplaceSearchResponse>('/marketplace', {
+    params: {
+      ...params,
+      category: params.category === 'all' ? undefined : params.category,
+      type: params.type === 'all' ? undefined : params.type,
+    },
+  }).then(r => r.data),
+  detail: (slug: string) => api.get<MarketplaceListing>(`/marketplace/${slug}`).then(r => r.data),
+  install: (listingId: string, data?: { agent_id?: string; reinstall?: boolean }) =>
+    api.post<{ installed: boolean; already_installed?: boolean; resource_id: string | null; type: MarketplaceListingType }>(`/marketplace/${listingId}/install`, data || {}).then(r => r.data),
+  myInstalls: () => api.get<MarketplaceInstall[]>('/marketplace/my-installs').then(r => r.data),
+  publishAgent: (agentId: string, data: Record<string, unknown>) =>
+    api.post<MarketplaceListing>(`/marketplace/publish/agent/${agentId}`, data).then(r => r.data),
+  publishWorkflow: (workflowId: string, data: Record<string, unknown>) =>
+    api.post<MarketplaceListing>(`/marketplace/publish/workflow/${workflowId}`, data).then(r => r.data),
+  myListings: () => api.get<MarketplaceListing[]>('/marketplace/my-listings').then(r => r.data),
+  review: (listingId: string, data: { rating: number; title?: string; body?: string }) =>
+    api.post(`/marketplace/${listingId}/review`, data).then(r => r.data),
 }

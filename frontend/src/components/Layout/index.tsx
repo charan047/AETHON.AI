@@ -5,6 +5,7 @@ import { Sidebar } from './Sidebar'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { executionsApi } from '../../api/client'
 import { Sparkles, X, Bot } from 'lucide-react'
+import { CommandPalette } from '../CommandPalette'
 
 function GlobalResultModal({ executionId, onClose }: { executionId: string; onClose: () => void }) {
   const { data: execution, isLoading } = useQuery({
@@ -90,9 +91,10 @@ export function Layout() {
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto bg-slate-950">
+      <main className="app-shell flex-1 overflow-y-auto bg-obsidian-950">
         <Outlet />
       </main>
+      <CommandPalette />
       {resultId && <GlobalResultModal executionId={resultId} onClose={() => setResultId(null)} />}
     </div>
   )

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     # Telegram
     telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
 
     # Platform
     database_url: str = "postgresql+asyncpg://platform_user:platform_pass@localhost:5432/platform_db"
@@ -27,6 +28,15 @@ class Settings(BaseSettings):
     environment: str = "development"
     cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
     default_model: str = "llama-3.3-70b-versatile"
+    chroma_persist_dir: str = "./chroma_db"
+    chroma_collection_name: str = "agent_memory"
+    embedding_model: str = "all-MiniLM-L6-v2"
+    celery_broker_url: str = "redis://localhost:6379/1"
+    celery_result_backend: str = "redis://localhost:6379/2"
+    hitl_timeout_hours: int = 24
+    docker_execution_image: str = "platform-executor:latest"
+    otlp_endpoint: str = ""
+    default_monthly_budget_usd: float = 50.0
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -63,4 +73,13 @@ AVAILABLE_TOOLS = [
     {"id": "http_request",  "name": "HTTP Request",  "description": "Make HTTP GET requests to external APIs"},
     {"id": "datetime_tool", "name": "Date & Time",   "description": "Get the current date and time"},
     {"id": "text_analysis", "name": "Text Analysis", "description": "Analyze and extract information from text"},
+    {"id": "code_execution", "name": "Code Execution", "description": "Execute Python code in an isolated Docker container"},
+    {"id": "code_review", "name": "Code Review", "description": "Review code for security, performance, style, bugs, and generate tests"},
+    {"id": "web_intelligence", "name": "Web Intelligence", "description": "Search, browse, scrape, screenshot, and monitor webpages"},
+    {"id": "research", "name": "Research", "description": "Deep research, fact checking, and competitor analysis with citations"},
+    {"id": "github",        "name": "GitHub",        "description": "Read repositories, create branches, commit files, and open pull requests"},
+    {"id": "email",         "name": "Email",         "description": "Send email and read/search recent mailbox messages"},
+    {"id": "slack",         "name": "Slack",         "description": "Send Slack messages, rich reports, files, and read channels"},
+    {"id": "telegram",      "name": "Telegram",      "description": "Send Telegram messages, alerts, and reports"},
+    {"id": "notifications", "name": "Notifications", "description": "Notify the founder through the best available channel"},
 ]

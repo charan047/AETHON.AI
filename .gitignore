@@ -1,0 +1,13 @@
+**/.env
+**/venv/
+**/__pycache__/
+**/node_modules/
+**/.DS_Store
+**/platform.db
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.coverage
+**/coverage/
+frontend/dist/
+backend/chroma_db/

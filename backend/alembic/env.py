@@ -13,7 +13,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from config import settings
 from database.db import Base
-from database.models import Agent, Workflow, Execution, Message, CustomTool, User  # noqa: F401
+from database.models import Agent, AgentFeedback, AgentMemoryConfig, AgentReputation, ApprovalStatus, CompanyProfile, ExecutionCostLog, ExecutionStatus, FeedbackType, HumanApprovalRequest, InAppNotification, IntegrationType, ListingStatus, ListingType, MarketplaceCategory, MarketplaceInstall, MarketplaceListing, MarketplaceReview, NotificationPriority, OrgInvite, OrgMember, Organization, ToolCallLog, UserIntegration, WebhookEndpoint, WorkflowVersion, Workflow, Execution, Message, CustomTool, User  # noqa: F401
 
 config = context.config
 

@@ -1,11 +1,14 @@
 from typing import Optional
+import re
+import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.dependencies import get_current_user
+from auth.org_context import OrgContext, check_plan_limit, get_org_context
 from auth.security import (
     create_access_token,
     create_refresh_token,
@@ -14,11 +17,27 @@ from auth.security import (
     hash_password,
     verify_password,
 )
+from config import settings
 from database.db import get_db
-from database.models import ApiKey, User, UserRole
+from database.models import ApiKey, OrgMember, OrgMemberRole, OrgPlan, Organization, User, UserRole
+from middleware.rate_limit import limiter
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-") or "my-company"
+
+
+async def _unique_org_slug(db: AsyncSession, email: str) -> str:
+    base = _slugify(email.split("@")[0])[:80]
+    candidate = base
+    suffix = 2
+    while await db.scalar(select(Organization.id).where(Organization.slug == candidate)):
+        candidate = f"{base[:70]}-{suffix}"
+        suffix += 1
+    return candidate
 
 
 class RegisterRequest(BaseModel):
@@ -33,7 +52,7 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: Optional[str] = None
 
 
 class TokenResponse(BaseModel):
@@ -42,17 +61,38 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user_id: str
     role: str
+    email: str
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        max_age=settings.refresh_token_expire_days * 24 * 60 * 60,
+        httponly=True,
+        secure=settings.environment == "production",
+        samesite="lax",
+        path="/",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(key="refresh_token", path="/")
 
 
 def _token_response_for_user(user: User) -> TokenResponse:
     access = create_access_token(user_id=user.id, role=str(user.role.value if hasattr(user.role, "value") else user.role))
     refresh = create_refresh_token(user_id=user.id)
     role_str = str(user.role.value if hasattr(user.role, "value") else user.role)
-    return TokenResponse(access_token=access, refresh_token=refresh, user_id=user.id, role=role_str)
+    return TokenResponse(access_token=access, refresh_token=refresh, user_id=user.id, role=role_str, email=user.email)
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+async def register(
+    payload: RegisterRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
     if len(payload.password) < 8:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 8 characters")
 
@@ -72,13 +112,38 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
         is_active=True,
     )
     db.add(user)
+    await db.flush()
+    org = Organization(
+        id=str(uuid.uuid4()),
+        name="My Company",
+        slug=await _unique_org_slug(db, user.email),
+        plan=OrgPlan.free,
+        owner_user_id=user.id,
+        billing_email=user.email,
+    )
+    member = OrgMember(
+        id=str(uuid.uuid4()),
+        org_id=org.id,
+        user_id=user.id,
+        role=OrgMemberRole.owner,
+    )
+    db.add(org)
+    db.add(member)
     await db.commit()
     await db.refresh(user)
-    return _token_response_for_user(user)
+    tokens = _token_response_for_user(user)
+    _set_refresh_cookie(response, tokens.refresh_token)
+    return tokens
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+@limiter.limit("5/minute")
+async def login(
+    request: Request,
+    payload: LoginRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
     invalid_msg = "Invalid email or password"
 
     result = await db.execute(select(User).where(User.email == payload.email))
@@ -89,13 +154,24 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is disabled")
 
-    return _token_response_for_user(user)
+    tokens = _token_response_for_user(user)
+    _set_refresh_cookie(response, tokens.refresh_token)
+    return tokens
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+async def refresh(
+    response: Response,
+    payload: RefreshRequest | None = None,
+    refresh_cookie: Optional[str] = Cookie(default=None, alias="refresh_token"),
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    token = (payload.refresh_token if payload else None) or refresh_cookie
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
+
     try:
-        token_payload = decode_token(payload.refresh_token)
+        token_payload = decode_token(token)
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
@@ -113,17 +189,29 @@ async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is disabled")
 
-    return _token_response_for_user(user)
+    tokens = _token_response_for_user(user)
+    _set_refresh_cookie(response, tokens.refresh_token)
+    return tokens
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(response: Response) -> Response:
+    _clear_refresh_cookie(response)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 @router.post("/api-keys")
 async def create_api_key(
     name: str = Query(..., min_length=1, max_length=100),
     current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await check_plan_limit("api_keys", ctx.org, db)
     raw_key, key_hash, key_prefix = generate_api_key()
     api_key = ApiKey(
+        org_id=ctx.org.id,
         user_id=current_user.id,
         name=name,
         key_hash=key_hash,
@@ -145,11 +233,12 @@ async def create_api_key(
 @router.get("/api-keys")
 async def list_api_keys(
     current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     result = await db.execute(
         select(ApiKey)
-        .where(and_(ApiKey.user_id == current_user.id, ApiKey.is_active == True))  # noqa: E712
+        .where(and_(ApiKey.user_id == current_user.id, ApiKey.org_id == ctx.org.id, ApiKey.is_active == True))  # noqa: E712
         .order_by(ApiKey.created_at.desc())
     )
     keys = result.scalars().all()
@@ -169,10 +258,11 @@ async def list_api_keys(
 async def revoke_api_key(
     key_id: str,
     current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     result = await db.execute(
-        select(ApiKey).where(and_(ApiKey.id == key_id, ApiKey.user_id == current_user.id))
+        select(ApiKey).where(and_(ApiKey.id == key_id, ApiKey.user_id == current_user.id, ApiKey.org_id == ctx.org.id))
     )
     api_key = result.scalars().first()
     if not api_key:
@@ -181,4 +271,3 @@ async def revoke_api_key(
     api_key.is_active = False
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-

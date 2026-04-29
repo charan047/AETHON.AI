@@ -88,7 +88,7 @@ export function Templates() {
           const created = await createAgent.mutateAsync({
             name: ag.name, role: ag.role,
             system_prompt: ag.system_prompt,
-            tools: ag.tools, model: 'claude-sonnet-4-6',
+            tools: ag.tools, model: 'llama-3.3-70b-versatile',
             description: `Auto-created from template: ${template.name}`,
             memory_enabled: true, temperature: 0.7, max_tokens: 2000,
             max_iterations: 10, timeout: 120, telegram_enabled: false,
