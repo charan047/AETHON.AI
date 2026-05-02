@@ -60,9 +60,13 @@ class NotificationsTool(BaseTool):
     async def _load_integrations(self) -> dict[str, dict]:
         if self.user_id == "system":
             return {}
+        org_id = (self.config.get("_context") or {}).get("org_id")
+        if not org_id:
+            return {}
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(UserIntegration).where(
+                    UserIntegration.org_id == org_id,
                     UserIntegration.user_id == self.user_id,
                     UserIntegration.is_active == True,  # noqa: E712
                 )
@@ -120,11 +124,15 @@ class NotificationsTool(BaseTool):
     ) -> str:
         if self.user_id == "system":
             raise ValueError("Cannot create user notification without a user_id")
+        org_id = (self.config.get("_context") or {}).get("org_id")
+        if not org_id:
+            raise ValueError("Cannot create user notification without an org_id")
         priority_enum = NotificationPriority(priority if priority in {"low", "normal", "urgent"} else "normal")
         notification_id = str(uuid4())
         async with AsyncSessionLocal() as db:
             notification = InAppNotification(
                 id=notification_id,
+                org_id=org_id,
                 user_id=self.user_id,
                 agent_id=(self.config.get("_context") or {}).get("agent_id"),
                 title=title,
@@ -138,6 +146,7 @@ class NotificationsTool(BaseTool):
         payload = {
             "type": "in_app_notification",
             "id": notification_id,
+            "org_id": org_id,
             "user_id": self.user_id,
             "agent_id": (self.config.get("_context") or {}).get("agent_id"),
             "agent_name": (self.config.get("_context") or {}).get("agent_name") or "Unknown agent",
@@ -150,8 +159,9 @@ class NotificationsTool(BaseTool):
 
         client = redis.from_url(settings.redis_url, decode_responses=True)
         try:
-            await client.lpush(f"notifications:{self.user_id}", notification_id)
-            await client.expire(f"notifications:{self.user_id}", 60 * 60 * 24 * 7)
+            redis_key = f"notifications:{org_id}:{self.user_id}"
+            await client.lpush(redis_key, notification_id)
+            await client.expire(redis_key, 60 * 60 * 24 * 7)
         finally:
             await client.aclose()
 

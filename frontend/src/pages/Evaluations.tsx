@@ -38,14 +38,15 @@ import {
 } from 'recharts'
 import { format, formatDistanceToNow } from 'date-fns'
 import { clsx } from 'clsx'
-import toast from 'react-hot-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { agentsApi, evalsApi } from '../api/client'
 import { GlowCard } from '../components/ui/GlowCard'
 import { Skeleton, SkeletonCard } from '../components/ui/Skeleton'
 import { ScoreBadge } from '../components/evals/ScoreBadge'
 import { RunSuiteModal } from '../components/evals/RunSuiteModal'
+import { ConfirmDialog } from '../components/ui/ConfirmDialog'
 import type { EvalCase, EvalCaseResult, EvalRun, EvalSuite, ScoringMethod } from '../types'
+import { toast } from '../lib/toast'
 
 type Tab = 'cases' | 'history' | 'details' | 'insights'
 
@@ -81,6 +82,7 @@ export function Evaluations() {
   const [showSuiteForm, setShowSuiteForm] = useState(false)
   const [showCaseForm, setShowCaseForm] = useState(false)
   const [editingCase, setEditingCase] = useState<EvalCase | null>(null)
+  const [caseToDelete, setCaseToDelete] = useState<EvalCase | null>(null)
   const [showImport, setShowImport] = useState(false)
   const [showRunModal, setShowRunModal] = useState(false)
 
@@ -218,12 +220,7 @@ export function Evaluations() {
                   setEditingCase(caseItem)
                   setShowCaseForm(true)
                 }}
-                onDelete={async caseItem => {
-                  if (!confirm(`Delete eval case "${caseItem.name}"?`)) return
-                  await evalsApi.deleteCase(detailQuery.data!.id, caseItem.id)
-                  toast.success('Eval case deleted')
-                  refreshSelected()
-                }}
+                onDelete={caseItem => setCaseToDelete(caseItem)}
                 onRunCase={async caseItem => {
                   try {
                     const run = await evalsApi.runCase(detailQuery.data!.id, caseItem.id)
@@ -299,6 +296,20 @@ export function Evaluations() {
         suite={detailQuery.data || selectedSuite}
         onClose={() => setShowRunModal(false)}
         onFinished={refreshSelected}
+      />
+      <ConfirmDialog
+        open={Boolean(caseToDelete)}
+        title={`Delete ${caseToDelete?.name || 'eval case'}?`}
+        description="This removes the test case from the suite. Historical run results stay available."
+        confirmLabel="Delete case"
+        onClose={() => setCaseToDelete(null)}
+        onConfirm={async () => {
+          if (!caseToDelete || !detailQuery.data) return
+          await evalsApi.deleteCase(detailQuery.data.id, caseToDelete.id)
+          setCaseToDelete(null)
+          toast.success('Eval case deleted')
+          refreshSelected()
+        }}
       />
     </div>
   )

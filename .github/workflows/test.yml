@@ -1,0 +1,88 @@
+name: Test Suite
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: platform_user
+          POSTGRES_PASSWORD: platform_pass
+          POSTGRES_DB: platform_test_db
+        options: >-
+          --health-cmd "pg_isready -U platform_user -d platform_test_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run migrations
+        run: cd backend && alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://platform_user:platform_pass@localhost:5432/platform_test_db
+          REDIS_URL: redis://localhost:6379/0
+          ENVIRONMENT: test
+          JWT_SECRET_KEY: test-secret-key-for-ci-only
+
+      - name: Run tests
+        run: cd backend && pytest tests/ --ignore=tests/test_integration.py -v --cov=. --cov-report=xml --cov-report=term-missing
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///:memory:
+          JWT_SECRET_KEY: test-secret-key-for-ci-only
+          REDIS_URL: redis://localhost:6379/0
+          ENVIRONMENT: test
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: backend/coverage.xml
+
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Bandit security scanner
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit
+          bandit -r backend/ -x backend/tests/ \
+            --severity-level medium \
+            -f json -o security_report.json
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security_report.json

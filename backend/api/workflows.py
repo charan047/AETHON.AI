@@ -5,17 +5,19 @@ from fastapi import Depends
 
 import json
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Any
 from datetime import datetime
 from uuid import uuid4
 
 from database import get_db
-from database.models import User, Workflow, WorkflowVersion
+from database.models import AuditAction, User, Workflow, WorkflowVersion
+from services import audit_log_service
 from services.versioning_service import VersioningService
+from utils.sanitize import sanitize_text
 
 router = APIRouter(dependencies=[Depends(get_current_user), Depends(get_org_context)])
 versioning_service = VersioningService()
@@ -76,7 +78,7 @@ WORKFLOW_TEMPLATES = [
 
 
 class WorkflowCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=255)
     description: str = ""
     nodes: List[Any] = []
     edges: List[Any] = []
@@ -89,7 +91,7 @@ class WorkflowCreate(BaseModel):
 
 
 class WorkflowUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     nodes: Optional[List[Any]] = None
     edges: Optional[List[Any]] = None
@@ -171,7 +173,7 @@ async def list_workflows(db: AsyncSession = Depends(get_db), ctx: OrgContext = D
 async def create_workflow(
     data: WorkflowCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_editor),
     ctx: OrgContext = Depends(get_org_context),
 ):
     await check_plan_limit("workflows", ctx.org, db)
@@ -182,7 +184,10 @@ async def create_workflow(
     workflow = Workflow(
         id=str(uuid4()),
         org_id=ctx.org.id,
-        **data.model_dump(),
+        **{
+            **data.model_dump(),
+            "name": sanitize_text(data.name, max_length=255),
+        },
         status="draft",
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
@@ -190,13 +195,6 @@ async def create_workflow(
     db.add(workflow)
     await db.commit()
     await db.refresh(workflow)
-    await versioning_service.create_version(
-        workflow_id=workflow.id,
-        definition=versioning_service.workflow_to_definition(workflow),
-        user_id=current_user.id,
-        changelog="Initial workflow snapshot",
-        db=db,
-    )
     return workflow
 
 
@@ -283,7 +281,7 @@ async def rollback_workflow(
     workflow_id: str,
     data: RollbackRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_editor),
     ctx: OrgContext = Depends(get_org_context),
 ):
     await check_plan_limit("version_history", ctx.org, db)
@@ -303,7 +301,7 @@ async def update_workflow(
     workflow_id: str,
     data: WorkflowUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_editor),
     ctx: OrgContext = Depends(get_org_context),
 ):
     result = await db.execute(select(Workflow).where(Workflow.id == workflow_id, Workflow.org_id == ctx.org.id))
@@ -321,7 +319,10 @@ async def update_workflow(
         changelog=data.changelog,
         db=db,
     )
-    for field, value in data.model_dump(exclude_none=True, exclude={"changelog"}).items():
+    updates = data.model_dump(exclude_none=True, exclude={"changelog"})
+    if "name" in updates:
+        updates["name"] = sanitize_text(updates["name"], max_length=255)
+    for field, value in updates.items():
         setattr(workflow, field, value)
     workflow.updated_at = datetime.utcnow()
     await db.commit()
@@ -330,10 +331,27 @@ async def update_workflow(
 
 
 @router.delete("/{workflow_id}", status_code=204)
-async def delete_workflow(workflow_id: str, db: AsyncSession = Depends(get_db), ctx: OrgContext = Depends(get_org_context)):
+async def delete_workflow(
+    workflow_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
     result = await db.execute(select(Workflow).where(Workflow.id == workflow_id, Workflow.org_id == ctx.org.id))
     workflow = result.scalar_one_or_none()
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
+    deleted_name = workflow.name
     await db.delete(workflow)
     await db.commit()
+    await audit_log_service.log(
+        AuditAction.workflow_deleted,
+        user_id=current_user.id,
+        org_id=ctx.org.id,
+        resource_type="workflow",
+        resource_id=workflow_id,
+        request=request,
+        details={"name": deleted_name},
+        db=db,
+    )

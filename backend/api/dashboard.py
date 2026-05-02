@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 
 from auth.dependencies import get_current_user
@@ -30,6 +30,10 @@ router = APIRouter(dependencies=[Depends(get_current_user), Depends(get_org_cont
 
 def _iso(value):
     return value.isoformat() if value else None
+
+
+async def _org_events(org_id: str) -> list[dict]:
+    return await ws_manager.get_recent_logs_for_org(org_id)
 
 
 async def _company_profile(user_id: str, org_id: str) -> dict:
@@ -66,7 +70,7 @@ async def _this_week(org_id: str) -> dict:
             )
         ) or 0
     success_rate = round((completed / max(completed + failed, 1)) * 100, 1)
-    artifacts = len(_recent_artifacts_from_logs(cutoff)) + completed
+    artifacts = len(_recent_artifacts_from_logs(await _org_events(org_id), cutoff)) + completed
     return {
         "workflows_run": total,
         "success_rate": success_rate,
@@ -80,11 +84,19 @@ async def _team_status(org_id: str) -> list[dict]:
         agents = (await db.execute(select(Agent).where(Agent.org_id == org_id).order_by(Agent.created_at.asc()))).scalars().all()
         reputations = {
             rep.agent_id: rep
-            for rep in (await db.execute(select(AgentReputation))).scalars().all()
+            for rep in (
+                await db.execute(
+                    select(AgentReputation)
+                    .join(Agent, Agent.id == AgentReputation.agent_id)
+                    .where(Agent.org_id == org_id)
+                )
+            ).scalars().all()
         }
         last_messages = {}
         result = await db.execute(
             select(Message.from_agent, func.max(Message.timestamp))
+            .join(Execution, Execution.id == Message.execution_id)
+            .where(Execution.org_id == org_id)
             .group_by(Message.from_agent)
         )
         for name, timestamp in result.all():
@@ -92,7 +104,7 @@ async def _team_status(org_id: str) -> list[dict]:
 
     running_by_name = {}
     waiting_by_name = {}
-    for event in reversed(list(ws_manager.log_buffer)):
+    for event in reversed(await _org_events(org_id)):
         agent_name = event.get("agent") or event.get("agent_name") or event.get("name")
         if not agent_name:
             continue
@@ -107,10 +119,10 @@ async def _team_status(org_id: str) -> list[dict]:
         status = "idle"
         current_task = None
         if agent.name in waiting_by_name:
-            status = "waiting"
+            status = "waiting_approval"
             current_task = waiting_by_name[agent.name]
         elif agent.name in running_by_name:
-            status = "running"
+            status = "working"
             current_task = running_by_name[agent.name]
         rep = reputations.get(agent.id)
         rows.append(
@@ -118,6 +130,10 @@ async def _team_status(org_id: str) -> list[dict]:
                 "agent_id": agent.id,
                 "name": agent.name,
                 "role": agent.role,
+                "role_slug": agent.role_slug,
+                "seniority_level": agent.seniority_level,
+                "autonomy_level": agent.autonomy_level,
+                "trust_score": agent.trust_score,
                 "status": status,
                 "current_task": current_task,
                 "last_active": _iso(last_messages.get(agent.name)),
@@ -125,6 +141,36 @@ async def _team_status(org_id: str) -> list[dict]:
             }
         )
     return rows
+
+
+async def _overview(org_id: str) -> dict:
+    start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    async with AsyncSessionLocal() as db:
+        tasks_today = await db.scalar(
+            select(func.count(Execution.id)).where(
+                Execution.org_id == org_id,
+                Execution.started_at >= start_of_day,
+            )
+        ) or 0
+        pending_approvals = await db.scalar(
+            select(func.count(HumanApprovalRequest.id))
+            .join(Workflow, HumanApprovalRequest.workflow_id == Workflow.id)
+            .where(
+                Workflow.org_id == org_id,
+                HumanApprovalRequest.status == ApprovalStatus.pending,
+            )
+        ) or 0
+        avg_trust = await db.scalar(
+            select(func.avg(Agent.trust_score)).where(
+                Agent.org_id == org_id,
+                Agent.trust_score.isnot(None),
+            )
+        ) or 0
+    return {
+        "tasks_today": tasks_today,
+        "pending_approvals": pending_approvals,
+        "average_trust_score": round(float(avg_trust), 1) if avg_trust is not None else 0.0,
+    }
 
 
 async def _pending_attention(user_id: str, org_id: str) -> list[dict]:
@@ -176,7 +222,7 @@ async def _pending_attention(user_id: str, org_id: str) -> list[dict]:
                 "priority": "urgent",
                 "agent_name": agent_name or "Agent",
                 "created_at": _iso(feedback.created_at),
-                "action_url": f"/chat/{feedback.execution_id}",
+                "action_url": f"/executions/{feedback.execution_id}",
             }
         )
 
@@ -199,9 +245,9 @@ async def _pending_attention(user_id: str, org_id: str) -> list[dict]:
     return sorted(items, key=lambda item: (priority_rank.get(item["priority"], 1), item.get("created_at") or ""))
 
 
-def _recent_artifacts_from_logs(cutoff: datetime) -> list[dict]:
+def _recent_artifacts_from_logs(events: list[dict], cutoff: datetime) -> list[dict]:
     artifacts = []
-    for event in reversed(list(ws_manager.log_buffer)):
+    for event in reversed(events):
         timestamp = event.get("timestamp")
         try:
             created = datetime.fromisoformat(timestamp).replace(tzinfo=None) if timestamp else datetime.utcnow()
@@ -239,7 +285,7 @@ def _recent_artifacts_from_logs(cutoff: datetime) -> list[dict]:
 
 async def _recent_artifacts(org_id: str) -> list[dict]:
     cutoff = datetime.utcnow() - timedelta(days=7)
-    artifacts = _recent_artifacts_from_logs(cutoff)
+    artifacts = _recent_artifacts_from_logs(await _org_events(org_id), cutoff)
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(Execution, Workflow.name)
@@ -255,17 +301,18 @@ async def _recent_artifacts(org_id: str) -> list[dict]:
                 "title": workflow_name,
                 "agent_name": "Workflow",
                 "created_at": _iso(execution.completed_at),
-                "url": f"/chat/{execution.workflow_id}",
+                "url": f"/executions/{execution.id}",
             }
         )
     return artifacts[:20]
 
 
-async def _notification_count(user_id: str) -> dict:
+async def _notification_count(user_id: str, org_id: str) -> dict:
     async with AsyncSessionLocal() as db:
         unread = await db.scalar(
             select(func.count(InAppNotification.id)).where(
                 InAppNotification.user_id == user_id,
+                InAppNotification.org_id == org_id,
                 InAppNotification.is_read == False,  # noqa: E712
             )
         )
@@ -274,36 +321,29 @@ async def _notification_count(user_id: str) -> dict:
 
 @router.get("/summary")
 async def get_dashboard_summary(
-    request: Request,
     current_user: User = Depends(get_current_user),
     ctx: OrgContext = Depends(get_org_context),
 ):
-    cache = getattr(request.app.state, "dashboard_summary_cache", None)
-    if cache is None:
-        cache = {}
-        request.app.state.dashboard_summary_cache = cache
-
-    cache_key = f"{current_user.id}:{ctx.org.id}"
-    now = datetime.now(timezone.utc)
-    cached = cache.get(cache_key)
-    if cached and (now - cached["timestamp"]).total_seconds() < 10:
-        return cached["data"]
-
-    profile, this_week, team_status, recent_artifacts, notification_count, pending_attention = await asyncio.gather(
+    profile, this_week, team_status, recent_artifacts, notification_count, pending_attention, overview = await asyncio.gather(
         _company_profile(current_user.id, ctx.org.id),
         _this_week(ctx.org.id),
         _team_status(ctx.org.id),
         _recent_artifacts(ctx.org.id),
-        _notification_count(current_user.id),
+        _notification_count(current_user.id, ctx.org.id),
         _pending_attention(current_user.id, ctx.org.id),
+        _overview(ctx.org.id),
     )
     data = {
         "company_profile": profile,
         "this_week": this_week,
+        "overview": {
+            **overview,
+            "agents_active": len([agent for agent in team_status if agent["status"] != "idle"]),
+            "agent_count": len(team_status),
+        },
         "team_status": team_status,
         "pending_attention": pending_attention,
         "recent_artifacts": recent_artifacts,
         "notifications": notification_count,
     }
-    cache[cache_key] = {"timestamp": now, "data": data}
     return data

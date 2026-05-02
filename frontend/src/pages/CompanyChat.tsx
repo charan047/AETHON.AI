@@ -95,7 +95,7 @@ function formatTime(value: string) {
   }).format(new Date(value))
 }
 
-function toChatMessages(items: Array<{ role: ChatRole; content: string; created_at?: string }>): ChatMessage[] {
+function toChatMessages(items: Array<{ role: ChatRole; content: string; created_at?: string; actions?: ChatAction[] }>): ChatMessage[] {
   return items
     .filter(item => item.role === 'user' || item.role === 'assistant' || item.role === 'system')
     .map(item => ({
@@ -103,7 +103,7 @@ function toChatMessages(items: Array<{ role: ChatRole; content: string; created_
       role: item.role,
       content: item.content,
       createdAt: item.created_at || new Date().toISOString(),
-      actions: item.role === 'assistant' ? [] : undefined,
+      actions: item.role === 'assistant' ? item.actions || [] : undefined,
     }))
 }
 
@@ -118,7 +118,7 @@ function actionRoute(action: ChatAction) {
   if (action.page === 'agents') return '/agents'
   if (action.page === 'workflows') return '/workflows'
   if (action.workflow_id) return '/workflows'
-  if (action.execution_id) return '/monitoring'
+  if (action.execution_id) return `/executions/${action.execution_id}`
   if (action.agent_id) return '/agents'
   return null
 }
@@ -399,7 +399,7 @@ export function CompanyChat() {
 
         const data = await response.json() as {
           conversation_id: string
-          messages: Array<{ role: ChatRole; content: string; created_at?: string }>
+          messages: Array<{ role: ChatRole; content: string; created_at?: string; actions?: ChatAction[] }>
         }
         setMessages(toChatMessages(data.messages))
       } catch {

@@ -23,7 +23,6 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { format, subDays } from 'date-fns'
-import toast from 'react-hot-toast'
 import { clsx } from 'clsx'
 import { companyApi } from '../api/client'
 import { CostChart } from '../components/analytics/CostChart'
@@ -31,6 +30,7 @@ import { AgentPerformanceCard } from '../components/analytics/AgentPerformanceCa
 import { GlowCard } from '../components/ui/GlowCard'
 import { Skeleton, SkeletonCard } from '../components/ui/Skeleton'
 import { useAnalytics } from '../hooks/useAnalytics'
+import { toast } from '../lib/toast'
 
 const PERIODS = [7, 30, 90]
 const AGENT_COLORS = ['#6366f1', '#06b6d4', '#22c55e', '#f59e0b', '#ec4899', '#8b5cf6']

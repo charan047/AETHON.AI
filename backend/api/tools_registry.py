@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.dependencies import get_current_user, require_admin
+from auth.org_context import OrgContext, get_org_context
 from database import get_db
-from database.models import ToolCallLog, User
+from database.models import Agent, Execution, ToolCallLog, User
 from tools.registry import tool_registry
 
 
@@ -38,6 +39,7 @@ async def get_tool_health(current_user: User = Depends(require_admin)):
 async def get_tool_analytics(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
 ):
     """Usage analytics for the current user's tool calls."""
     since = datetime.now(timezone.utc) - timedelta(days=7)
@@ -50,7 +52,16 @@ async def get_tool_analytics(
             func.avg(ToolCallLog.duration_ms).label("avg_duration_ms"),
             failed_count.label("failed_calls"),
         )
-        .where(ToolCallLog.user_id == current_user.id, ToolCallLog.created_at >= since)
+        .outerjoin(Execution, Execution.id == ToolCallLog.execution_id)
+        .outerjoin(Agent, Agent.id == ToolCallLog.agent_id)
+        .where(
+            ToolCallLog.user_id == current_user.id,
+            ToolCallLog.created_at >= since,
+            or_(
+                Execution.org_id == ctx.org.id,
+                and_(ToolCallLog.execution_id.is_(None), Agent.org_id == ctx.org.id),
+            ),
+        )
         .group_by(ToolCallLog.tool_name)
         .order_by(total_count.desc())
     )
@@ -83,9 +94,13 @@ async def get_agent_tool_analytics(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
 ):
     """Tool usage breakdown for one agent."""
     since = datetime.now(timezone.utc) - timedelta(days=7)
+    agent = await db.scalar(select(Agent.id).where(Agent.id == agent_id, Agent.org_id == ctx.org.id))
+    if not agent:
+        return {"agent_id": agent_id, "window": "7d", "tools": []}
     failed_count = func.sum(case((ToolCallLog.success == False, 1), else_=0))  # noqa: E712
     total_count = func.count(ToolCallLog.id)
     result = await db.execute(

@@ -75,11 +75,17 @@ async def require_org_owner(ctx: OrgContext = Depends(get_org_context)) -> OrgCo
 
 
 async def check_plan_limit(resource: str, org: Organization, db: AsyncSession) -> None:
-    from services.plan_service import plan_service
+    from services.plan_service import FEATURE_FLAGS, plan_service
 
     allowed, message = await plan_service.check_limit(org, resource, db)
     if not allowed:
+        plan = org.plan.value if hasattr(org.plan, "value") else str(org.plan)
         raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=message,
+            status_code=status.HTTP_403_FORBIDDEN if resource in FEATURE_FLAGS else status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "detail": message,
+                "code": "plan_limit_reached",
+                "resource": resource,
+                "current_plan": plan,
+            },
         )

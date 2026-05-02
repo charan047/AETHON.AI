@@ -1,4 +1,21 @@
+import sys
+from pathlib import Path
+
 from celery_app import celery_app
+
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = BACKEND_DIR.parent
+
+
+def _ensure_import_path() -> None:
+    for path in (BACKEND_DIR, PROJECT_ROOT):
+        path_str = str(path)
+        if path_str not in sys.path:
+            sys.path.insert(0, path_str)
+
+
+_ensure_import_path()
 
 
 @celery_app.task(
@@ -15,6 +32,8 @@ def run_eval_suite_task(
     triggered_by: str = "manual",
     git_commit: str = None,
 ):
+    _ensure_import_path()
+
     import asyncio
 
     from database.db import AsyncSessionLocal

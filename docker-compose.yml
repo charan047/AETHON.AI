@@ -1,27 +1,73 @@
 services:
   # Build the execution image before enabling code execution:
   # docker build -t platform-executor:latest ./backend/tools/docker/
-  backend:
+  backend-1:
     build: ./backend
     ports:
-      - "8000:8000"
+      - "8001:8000"
     env_file:
       - ./backend/.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://platform_user:platform_pass@postgres:5432/platform_db
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql+asyncpg://platform_user:platform_pass@host.docker.internal:5432/platform_db}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       CORS_ORIGINS: '["http://localhost:5173","http://localhost"]'
       DOCKER_EXECUTION_IMAGE: platform-executor:latest
+      RUN_MIGRATIONS_ON_STARTUP: "false"
+      ENABLE_TESTING_API: "true"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./backend/.env:/app/.env
+      - chroma_data:/app/chroma_db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      default:
+        aliases:
+          - backend1
+
+  backend-2:
+    build: ./backend
+    ports:
+      - "8002:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql+asyncpg://platform_user:platform_pass@host.docker.internal:5432/platform_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      CORS_ORIGINS: '["http://localhost:5173","http://localhost"]'
+      DOCKER_EXECUTION_IMAGE: platform-executor:latest
+      RUN_MIGRATIONS_ON_STARTUP: "false"
+      ENABLE_TESTING_API: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend/.env:/app/.env
+      - chroma_data:/app/chroma_db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      default:
+        aliases:
+          - backend2
+
+  nginx-lb:
+    image: nginx:alpine
+    ports:
+      - "8000:80"
+    volumes:
+      - ./nginx/load_balancer.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend-1
+      - backend-2
 
   celery_worker:
     build: ./backend
@@ -29,14 +75,16 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://platform_user:platform_pass@postgres:5432/platform_db
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql+asyncpg://platform_user:platform_pass@host.docker.internal:5432/platform_db}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       CORS_ORIGINS: '["http://localhost:5173","http://localhost"]'
+    volumes:
+      - chroma_data:/app/chroma_db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -54,16 +102,17 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - backend
+      - nginx-lb
 
   postgres:
+    profiles: ["local-db"]
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: platform_user
       POSTGRES_PASSWORD: platform_pass
       POSTGRES_DB: platform_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U platform_user -d platform_db"]
       interval: 10s
@@ -89,3 +138,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  chroma_data:

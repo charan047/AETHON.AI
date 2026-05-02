@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import Editor, { type Monaco } from '@monaco-editor/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import toast from 'react-hot-toast'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -15,6 +14,7 @@ import {
 import { companyApi } from '../api/client'
 import type { CompanyYamlApplySummary, CompanyYamlPreview, CompanyYamlValidation } from '../types'
 import { GlowCard } from '../components/ui/GlowCard'
+import { toast } from '../lib/toast'
 
 const sampleYaml = `company:
   name: Acme Intelligence

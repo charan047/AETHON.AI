@@ -217,4 +217,7 @@ class ResearchTool(BaseTool):
                 return ToolHealth.healthy, "Research search dependency is working"
             return ToolHealth.degraded, "Search returned no URL"
         except Exception as exc:
-            return ToolHealth.unhealthy, str(exc)
+            message = str(exc)
+            if "ratelimit" in message.lower() or "rate limit" in message.lower():
+                return ToolHealth.degraded, f"Search provider temporarily rate limited: {message}"
+            return ToolHealth.unhealthy, message

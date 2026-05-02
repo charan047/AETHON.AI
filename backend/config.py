@@ -1,6 +1,7 @@
-from typing import List
-
 import logging
+import os
+import socket
+from typing import List
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
@@ -13,6 +14,9 @@ class Settings(BaseSettings):
     # OpenAI-compatible (Groq / Ollama / Together AI / OpenRouter / real OpenAI)
     openai_compatible_api_key: str = ""
     openai_compatible_base_url: str = ""   # empty = real OpenAI API
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    ollama_base_url: str = "http://localhost:11434"
 
     # Telegram
     telegram_bot_token: str = ""
@@ -20,8 +24,10 @@ class Settings(BaseSettings):
 
     # Platform
     database_url: str = "postgresql+asyncpg://platform_user:platform_pass@localhost:5432/platform_db"
+    db_pool_size: int = 25
+    db_max_overflow: int = 50
     redis_url: str = "redis://localhost:6379/0"
-    jwt_secret_key: str = "changeme"
+    jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
@@ -37,6 +43,21 @@ class Settings(BaseSettings):
     docker_execution_image: str = "platform-executor:latest"
     otlp_endpoint: str = ""
     default_monthly_budget_usd: float = 50.0
+    stripe_secret_key: str = ""
+    stripe_publishable_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_free_price_id: str = ""
+    stripe_solo_price_id: str = ""
+    stripe_team_price_id: str = ""
+    stripe_business_price_id: str = ""
+    stripe_enterprise_price_id: str = ""
+    stripe_metered_execution_price_id: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    tavily_api_key: str = ""
+    run_migrations_on_startup: bool = False
+    enable_testing_api: bool = False
+    pod_id: str = f"{socket.gethostname()}:{os.getpid()}"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -78,8 +99,13 @@ AVAILABLE_TOOLS = [
     {"id": "web_intelligence", "name": "Web Intelligence", "description": "Search, browse, scrape, screenshot, and monitor webpages"},
     {"id": "research", "name": "Research", "description": "Deep research, fact checking, and competitor analysis with citations"},
     {"id": "github",        "name": "GitHub",        "description": "Read repositories, create branches, commit files, and open pull requests"},
+    {"id": "gmail_read",    "name": "Read Gmail",    "description": "Read emails from the connected Gmail account with Gmail search syntax"},
+    {"id": "gmail_send",    "name": "Send Gmail",    "description": "Send or draft email through the connected Gmail account"},
     {"id": "email",         "name": "Email",         "description": "Send email and read/search recent mailbox messages"},
     {"id": "slack",         "name": "Slack",         "description": "Send Slack messages, rich reports, files, and read channels"},
+    {"id": "slack_post",    "name": "Post to Slack", "description": "Post a message to a Slack channel or direct message"},
+    {"id": "slack_read",    "name": "Read Slack",    "description": "Read recent messages from a Slack channel"},
     {"id": "telegram",      "name": "Telegram",      "description": "Send Telegram messages, alerts, and reports"},
     {"id": "notifications", "name": "Notifications", "description": "Notify the founder through the best available channel"},
+    {"id": "agent_communication", "name": "Agent Communication", "description": "Ask, delegate to, and check status of other AI agents"},
 ]

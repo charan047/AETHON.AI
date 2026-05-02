@@ -351,6 +351,7 @@ class WorkflowExecutor:
                         broadcast=broadcast,
                         workflow_id=self.workflow.id,
                         execution_id=execution_id,
+                        org_id=self.workflow.org_id,
                     )
 
                     if self.ws_manager:
@@ -468,6 +469,7 @@ class WorkflowExecutor:
                 broadcast=_broadcast,
                 workflow_id=self.workflow.id,
                 execution_id=execution_id,
+                org_id=self.workflow.org_id,
             )
             total_tokens += tokens
             agent_outputs[name] = response
@@ -649,6 +651,7 @@ class WorkflowExecutor:
                 broadcast=broadcast,
                 workflow_id=self.workflow.id,
                 execution_id=execution_id,
+                org_id=self.workflow.org_id,
             )
             total_tokens += tokens
             previous_output = response

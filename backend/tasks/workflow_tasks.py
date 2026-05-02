@@ -1,4 +1,28 @@
+import asyncio
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+
 from celery_app import celery_app
+from config import settings
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+
+logger = logging.getLogger(__name__)
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = BACKEND_DIR.parent
+
+
+def _ensure_import_path() -> None:
+    for path in (BACKEND_DIR, PROJECT_ROOT):
+        path_str = str(path)
+        if path_str not in sys.path:
+            sys.path.insert(0, path_str)
+
+
+_ensure_import_path()
 
 
 @celery_app.task(
@@ -13,15 +37,54 @@ def run_workflow_task(self, workflow_id: str, input_message: str, user_id: str, 
     Allows long-running workflows to execute without blocking the API.
     Self-healing: if worker dies, Celery can restart the task.
     """
-    import asyncio
+    _ensure_import_path()
 
-    from database.db import AsyncSessionLocal
+    from database.models import Execution, ExecutionStatus
     from runtime.workflow_engine import WorkflowEngine
+    from services.websocket_manager import ws_manager
+
+    task_engine = create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+        pool_timeout=30,
+        echo=settings.environment == "development",
+    )
+    session_factory = async_sessionmaker(task_engine, expire_on_commit=False, class_=AsyncSession)
 
     async def _run():
-        async with AsyncSessionLocal() as db:
+        async with session_factory() as db:
             engine = WorkflowEngine(db)
             await engine.run(workflow_id, input_message, user_id, execution_id)
 
-    asyncio.run(_run())
+    async def _mark_failed(error: Exception):
+        async with session_factory() as db:
+            execution = await db.get(Execution, execution_id)
+            if execution:
+                execution.status = ExecutionStatus.failed
+                execution.error = str(error)[:1000]
+                execution.completed_at = datetime.utcnow()
+                await db.commit()
+
+        try:
+            await ws_manager.broadcast_to_channel(
+                f"execution:{execution_id}",
+                {
+                    "event": "execution_failed",
+                    "execution_id": execution_id,
+                    "error": str(error)[:500],
+                },
+            )
+        except Exception:
+            logger.exception("Failed to broadcast workflow task error for %s", execution_id)
+
+    try:
+        asyncio.run(_run())
+    except Exception as exc:
+        logger.exception("Workflow task failed for execution %s", execution_id)
+        asyncio.run(_mark_failed(exc))
+        raise
+    finally:
+        asyncio.run(task_engine.dispose())
+
     return {"execution_id": execution_id, "status": "completed"}

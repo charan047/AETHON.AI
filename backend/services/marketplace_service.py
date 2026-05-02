@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import (
     Agent,
+    CustomTool,
     EvalCase,
     EvalSuite,
     ListingStatus,
@@ -19,17 +20,13 @@ from database.models import (
     MarketplaceReview,
     NotificationPriority,
     InAppNotification,
+    OrgMember,
     ScoringMethod,
     Workflow,
 )
 from services.websocket_manager import ws_manager
-
-
-SECRET_PATTERNS = [
-    re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?[\w\-./+=]{8,}['\"]?"),
-    re.compile(r"(?i)(bearer\s+)[a-z0-9._\-]{16,}"),
-    re.compile(r"sk-[a-zA-Z0-9]{16,}"),
-]
+from utils.sanitize import sanitize_html, sanitize_text
+from utils.secret_scanner import redact_secrets, scan_for_secrets
 
 
 def _enum_value(value):
@@ -37,6 +34,11 @@ def _enum_value(value):
 
 
 class MarketplaceService:
+    async def _resolve_user_org_id(self, user_id: str, db: AsyncSession) -> str | None:
+        return await db.scalar(
+            select(OrgMember.org_id).where(OrgMember.user_id == user_id).limit(1)
+        )
+
     async def publish_agent(
         self,
         agent_id: str,
@@ -47,6 +49,8 @@ class MarketplaceService:
         agent = await db.get(Agent, agent_id)
         if not agent or metadata.get("org_id") and agent.org_id != metadata["org_id"]:
             raise ValueError("Agent not found")
+        if scan_for_secrets(agent.system_prompt):
+            raise ValueError("System prompt contains secrets")
 
         template_data = {
             "name": agent.name,
@@ -92,13 +96,39 @@ class MarketplaceService:
             "nodes": nodes,
             "edges": workflow.edges or [],
             "execution_mode": workflow.execution_mode,
-            "orchestration_prompt": self._sanitize_text(workflow.orchestration_prompt or ""),
+            "orchestration_prompt": self._sanitize_text(workflow.orchestration_prompt or "", max_length=50000),
             "max_cycles": workflow.max_cycles,
         }
         return await self._create_listing(
             user_id=user_id,
             org_id=workflow.org_id,
             listing_type=ListingType.workflow,
+            metadata=metadata,
+            template_data=template_data,
+            db=db,
+        )
+
+    async def publish_tool_config(
+        self,
+        tool_id: str,
+        user_id: str,
+        metadata: dict,
+        db: AsyncSession,
+    ) -> MarketplaceListing:
+        tool = await db.get(CustomTool, tool_id)
+        if not tool or metadata.get("org_id") and tool.org_id != metadata["org_id"]:
+            raise ValueError("Tool config not found")
+
+        template_data = {
+            "name": tool.name,
+            "description": self._sanitize_text(tool.description, max_length=10000),
+            "code": self._sanitize_text(tool.code, max_length=100000),
+            "is_active": True,
+        }
+        return await self._create_listing(
+            user_id=user_id,
+            org_id=tool.org_id,
+            listing_type=ListingType.tool_config,
             metadata=metadata,
             template_data=template_data,
             db=db,
@@ -122,7 +152,8 @@ class MarketplaceService:
                 MarketplaceInstall.installer_org_id == org_id,
             )
         )
-        if existing:
+        reinstall = bool((options or {}).get("reinstall"))
+        if existing and not reinstall:
             return {
                 "installed": False,
                 "already_installed": True,
@@ -136,23 +167,32 @@ class MarketplaceService:
             resource_id = await self._install_agent(template, org_id, db)
         elif listing_type == ListingType.workflow:
             resource_id = await self._install_workflow(template, org_id, db)
+        elif listing_type == ListingType.tool_config:
+            resource_id = await self._install_tool_config(template, org_id, db)
         elif listing_type == ListingType.eval_suite:
             resource_id = await self._install_eval_suite(template, user_id, org_id, db, options or {})
         else:
             raise ValueError("Unsupported listing type")
 
-        install = MarketplaceInstall(
-            id=str(uuid.uuid4()),
-            listing_id=listing_id,
-            installer_user_id=user_id,
-            installer_org_id=org_id,
-            installed_resource_id=resource_id,
-        )
-        listing.install_count = int(listing.install_count or 0) + 1
-        db.add(install)
+        if existing:
+            existing.installer_user_id = user_id
+            existing.installed_resource_id = resource_id
+            existing.installed_at = datetime.now(timezone.utc)
+            db.add(existing)
+        else:
+            install = MarketplaceInstall(
+                id=str(uuid.uuid4()),
+                listing_id=listing_id,
+                installer_user_id=user_id,
+                installer_org_id=org_id,
+                installed_resource_id=resource_id,
+            )
+            listing.install_count = int(listing.install_count or 0) + 1
+            db.add(install)
         await db.commit()
         return {
             "installed": True,
+            "reinstalled": bool(existing),
             "resource_id": resource_id,
             "type": _enum_value(listing.listing_type),
         }
@@ -256,15 +296,18 @@ class MarketplaceService:
             raise ValueError("Marketplace listing not found")
         listing.status = ListingStatus.published
         listing.published_at = datetime.now(timezone.utc)
-        db.add(
-            InAppNotification(
-                user_id=listing.publisher_user_id,
-                title="Marketplace listing approved",
-                message=f"'{listing.name}' is now published in the marketplace.",
-                priority=NotificationPriority.normal,
-                action_url=f"/marketplace/{listing.slug}",
+        notification_org_id = listing.publisher_org_id or await self._resolve_user_org_id(listing.publisher_user_id, db)
+        if notification_org_id:
+            db.add(
+                InAppNotification(
+                    org_id=notification_org_id,
+                    user_id=listing.publisher_user_id,
+                    title="Marketplace listing approved",
+                    message=f"'{listing.name}' is now published in the marketplace.",
+                    priority=NotificationPriority.normal,
+                    action_url=f"/marketplace/{listing.slug}",
+                )
             )
-        )
         await db.commit()
         await db.refresh(listing)
         return listing
@@ -288,9 +331,9 @@ class MarketplaceService:
             status=ListingStatus.pending,
             name=name,
             slug=await self._unique_slug(name, db),
-            tagline=metadata["tagline"].strip(),
-            description=metadata["description"].strip(),
-            readme=metadata.get("readme"),
+            tagline=self._sanitize_text(metadata["tagline"].strip(), max_length=500),
+            description=sanitize_html(self._sanitize_text(metadata["description"].strip(), max_length=100000)),
+            readme=sanitize_html(self._sanitize_text(metadata.get("readme") or "", max_length=100000)) or None,
             template_data=json.dumps(template_data),
             tags=self._normalize_tags(metadata.get("tags")),
             preview_image_url=metadata.get("preview_image_url"),
@@ -353,6 +396,19 @@ class MarketplaceService:
         db.add(workflow)
         await db.flush()
         return workflow.id
+
+    async def _install_tool_config(self, template: dict, org_id: str, db: AsyncSession) -> str:
+        tool = CustomTool(
+            id=str(uuid.uuid4()),
+            org_id=org_id,
+            name=await self._unique_tool_name(template.get("name", "marketplace_tool"), db),
+            description=template.get("description", ""),
+            code=template.get("code", ""),
+            is_active=template.get("is_active", True),
+        )
+        db.add(tool)
+        await db.flush()
+        return tool.id
 
     async def _install_eval_suite(
         self,
@@ -440,11 +496,8 @@ class MarketplaceService:
             cleared.append(clone)
         return cleared
 
-    def _sanitize_text(self, value: str) -> str:
-        sanitized = value or ""
-        for pattern in SECRET_PATTERNS:
-            sanitized = pattern.sub("[REDACTED_SECRET]", sanitized)
-        return sanitized
+    def _sanitize_text(self, value: str, max_length: int = 10000) -> str:
+        return redact_secrets(sanitize_text(value or "", max_length=max_length) or "") or ""
 
     def _sanitize_tools(self, tools: list[Any]) -> list[str]:
         return [str(tool) for tool in tools if isinstance(tool, (str, int, float))]
@@ -464,6 +517,18 @@ class MarketplaceService:
         suffix = 2
         while await db.scalar(select(MarketplaceListing.id).where(MarketplaceListing.slug == candidate)):
             candidate = f"{base[:210]}-{suffix}"
+            suffix += 1
+        return candidate
+
+    async def _unique_tool_name(self, name: str, db: AsyncSession) -> str:
+        base = re.sub(r"[^a-zA-Z0-9_]+", "_", (name or "marketplace_tool").strip().lower()).strip("_")
+        if not base or not re.match(r"^[a-zA-Z_]", base):
+            base = f"tool_{base}" if base else "marketplace_tool"
+        base = base[:45]
+        candidate = base
+        suffix = 2
+        while await db.scalar(select(CustomTool.id).where(CustomTool.name == candidate)):
+            candidate = f"{base[:42]}_{suffix}"
             suffix += 1
         return candidate
 

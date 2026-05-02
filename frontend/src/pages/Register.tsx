@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Loader2, UserPlus } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { AuthShell, FloatingField } from '../components/AuthShell'
@@ -7,6 +7,7 @@ import { AuthShell, FloatingField } from '../components/AuthShell'
 export function Register() {
   const auth = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -19,7 +20,8 @@ export function Register() {
     setLoading(true)
     try {
       await auth.register(email, password, fullName)
-      navigate('/')
+      const from = (location.state as any)?.from?.pathname || '/'
+      navigate(from)
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Registration failed')
     } finally {

@@ -1,27 +1,31 @@
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any
+from uuid import uuid4
 
-from config import AVAILABLE_MODELS, settings
-from sqlalchemy import select
+from config import settings
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import AsyncSessionLocal
-from database.models import IntegrationType, UserIntegration
+from database.models import ExecutionStep, IntegrationType, UserIntegration
 from runtime.tools import make_custom_tool
 from services.business_context_service import BusinessContextService
 from services.cost_tracker import cost_tracker
 from services.integration_crypto import decrypt_config
+from services.model_service import model_service
 from services.reputation_service import ReputationService
 from services.telemetry_service import telemetry_service
+from services.websocket_manager import ws_manager
+from tools.base import BaseTool
 from tools.registry import tool_registry
 
 logger = logging.getLogger(__name__)
-
-KNOWN_MODEL_IDS = {model["id"] for model in AVAILABLE_MODELS}
 FINAL_ANSWER_INSTRUCTION = (
     "When you have gathered enough information, stop using tools and write your final answer directly."
 )
@@ -40,25 +44,11 @@ def _extract_text(content) -> str:
 
 
 def build_llm(model: str, temperature: float = 0.7, max_tokens: int = 2000):
-    is_ollama = model.startswith("ollama/")
-    # Strip "ollama/" prefix — the base_url already points at the right server
-    actual_model = model.removeprefix("ollama/")
-
-    kwargs: dict = {
-        "model": actual_model,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "api_key": settings.openai_compatible_api_key or "ollama",
-    }
-    if settings.openai_compatible_base_url:
-        kwargs["base_url"] = settings.openai_compatible_base_url
-
-    # Disable parallel tool calls for hosted APIs — some open-source models mangle
-    # the tool name when calling multiple tools simultaneously. Ollama ignores/rejects it.
-    if not is_ollama:
-        kwargs["model_kwargs"] = {"parallel_tool_calls": False}
-
-    return ChatOpenAI(**kwargs)
+    return model_service.build_legacy_llm(
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
 
 
 class AgentRunner:
@@ -81,22 +71,48 @@ class AgentRunner:
 
             self.memory_service = MemoryService()
         self.memory_config = memory_config
-        model = agent_config.model
-        if model not in KNOWN_MODEL_IDS:
-            logger.warning(
-                "Agent %r uses unknown model %r; falling back to default model %r",
-                agent_config.name,
-                model,
-                settings.default_model,
-            )
-            model = settings.default_model
-        self.llm = build_llm(
-            model,
-            agent_config.temperature,
-            agent_config.max_tokens,
-        )
+        self.llm = None
         self.tool_ids = agent_config.tools or []
         self.tools = []
+        self._context: dict[str, Any] = {}
+
+    async def _resolve_llm(self, db: AsyncSession | None = None):
+        temperature = getattr(self.config, "temperature", 0.7)
+        max_tokens = getattr(self.config, "max_tokens", 2000)
+        org_id = getattr(self.config, "org_id", None)
+        agent_id = getattr(self.config, "id", None)
+
+        model_config = None
+        if org_id and agent_id:
+            if db is not None:
+                model_config = await model_service.get_for_agent(
+                    agent_id=str(agent_id),
+                    org_id=str(org_id),
+                    db=db,
+                )
+            else:
+                async with AsyncSessionLocal() as session:
+                    model_config = await model_service.get_for_agent(
+                        agent_id=str(agent_id),
+                        org_id=str(org_id),
+                        db=session,
+                    )
+
+        if model_config:
+            if self.tool_ids and not bool(model_config.supports_tools):
+                logger.warning(
+                    "Agent %r is assigned to model %r which does not support tools; continuing anyway.",
+                    self.config.name,
+                    model_config.display_name,
+                )
+            return model_service.build_llm(
+                config=model_config,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+        legacy_model = getattr(self.config, "model", None) or settings.default_model
+        return build_llm(legacy_model, temperature=temperature, max_tokens=max_tokens)
 
     @staticmethod
     def _extract_usage_tokens(meta) -> tuple[int, int, int]:
@@ -128,10 +144,257 @@ class AgentRunner:
             prompt=system_prompt or None,
         )
 
+    @staticmethod
+    def _schema_to_pydantic(schema: dict, name: str):
+        from pydantic import create_model
+        from typing import Optional
+
+        fields = {}
+        properties = schema.get("properties", {})
+        required = set(schema.get("required", []))
+        type_map = {
+            "string": str,
+            "integer": int,
+            "number": float,
+            "boolean": bool,
+            "array": list,
+            "object": dict,
+        }
+
+        for field_name, field_schema in properties.items():
+            base_type = type_map.get(field_schema.get("type", "string"), str)
+            if field_name in required:
+                fields[field_name] = (base_type, ...)
+            else:
+                fields[field_name] = (Optional[base_type], field_schema.get("default", None))
+
+        return create_model(f"{name.title().replace('_', '')}Input", **fields)
+
+    async def _build_new_pattern_tools_as_langchain(
+        self,
+        org_id: str,
+        user_id: str,
+        execution_id: str,
+    ) -> list:
+        from langchain_core.tools import StructuredTool
+
+        new_tools = []
+        active_user_id = user_id or "system"
+        context = {
+            "_context": {
+                "agent_id": self.config.id,
+                "agent_name": self.config.name,
+                "org_id": org_id,
+                "user_id": user_id,
+                "execution_id": execution_id,
+            }
+        }
+
+        for tool_name in self.tool_ids:
+            try:
+                tool = await tool_registry.get_tool_instance(tool_name, active_user_id, dict(context))
+            except Exception:
+                continue
+
+            if tool.__class__.execute is BaseTool.execute:
+                continue
+
+            async def tool_func(_tool=tool, **kwargs):
+                if _tool.requires_auth and not await _tool.validate_auth(org_id, active_user_id):
+                    return f"{_tool.display_name} requires authentication before it can run."
+                result = await _tool.execute(
+                    input_data=kwargs,
+                    org_id=org_id,
+                    user_id=active_user_id,
+                )
+                if result.success:
+                    return result.result
+                return f"Tool error: {result.error}"
+
+            schema = tool.get_schema()
+            langchain_tool = StructuredTool.from_function(
+                coroutine=tool_func,
+                name=tool.name,
+                description=tool.description,
+                args_schema=self._schema_to_pydantic(schema, tool.name),
+            )
+            new_tools.append(langchain_tool)
+
+        return new_tools
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, list):
+            return [AgentRunner._json_safe(item) for item in value]
+        if isinstance(value, tuple):
+            return [AgentRunner._json_safe(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): AgentRunner._json_safe(item) for key, item in value.items()}
+        try:
+            json.dumps(value)
+            return value
+        except TypeError:
+            return str(value)
+
+    @staticmethod
+    def _truncate_text(value: Any, limit: int = 1000) -> str:
+        text = _extract_text(value)
+        return text if len(text) <= limit else f"{text[:limit]}..."
+
+    @staticmethod
+    def _next_step_index(step_index_ref: dict[str, int] | None) -> int:
+        if step_index_ref is None:
+            return 0
+        index = int(step_index_ref.get("value", 0))
+        step_index_ref["value"] = index + 1
+        return index
+
+    async def _persist_execution_step(
+        self,
+        *,
+        execution_id: str | None,
+        org_id: str | None,
+        step_type: str,
+        content: str,
+        step_index: int,
+        db: AsyncSession | None = None,
+        tool_name: str | None = None,
+        tool_input: Any = None,
+        tool_output: Any = None,
+        tool_success: bool | None = None,
+        duration_ms: int | None = None,
+        tokens_used: int | None = None,
+        created_at: datetime | None = None,
+    ) -> str | None:
+        if not execution_id or not org_id:
+            return None
+
+        step = ExecutionStep(
+            id=str(uuid4()),
+            execution_id=execution_id,
+            org_id=org_id,
+            step_type=step_type,
+            content=content,
+            tool_name=tool_name,
+            tool_input=self._json_safe(tool_input),
+            tool_output=self._json_safe(tool_output),
+            tool_success=tool_success,
+            step_index=step_index,
+            duration_ms=duration_ms,
+            tokens_used=tokens_used,
+            created_at=created_at or datetime.utcnow(),
+        )
+
+        if db is not None:
+            db.add(step)
+            await db.commit()
+            return step.id
+
+        async with AsyncSessionLocal() as session:
+            session.add(step)
+            await session.commit()
+            return step.id
+
+    async def _update_execution_step(
+        self,
+        step_id: str | None,
+        values: dict[str, Any],
+        db: AsyncSession | None = None,
+    ) -> None:
+        if not step_id:
+            return
+
+        statement = (
+            update(ExecutionStep)
+            .where(ExecutionStep.id == step_id)
+            .values(**{key: self._json_safe(value) for key, value in values.items()})
+        )
+
+        if db is not None:
+            await db.execute(statement)
+            await db.commit()
+            return
+
+        async with AsyncSessionLocal() as session:
+            await session.execute(statement)
+            await session.commit()
+
+    async def _broadcast_execution_step(
+        self,
+        execution_id: str | None,
+        payload: dict[str, Any],
+    ) -> None:
+        if not execution_id:
+            return
+        await ws_manager.broadcast_to_channel(
+            f"execution:{execution_id}",
+            {
+                "event": "execution_step",
+                "execution_id": execution_id,
+                "step": payload,
+            },
+        )
+
+    async def _record_execution_step(
+        self,
+        *,
+        execution_id: str | None,
+        org_id: str | None,
+        step_type: str,
+        content: str,
+        step_index_ref: dict[str, int] | None,
+        db: AsyncSession | None = None,
+        tool_name: str | None = None,
+        tool_input: Any = None,
+        tool_output: Any = None,
+        tool_success: bool | None = None,
+        duration_ms: int | None = None,
+        tokens_used: int | None = None,
+    ) -> tuple[str | None, dict[str, Any]]:
+        timestamp = datetime.utcnow()
+        step_index = self._next_step_index(step_index_ref)
+        payload = {
+            "step_type": step_type,
+            "content": content,
+            "tool_name": tool_name,
+            "tool_input": self._json_safe(tool_input),
+            "tool_output": self._json_safe(tool_output),
+            "tool_success": tool_success,
+            "step_index": step_index,
+            "duration_ms": duration_ms,
+            "tokens_used": tokens_used,
+            "timestamp": timestamp.isoformat(),
+            "agent_id": self.config.id,
+            "agent_name": self.config.name,
+        }
+        step_id = await self._persist_execution_step(
+            execution_id=execution_id,
+            org_id=org_id,
+            step_type=step_type,
+            content=content,
+            step_index=step_index,
+            db=db,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            tool_output=tool_output,
+            tool_success=tool_success,
+            duration_ms=duration_ms,
+            tokens_used=tokens_used,
+            created_at=timestamp,
+        )
+        if step_id:
+            payload["id"] = step_id
+        await self._broadcast_execution_step(execution_id, payload)
+        return step_id, payload
+
     async def _build_runtime_tools(self, user_id: str | None, execution_id: str | None = None):
         tool_ids = list(self.tool_ids or [])
         if "notifications" not in tool_ids:
             tool_ids.append("notifications")
+        if "agent_communication" not in tool_ids:
+            tool_ids.append("agent_communication")
         custom_by_id = {tool_def.id: tool_def for tool_def in (self.custom_tool_defs or [])}
         custom_tools = [
             make_custom_tool(custom_by_id[tool_id])
@@ -143,55 +406,70 @@ class AgentRunner:
             "_context": {
                 "agent_id": self.config.id,
                 "agent_name": self.config.name,
+                "org_id": getattr(self.config, "org_id", None),
+                "user_id": user_id,
                 "execution_id": execution_id,
             }
         }
+        self._context = dict(tool_context["_context"])
 
         integrations_by_tool: dict[str, dict] = {}
         if not user_id:
             integrations_by_tool = {tool_id: dict(tool_context) for tool_id in registry_tool_ids}
-            return await tool_registry.get_langchain_tools_for_agent(
+            tools = await tool_registry.get_langchain_tools_for_agent(
                 registry_tool_ids,
                 user_id="system",
                 integrations=integrations_by_tool,
             ) + custom_tools
-
-        try:
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(UserIntegration).where(
-                        UserIntegration.user_id == user_id,
-                        UserIntegration.org_id == self.config.org_id,
-                        UserIntegration.is_active == True,
-                    )
-                )
-                integrations = result.scalars().all()
-        except Exception as exc:
-            logger.warning("Integration lookup failed for user %s: %s", user_id, exc)
-            integrations = []
-
-        for integration in integrations:
+        else:
             try:
-                config = decrypt_config(integration.config)
-                if integration.integration_type == IntegrationType.github:
-                    integrations_by_tool["github"] = config
-                elif integration.integration_type == IntegrationType.email_smtp:
-                    integrations_by_tool["email"] = config
-                elif integration.integration_type == IntegrationType.slack:
-                    integrations_by_tool["slack"] = config
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(
+                        select(UserIntegration).where(
+                            UserIntegration.user_id == user_id,
+                            UserIntegration.org_id == self.config.org_id,
+                            UserIntegration.is_active == True,
+                        )
+                    )
+                    integrations = result.scalars().all()
             except Exception as exc:
-                logger.warning("Failed to load integration tool %s: %s", integration.id, exc)
+                logger.warning("Integration lookup failed for user %s: %s", user_id, exc)
+                integrations = []
 
-        for tool_id in registry_tool_ids:
-            integrations_by_tool.setdefault(tool_id, {})
-            integrations_by_tool[tool_id].update(tool_context)
+            for integration in integrations:
+                try:
+                    config = decrypt_config(integration.config)
+                    if integration.integration_type == IntegrationType.github:
+                        integrations_by_tool["github"] = config
+                    elif integration.integration_type == IntegrationType.email_smtp:
+                        integrations_by_tool["email"] = config
+                    elif integration.integration_type == IntegrationType.slack:
+                        integrations_by_tool["slack"] = config
+                except Exception as exc:
+                    logger.warning("Failed to load integration tool %s: %s", integration.id, exc)
 
-        registry_tools = await tool_registry.get_langchain_tools_for_agent(
-            registry_tool_ids,
-            user_id=user_id,
-            integrations=integrations_by_tool,
+            for tool_id in registry_tool_ids:
+                integrations_by_tool.setdefault(tool_id, {})
+                integrations_by_tool[tool_id].update(tool_context)
+
+            registry_tools = await tool_registry.get_langchain_tools_for_agent(
+                registry_tool_ids,
+                user_id=user_id,
+                integrations=integrations_by_tool,
+            )
+            tools = registry_tools + custom_tools
+
+        new_pattern_tools = await self._build_new_pattern_tools_as_langchain(
+            org_id=self._context.get("org_id") or "",
+            user_id=self._context.get("user_id") or "",
+            execution_id=self._context.get("execution_id") or "",
         )
-        return registry_tools + custom_tools
+        if new_pattern_tools:
+            duplicate_names = {tool.name for tool in tools} & {tool.name for tool in new_pattern_tools}
+            tools = [tool for tool in tools if tool.name not in duplicate_names]
+            tools.extend(new_pattern_tools)
+
+        return tools
 
     def _memory_enabled(self) -> bool:
         if not self.memory_service:
@@ -330,10 +608,7 @@ class AgentRunner:
         if broadcast:
             await broadcast(event)
             return
-
         try:
-            from services.websocket_manager import ws_manager
-
             await ws_manager.broadcast(event)
         except Exception as exc:
             logger.warning("Retry event broadcast failed for agent %s: %s", self.config.id, exc)
@@ -349,10 +624,15 @@ class AgentRunner:
         workflow_id: str | None = None,
         execution_id: str | None = None,
         user_id: str | None = None,
+        org_id: str | None = None,
+        db: AsyncSession | None = None,
+        step_index_ref: dict[str, int] | None = None,
     ) -> tuple[str, int]:
         total_tokens = 0
         input_tokens = 0
         output_tokens = 0
+        pending_action_step_id: str | None = None
+        pending_tool_started_at: datetime | None = None
 
         try:
             async for event in graph.astream_events(
@@ -380,6 +660,19 @@ class AgentRunner:
                             "tool": event["name"],
                             "input": str(event["data"].get("input", ""))[:200],
                         })
+                    tool_name = event.get("name", "unknown")
+                    tool_input = event.get("data", {}).get("input", {})
+                    pending_tool_started_at = datetime.utcnow()
+                    pending_action_step_id, _payload = await self._record_execution_step(
+                        execution_id=execution_id,
+                        org_id=org_id,
+                        step_type="action",
+                        content=f"Using tool: {tool_name}",
+                        step_index_ref=step_index_ref,
+                        db=db,
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                    )
 
                 elif kind == "on_tool_end":
                     if broadcast:
@@ -391,11 +684,51 @@ class AgentRunner:
                             "tool": event["name"],
                             "output": str(event["data"].get("output", ""))[:300],
                         })
+                    tool_name = event.get("name", "unknown")
+                    raw_output = event.get("data", {}).get("output", "")
+                    output_text = self._truncate_text(raw_output, 1000)
+                    output_payload = {"result": self._truncate_text(raw_output, 2000)}
+                    success = not output_text.lower().startswith("tool error:")
+                    duration_ms = None
+                    if pending_tool_started_at is not None:
+                        duration_ms = int((datetime.utcnow() - pending_tool_started_at).total_seconds() * 1000)
+                    await self._record_execution_step(
+                        execution_id=execution_id,
+                        org_id=org_id,
+                        step_type="observation",
+                        content=output_text,
+                        step_index_ref=step_index_ref,
+                        db=db,
+                        tool_name=tool_name,
+                        tool_output=output_payload,
+                        tool_success=success,
+                        duration_ms=duration_ms,
+                    )
+                    if pending_action_step_id:
+                        await self._update_execution_step(
+                            pending_action_step_id,
+                            {
+                                "tool_output": output_payload,
+                                "tool_success": success,
+                                "duration_ms": duration_ms,
+                            },
+                            db=db,
+                        )
+                    pending_action_step_id = None
+                    pending_tool_started_at = None
 
         except Exception as e:
             # Malformed tool-call names (model appends args to the name) produce a
             # validation error mid-stream. Recover by reading whatever state was saved.
             logger.warning(f"Agent stream error (recovering): {e}")
+            await self._record_execution_step(
+                execution_id=execution_id,
+                org_id=org_id,
+                step_type="error",
+                content=f"Agent stream error, attempting recovery: {e}",
+                step_index_ref=step_index_ref,
+                db=db,
+            )
 
         # Read the latest graph state regardless of whether streaming finished cleanly
         try:
@@ -498,6 +831,9 @@ class AgentRunner:
         workflow_id: str | None = None,
         execution_id: str | None = None,
         user_id: str | None = None,
+        org_id: str | None = None,
+        db: AsyncSession | None = None,
+        step_index_ref: dict[str, int] | None = None,
     ) -> tuple[str, int]:
         max_retries = max(0, int(getattr(self.config, "max_retries", 3) or 0))
         retry_delay_seconds = max(1, int(getattr(self.config, "retry_delay_seconds", 5) or 5))
@@ -521,7 +857,18 @@ class AgentRunner:
                             "max_retries": max_retries,
                             "delay": delay,
                         },
-                )
+                    )
+                    await self._record_execution_step(
+                        execution_id=execution_id,
+                        org_id=org_id,
+                        step_type="retry",
+                        content=(
+                            f"Retrying agent {self.config.name}: attempt {attempt} of {max_retries} "
+                            f"after {delay} seconds."
+                        ),
+                        step_index_ref=step_index_ref,
+                        db=db,
+                    )
 
                 attempt_thread_id = thread_id if attempt == 0 else f"{thread_id}-retry-{attempt}"
                 attempt_config = {
@@ -539,6 +886,9 @@ class AgentRunner:
                     workflow_id=workflow_id,
                     execution_id=execution_id,
                     user_id=user_id,
+                    org_id=org_id,
+                    db=db,
+                    step_index_ref=step_index_ref,
                 )
                 if timeout > 0:
                     result = await asyncio.wait_for(invoke_coro, timeout=timeout)
@@ -554,6 +904,14 @@ class AgentRunner:
                             "agent_name": self.config.name,
                             "attempt": attempt,
                         },
+                    )
+                    await self._record_execution_step(
+                        execution_id=execution_id,
+                        org_id=org_id,
+                        step_type="retry",
+                        content=f"Retry succeeded for agent {self.config.name} on attempt {attempt}.",
+                        step_index_ref=step_index_ref,
+                        db=db,
                     )
                 return result
 
@@ -572,7 +930,6 @@ class AgentRunner:
                 non_retryable = [
                     "authentication",
                     "invalid api key",
-                    "rate limit exceeded",
                     "context length",
                     "maximum context",
                 ]
@@ -594,6 +951,14 @@ class AgentRunner:
                 "error": str(last_exception),
             },
         )
+        await self._record_execution_step(
+            execution_id=execution_id,
+            org_id=org_id,
+            step_type="retry",
+            content=f"Agent {self.config.name} exhausted retries: {last_exception}",
+            step_index_ref=step_index_ref,
+            db=db,
+        )
         raise last_exception
 
     async def run(
@@ -604,7 +969,12 @@ class AgentRunner:
         broadcast=None,
         workflow_id: str | None = None,
         execution_id: str | None = None,
+        org_id: str | None = None,
+        db: AsyncSession | None = None,
     ) -> tuple[str, int]:
+        resolved_org_id = org_id or getattr(self.config, "org_id", None)
+        step_index_ref = {"value": 0}
+        self.llm = await self._resolve_llm(db=db)
         self.tools = await self._build_runtime_tools(user_id, execution_id=execution_id)
         enhanced_system_prompt = await self._build_enhanced_system_prompt(message, user_id=user_id)
         config = {
@@ -612,13 +982,47 @@ class AgentRunner:
             "recursion_limit": 25,
         }
 
-        return await self._execute_with_retry(
-            message=message,
-            config=config,
-            enhanced_system_prompt=enhanced_system_prompt,
-            broadcast=broadcast,
-            thread_id=thread_id,
-            workflow_id=workflow_id,
+        await self._record_execution_step(
             execution_id=execution_id,
-            user_id=user_id,
+            org_id=resolved_org_id,
+            step_type="thought",
+            content="Analyzing the task and deciding how to proceed.",
+            step_index_ref=step_index_ref,
+            db=db,
         )
+
+        try:
+            final_response, total_tokens = await self._execute_with_retry(
+                message=message,
+                config=config,
+                enhanced_system_prompt=enhanced_system_prompt,
+                broadcast=broadcast,
+                thread_id=thread_id,
+                workflow_id=workflow_id,
+                execution_id=execution_id,
+                user_id=user_id,
+                org_id=resolved_org_id,
+                db=db,
+                step_index_ref=step_index_ref,
+            )
+        except Exception as exc:
+            await self._record_execution_step(
+                execution_id=execution_id,
+                org_id=resolved_org_id,
+                step_type="error",
+                content=f"Execution failed: {exc}",
+                step_index_ref=step_index_ref,
+                db=db,
+            )
+            raise
+
+        await self._record_execution_step(
+            execution_id=execution_id,
+            org_id=resolved_org_id,
+            step_type="final_answer",
+            content=final_response,
+            step_index_ref=step_index_ref,
+            db=db,
+            tokens_used=total_tokens,
+        )
+        return final_response, total_tokens

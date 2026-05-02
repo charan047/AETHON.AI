@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { workflowsApi, executionsApi } from '../api/client'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { FeedbackBar } from '../components/executions/FeedbackBar'
 import { Send, Copy, Check, ArrowLeft, Bot, User, Loader2, Zap, MessageSquare } from 'lucide-react'
 import { clsx } from 'clsx'
-import toast from 'react-hot-toast'
+import { toast } from '../lib/toast'
 import type { WsEvent } from '../types'
 
 type LiveUpdate = { text: string; type: string }
@@ -23,6 +23,7 @@ function formatLiveEvent(ev: WsEvent): string {
 
 export function WorkflowChat() {
   const { workflowId } = useParams<{ workflowId: string }>()
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const { events } = useWebSocket()
 
@@ -89,7 +90,9 @@ export function WorkflowChat() {
     setLiveUpdates([])
     try {
       const exec = await executionsApi.run(workflowId, msg)
-      setRunningId(exec.id)
+      toast.info('Run started')
+      setRunningId(exec.execution_id)
+      navigate(`/executions/${exec.execution_id}`)
     } catch (e: any) {
       setRunning(false)
       setPendingMessage(null)

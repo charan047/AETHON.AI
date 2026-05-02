@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import re
@@ -6,7 +5,6 @@ from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 
-import redis.asyncio as redis
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -31,6 +29,7 @@ from database.models import (
     Workflow,
 )
 from runtime.agent_runner import _extract_text, build_llm
+from services.session_store import SessionStore
 from services.versioning_service import VersioningService
 from services.websocket_manager import ws_manager
 
@@ -70,24 +69,51 @@ def _json_line(payload: dict) -> str:
     return json.dumps(payload, default=str) + "\n"
 
 
+def _conversation_session_id(user_id: str, conversation_id: str) -> str:
+    return f"company_chat:{user_id}:{conversation_id}"
+
+
 async def _conversation_history(user_id: str, conversation_id: str, limit: int = 12) -> list[dict]:
-    client = redis.from_url(settings.redis_url, decode_responses=True)
+    from redis.asyncio import from_url
+
+    client = from_url(settings.redis_url, decode_responses=True)
     try:
-        raw_items = await client.lrange(f"company_chat:{user_id}:{conversation_id}", -limit, -1)
-        return [json.loads(item) for item in raw_items]
+        store = SessionStore(client)
+        history = await store.get(_conversation_session_id(user_id, conversation_id)) or []
+        await store.extend(_conversation_session_id(user_id, conversation_id), 60 * 60 * 24 * 14)
+        return history[-limit:] if isinstance(history, list) else []
     except Exception:
         return []
     finally:
         await client.aclose()
 
 
-async def _store_conversation(user_id: str, conversation_id: str, role: str, content: str) -> None:
-    client = redis.from_url(settings.redis_url, decode_responses=True)
+async def _store_conversation(
+    user_id: str,
+    conversation_id: str,
+    role: str,
+    content: str,
+    *,
+    actions: list[dict] | None = None,
+) -> None:
+    from redis.asyncio import from_url
+
+    client = from_url(settings.redis_url, decode_responses=True)
     try:
-        key = f"company_chat:{user_id}:{conversation_id}"
-        await client.rpush(key, json.dumps({"role": role, "content": content, "created_at": datetime.utcnow().isoformat()}))
-        await client.ltrim(key, -30, -1)
-        await client.expire(key, 60 * 60 * 24 * 14)
+        store = SessionStore(client)
+        session_id = _conversation_session_id(user_id, conversation_id)
+        history = await store.get(session_id) or []
+        if not isinstance(history, list):
+            history = []
+        history.append(
+            {
+                "role": role,
+                "content": content,
+                "actions": actions or [],
+                "created_at": datetime.utcnow().isoformat(),
+            }
+        )
+        await store.set(session_id, history[-30:], ttl=60 * 60 * 24 * 14)
     except Exception:
         pass
     finally:
@@ -208,17 +234,14 @@ async def _execute_action(action: dict, user_id: str, org_id: str, db: AsyncSess
         db.add(execution)
         await db.commit()
 
-        from api.executions import run_workflow_background
+        from api.executions import enqueue_workflow_execution
 
-        asyncio.create_task(
-            run_workflow_background(
-                execution.id,
-                workflow.id,
-                execution.input_message,
-                settings.database_url,
-                user_id,
-                org_id,
-            )
+        await enqueue_workflow_execution(
+            execution.id,
+            workflow.id,
+            execution.input_message,
+            user_id,
+            org_id,
         )
         return {"type": "run_workflow", "success": True, "label": f"Running workflow \"{workflow.name}\"", "execution_id": execution.id}
 
@@ -344,7 +367,14 @@ async def _execute_action(action: dict, user_id: str, org_id: str, db: AsyncSess
             label = f"Created workflow: {workflow.name} with {len(selected_agents)} agent step{'s' if len(selected_agents) != 1 else ''}"
         else:
             label = f"Created draft workflow: {workflow.name} (no agent steps matched yet)"
-        await ws_manager.broadcast({"type": "workflow_created", "workflow_id": workflow.id, "workflow_name": workflow.name})
+        await ws_manager.broadcast(
+            {
+                "type": "workflow_created",
+                "org_id": org_id,
+                "workflow_id": workflow.id,
+                "workflow_name": workflow.name,
+            }
+        )
         return {"type": "create_workflow", "success": True, "label": label, "workflow_id": workflow.id}
 
     if action_type == "create_notification":
@@ -362,6 +392,7 @@ async def _execute_action(action: dict, user_id: str, org_id: str, db: AsyncSess
             priority_value = "normal"
         notification = InAppNotification(
             id=str(uuid4()),
+            org_id=org_id,
             user_id=user_id,
             title=title,
             message=message,
@@ -373,6 +404,7 @@ async def _execute_action(action: dict, user_id: str, org_id: str, db: AsyncSess
         await ws_manager.broadcast(
             {
                 "type": "in_app_notification",
+                "org_id": org_id,
                 "id": notification.id,
                 "user_id": user_id,
                 "title": title,
@@ -429,7 +461,7 @@ async def company_chat(
 
         full_text = ""
         try:
-            llm = build_llm(settings.default_model, temperature=0.35, max_tokens=1200)
+            llm = build_llm(settings.default_model, temperature=0.25, max_tokens=700)
             async for chunk in llm.astream(messages):
                 text = _extract_text(getattr(chunk, "content", ""))
                 if not text:
@@ -441,8 +473,14 @@ async def company_chat(
             full_text += fallback
             yield _json_line({"type": "text", "content": fallback})
 
-        await _store_conversation(current_user.id, conversation_id, "assistant", full_text)
         actions = _extract_actions(full_text)
+        await _store_conversation(
+            current_user.id,
+            conversation_id,
+            "assistant",
+            full_text,
+            actions=actions,
+        )
         action_summaries = []
         for action in actions:
             result = await _execute_action(action, current_user.id, ctx.org.id, db)

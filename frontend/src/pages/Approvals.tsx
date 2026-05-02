@@ -3,8 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, ChevronDown, ChevronRight, Clock3, ShieldAlert, XCircle } from 'lucide-react'
 import { approvalsApi } from '../api/client'
 import type { ApprovalRequest } from '../types'
-import toast from 'react-hot-toast'
 import { clsx } from 'clsx'
+import { toast } from '../lib/toast'
 
 function timeUntil(value?: string | null) {
   if (!value) return 'No expiry'
@@ -123,9 +123,9 @@ export function Approvals() {
   const decisionMut = useMutation({
     mutationFn: ({ id, decision, comment }: { id: string; decision: 'approve' | 'reject'; comment: string }) =>
       decision === 'approve' ? approvalsApi.approve(id, comment) : approvalsApi.reject(id, comment),
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
       qc.invalidateQueries({ queryKey: ['approvals'] })
-      toast.success('Decision submitted')
+      toast.success(variables.decision === 'approve' ? 'Approved' : 'Rejected')
     },
     onError: (error: any) => {
       qc.invalidateQueries({ queryKey: ['approvals', 'pending'] })

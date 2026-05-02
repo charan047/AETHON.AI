@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -145,6 +145,22 @@ class PlanService:
     def get_limits(self, plan: OrgPlan) -> dict:
         return dict(PLAN_LIMITS[self._normalize_plan(plan)])
 
+    def apply_plan_to_org(self, org: Organization, plan: OrgPlan | str) -> Organization:
+        normalized_plan = self._normalize_plan(plan)
+        limits = self.get_limits(normalized_plan)
+        org.plan = normalized_plan
+        org.max_members = int(limits["max_members"])
+        org.max_agents = int(limits["max_agents"])
+        org.max_workflows = int(limits["max_workflows"])
+        org.max_monthly_executions = int(limits["max_monthly_executions"])
+        return org
+
+    def clear_caches(self, org_id: str | None = None) -> None:
+        # Plan limits are evaluated from the database on demand today.
+        # This hook exists so billing/webhook flows can invalidate caches later
+        # without changing their integration points.
+        return None
+
     async def check_limit(
         self,
         org: Organization,
@@ -280,8 +296,8 @@ class PlanService:
         return await db.scalar(query) or 0
 
     async def _monthly_execution_count(self, org_id: str, db: AsyncSession) -> int:
-        now = datetime.now(timezone.utc)
-        month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        now = datetime.utcnow()
+        month_start = datetime(now.year, now.month, 1)
         return (
             await db.scalar(
                 select(func.count(Execution.id)).where(

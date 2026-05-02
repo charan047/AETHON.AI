@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, String, Text, Boolean, Integer, Float, DateTime, JSON, ForeignKey, Enum as SAEnum, UniqueConstraint, Index, func
+from sqlalchemy import Column, String, Text, Boolean, Integer, Float, DateTime, JSON, ForeignKey, Enum as SAEnum, UniqueConstraint, Index, func, text
 from sqlalchemy.orm import relationship
 from uuid import uuid4
 
@@ -19,6 +19,11 @@ class Agent(Base):
     description = Column(Text, default="")
     system_prompt = Column(Text, nullable=False)
     model = Column(String, default="llama-3.3-70b-versatile")
+    model_config_id = Column(String, ForeignKey("model_configs.id", ondelete="SET NULL"), nullable=True)
+    role_slug = Column(String(100), nullable=True)
+    seniority_level = Column(Integer, default=1)
+    autonomy_level = Column(String(50), default="supervised")
+    trust_score = Column(Float, default=50.0)
     tools = Column(JSON, default=list)
     memory_enabled = Column(Boolean, default=True)
     memory_window = Column(Integer, default=10)
@@ -32,8 +37,12 @@ class Agent(Base):
     retry_on_timeout = Column(Boolean, default=True, nullable=False)
     telegram_enabled = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
+    installed_from_listing_id = Column(String, ForeignKey("marketplace_listings.id"), nullable=True)
+    created_by_user_id = Column(String, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    model_config = relationship("ModelConfig", back_populates="agents")
 
 
 class AgentMemoryConfig(Base):
@@ -74,6 +83,7 @@ class ExecutionStatus(str, enum.Enum):
 
 class IntegrationType(str, enum.Enum):
     github = "github"
+    gmail = "gmail"
     email_smtp = "email_smtp"
     slack = "slack"
     notion = "notion"
@@ -132,6 +142,26 @@ class OrgMemberRole(str, enum.Enum):
     viewer = "viewer"
 
 
+class AuditAction(str, enum.Enum):
+    user_login = "user_login"
+    user_login_failed = "user_login_failed"
+    user_registered = "user_registered"
+    api_key_created = "api_key_created"
+    api_key_revoked = "api_key_revoked"
+    agent_deleted = "agent_deleted"
+    workflow_deleted = "workflow_deleted"
+    org_member_removed = "org_member_removed"
+    org_member_role_changed = "org_member_role_changed"
+    hitl_approved = "hitl_approved"
+    hitl_rejected = "hitl_rejected"
+    marketplace_published = "marketplace_published"
+    billing_payment_failed = "billing_payment_failed"
+    data_exported = "data_exported"
+    model_added = "model_added"
+    model_set_default = "model_set_default"
+    agent_model_changed = "agent_model_changed"
+
+
 class MarketplaceCategory(str, enum.Enum):
     productivity = "productivity"
     development = "development"
@@ -148,6 +178,7 @@ class MarketplaceCategory(str, enum.Enum):
 class ListingType(str, enum.Enum):
     agent = "agent"
     workflow = "workflow"
+    tool_config = "tool_config"
     eval_suite = "eval_suite"
 
 
@@ -223,7 +254,12 @@ class Workflow(Base):
     status = Column(String, default="draft")
     trigger = Column(String, default="manual")
     schedule = Column(String, nullable=True)
+    input_template = Column(Text, default="")
+    input_variables = Column(JSON, default=list)
+    configured_inputs = Column(JSON, default=dict)
     template_id = Column(String, nullable=True)
+    installed_from_listing_id = Column(String, ForeignKey("marketplace_listings.id"), nullable=True)
+    created_by_user_id = Column(String, ForeignKey("users.id"), nullable=True)
     execution_mode = Column(String, default="sequential")
     orchestration_prompt = Column(Text, default="")
     max_cycles = Column(Integer, default=10, nullable=False)
@@ -231,6 +267,38 @@ class Workflow(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     executions = relationship("Execution", back_populates="workflow", cascade="all, delete-orphan")
+
+
+class ModelConfig(Base):
+    __tablename__ = "model_configs"
+    __table_args__ = (
+        Index("ix_model_configs_org_id", "org_id"),
+        Index("ix_model_configs_org_default", "org_id", "is_default"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    provider = Column(String(50), nullable=False)
+    model_id = Column(String(200), nullable=False)
+    display_name = Column(String(200), nullable=False)
+    api_key_encrypted = Column(Text, nullable=True)
+    base_url = Column(String(500), nullable=True)
+    context_window = Column(Integer, nullable=True)
+    supports_tools = Column(Boolean, default=True)
+    supports_vision = Column(Boolean, default=False)
+    cost_per_million_input_tokens = Column(Float, nullable=True)
+    cost_per_million_output_tokens = Column(Float, nullable=True)
+    is_active = Column(Boolean, default=True)
+    is_default = Column(Boolean, default=False)
+    test_status = Column(String(20), nullable=True)
+    test_error = Column(Text, nullable=True)
+    last_tested_at = Column(DateTime, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_by = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    agents = relationship("Agent", back_populates="model_config")
 
 
 class Execution(Base):
@@ -255,9 +323,43 @@ class Execution(Base):
     token_count = Column(Integer, default=0)
     cost = Column(Float, default=0.0)
     error = Column(Text, nullable=True)
+    is_demo = Column(Boolean, default=False, nullable=False)
 
     workflow = relationship("Workflow", back_populates="executions")
     messages = relationship("Message", back_populates="execution", cascade="all, delete-orphan")
+    steps = relationship(
+        "ExecutionStep",
+        back_populates="execution",
+        order_by="ExecutionStep.step_index",
+        cascade="all, delete-orphan",
+    )
+
+
+class ExecutionStep(Base):
+    __tablename__ = "execution_steps"
+    __table_args__ = (
+        Index("ix_execution_steps_execution_id", "execution_id"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    execution_id = Column(
+        String,
+        ForeignKey("executions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    org_id = Column(String, nullable=False)
+    step_type = Column(String(30), nullable=False)
+    content = Column(Text, nullable=False)
+    tool_name = Column(String(100), nullable=True)
+    tool_input = Column(JSON, nullable=True)
+    tool_output = Column(JSON, nullable=True)
+    tool_success = Column(Boolean, nullable=True)
+    step_index = Column(Integer, nullable=False, default=0)
+    duration_ms = Column(Integer, nullable=True)
+    tokens_used = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    execution = relationship("Execution", back_populates="steps")
 
 
 class CustomTool(Base):
@@ -287,6 +389,24 @@ class Message(Base):
     msg_metadata = Column(JSON, default=dict)
 
     execution = relationship("Execution", back_populates="messages")
+
+
+class AgentMessage(Base):
+    __tablename__ = "agent_messages"
+    __table_args__ = (
+        Index("ix_agent_messages_to_created", "to_agent_id", "created_at"),
+        Index("ix_agent_messages_execution", "execution_id"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    from_agent_id = Column(String, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    to_agent_id = Column(String, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    execution_id = Column(String, nullable=True)
+    message = Column(Text, nullable=False)
+    response = Column(Text, nullable=True)
+    delivered_at = Column(DateTime, nullable=True)
+    responded_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class User(Base):
@@ -323,9 +443,19 @@ class Organization(Base):
     max_monthly_executions = Column(Integer, default=100)
     stripe_customer_id = Column(String(100), nullable=True)
     stripe_subscription_id = Column(String(100), nullable=True)
+    stripe_subscription_status = Column(String(50), nullable=True)
+    stripe_metered_subscription_item_id = Column(String(100), nullable=True)
+    stripe_current_period_end = Column(DateTime(timezone=True), nullable=True)
+    stripe_trial_end = Column(DateTime(timezone=True), nullable=True)
+    cancellation_date = Column(DateTime(timezone=True), nullable=True)
     billing_email = Column(String(255), nullable=True)
     monthly_budget_usd = Column(Float, default=10.0)
     current_period_executions = Column(Integer, default=0)
+    onboarding_completed = Column(Boolean, default=False, nullable=False)
+    onboarding_step = Column(String(64), default="company_identity", nullable=False)
+    company_description = Column(Text, nullable=True)
+    primary_challenge = Column(String(100), nullable=True)
+    competitors = Column(JSON, default=list)
     timezone = Column(String(50), default="UTC")
     logo_url = Column(String(500), nullable=True)
     custom_domain = Column(String(255), nullable=True)
@@ -390,6 +520,32 @@ class ApiKey(Base):
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index("ix_audit_logs_org_created_desc", "org_id", text("created_at DESC")),
+        Index("ix_audit_logs_user_created_desc", "user_id", text("created_at DESC")),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("users.id"), nullable=True)
+    org_id = Column(String, nullable=True)
+    action = Column(
+        SAEnum(
+            AuditAction,
+            values_callable=lambda values: [item.value for item in values],
+            name="auditaction",
+        ),
+        nullable=False,
+    )
+    resource_type = Column(String(50), nullable=True)
+    resource_id = Column(String, nullable=True)
+    ip_address = Column(String(45), nullable=True)
+    user_agent = Column(String(500), nullable=True)
+    details = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -519,6 +675,9 @@ class EvalRun(Base):
 
 class EvalCaseResult(Base):
     __tablename__ = "eval_case_results"
+    __table_args__ = (
+        Index("ix_eval_case_results_run_id", "run_id"),
+    )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     run_id = Column(String, ForeignKey("eval_runs.id", ondelete="CASCADE"), nullable=False)
@@ -576,10 +735,11 @@ class ExecutionCostLog(Base):
 class InAppNotification(Base):
     __tablename__ = "in_app_notifications"
     __table_args__ = (
-        Index("ix_in_app_notifications_user_unread_created", "user_id", "is_read", "created_at"),
+        Index("ix_in_app_notifications_org_user_unread_created", "org_id", "user_id", "is_read", "created_at"),
     )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     agent_id = Column(String, ForeignKey("agents.id"), nullable=True)
     title = Column(String(255), nullable=False)
@@ -611,6 +771,23 @@ class WebhookEndpoint(Base):
     is_active = Column(Boolean, default=True)
     last_triggered_at = Column(DateTime(timezone=True), nullable=True)
     trigger_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class WebhookEventLog(Base):
+    __tablename__ = "webhook_event_logs"
+    __table_args__ = (
+        UniqueConstraint("event_id", name="uq_webhook_event_logs_event_id"),
+        Index("ix_webhook_event_logs_source_event_created", "source", "event_type", "created_at"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    source = Column(String(50), nullable=False)
+    event_type = Column(String(100), nullable=False)
+    event_id = Column(String(255), nullable=True)
+    payload = Column(Text, nullable=False)
+    processed = Column(Boolean, default=False, nullable=False)
+    processing_error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -707,10 +884,16 @@ class MarketplaceListing(Base):
     name = Column(String(255), nullable=False)
     slug = Column(String(255), unique=True, nullable=False)
     tagline = Column(String(500), nullable=False)
+    short_description = Column(String(500), default="")
     description = Column(Text, nullable=False)
     readme = Column(Text, nullable=True)
     template_data = Column(Text, nullable=False)
     tags = Column(String(500), nullable=True)
+    icon = Column(String(16), default="🤖")
+    required_tools = Column(JSON, default=list)
+    optional_tools = Column(JSON, default=list)
+    required_integrations = Column(JSON, default=list)
+    recommended_integrations = Column(JSON, default=list)
     preview_image_url = Column(String(500), nullable=True)
     demo_video_url = Column(String(500), nullable=True)
     source_url = Column(String(500), nullable=True)
@@ -719,6 +902,13 @@ class MarketplaceListing(Base):
     rating_count = Column(Integer, default=0)
     view_count = Column(Integer, default=0)
     is_free = Column(Boolean, default=True)
+    is_featured = Column(Boolean, default=False)
+    author = Column(String(255), nullable=True)
+    role_slug = Column(String(100), nullable=True)
+    department_type = Column(String(100), nullable=True)
+    hiring_tagline = Column(String(500), default="")
+    estimated_minutes_saved_per_week = Column(Integer, default=0)
+    difficulty = Column(String(32), default="beginner")
     price_usd = Column(Float, default=0.0)
     version = Column(String(20), default="1.0.0")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -729,6 +919,8 @@ class MarketplaceListing(Base):
         Index("ix_marketplace_listings_status_category", "status", "category"),
         Index("ix_marketplace_listings_install_count_desc", install_count.desc()),
         Index("ix_marketplace_listings_rating_avg_desc", rating_avg.desc()),
+        Index("ix_marketplace_status_category_install", "status", "category", install_count.desc()),
+        Index("ix_marketplace_status_published", "status", published_at.desc()),
     )
 
 

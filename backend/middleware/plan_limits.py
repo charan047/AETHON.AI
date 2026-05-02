@@ -10,14 +10,13 @@ from starlette.responses import JSONResponse
 from auth.security import decode_token, verify_password
 from database.db import AsyncSessionLocal
 from database.models import ApiKey, OrgMember, OrgMemberRole, Organization, User
-from services.plan_service import plan_service
+from services.plan_service import FEATURE_FLAGS, plan_service
 
 
 class PlanLimitMiddleware(BaseHTTPMiddleware):
     GUARDED_ROUTES = {
         ("POST", "/api/agents"): "agents",
         ("POST", "/api/workflows"): "workflows",
-        ("POST", "/api/executions"): "executions",
         ("POST", "/api/tools"): "custom_tools",
         ("POST", "/api/triggers/webhooks"): "webhooks",
         ("POST", "/api/evals/suites"): "eval_suites",
@@ -55,7 +54,7 @@ class PlanLimitMiddleware(BaseHTTPMiddleware):
                         "resource": resource,
                         "current_plan": plan,
                     },
-                    status_code=429,
+                    status_code=403 if resource in FEATURE_FLAGS else 429,
                 )
 
         return await call_next(request)
@@ -65,8 +64,6 @@ class PlanLimitMiddleware(BaseHTTPMiddleware):
         route_key = (request.method, path)
         if route_key in self.GUARDED_ROUTES:
             return self.GUARDED_ROUTES[route_key]
-        if request.method == "POST" and path.startswith("/api/executions/workflows/") and path.endswith("/run"):
-            return "executions"
         return None
 
     async def _resolve_user(self, request: Request, db: AsyncSession) -> tuple[User | None, str | None]:

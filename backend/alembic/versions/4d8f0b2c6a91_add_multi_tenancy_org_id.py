@@ -11,6 +11,7 @@ import uuid
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "4d8f0b2c6a91"
@@ -73,10 +74,10 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
 
-    org_plan = sa.Enum("free", "solo", "team", "business", "enterprise", name="orgplan")
-    org_member_role = sa.Enum("owner", "admin", "member", "viewer", name="orgmemberrole")
-    org_plan.create(bind, checkfirst=True)
-    org_member_role.create(bind, checkfirst=True)
+    postgresql.ENUM("free", "solo", "team", "business", "enterprise", name="orgplan").create(bind, checkfirst=True)
+    postgresql.ENUM("owner", "admin", "member", "viewer", name="orgmemberrole").create(bind, checkfirst=True)
+    org_plan = postgresql.ENUM("free", "solo", "team", "business", "enterprise", name="orgplan", create_type=False)
+    org_member_role = postgresql.ENUM("owner", "admin", "member", "viewer", name="orgmemberrole", create_type=False)
 
     if not _table_exists(inspector, "organizations"):
         op.create_table(

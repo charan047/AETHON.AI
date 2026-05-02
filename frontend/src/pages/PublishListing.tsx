@@ -1,11 +1,11 @@
-import { DragEvent, useMemo, useState } from 'react'
+import { ChangeEvent, DragEvent, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Bot, CheckCircle2, FileUp, GitBranch, Sparkles, Workflow } from 'lucide-react'
-import toast from 'react-hot-toast'
+import { ArrowLeft, Bot, CheckCircle2, FileUp, GitBranch, Sparkles, Workflow, Wrench } from 'lucide-react'
 import { clsx } from 'clsx'
-import { agentsApi, marketplaceApi, workflowsApi } from '../api/client'
-import type { Agent, MarketplaceCategory, Workflow as WorkflowType } from '../types'
+import { agentsApi, customToolsApi, marketplaceApi, workflowsApi } from '../api/client'
+import type { Agent, CustomTool, MarketplaceCategory, Workflow as WorkflowType } from '../types'
+import { toast } from '../lib/toast'
 
 const CATEGORIES: MarketplaceCategory[] = [
   'productivity',
@@ -20,7 +20,7 @@ const CATEGORIES: MarketplaceCategory[] = [
   'other',
 ]
 
-type PublishKind = 'agent' | 'workflow'
+type PublishKind = 'agent' | 'workflow' | 'tool_config'
 
 function categoryLabel(category: string) {
   return category.replace('_', ' ')
@@ -34,13 +34,13 @@ function PreviewCard({ name, tagline, category, tags, previewUrl, kind }: {
   previewUrl: string
   kind: PublishKind
 }) {
-  const Icon = kind === 'agent' ? Bot : Workflow
+  const Icon = kind === 'agent' ? Bot : kind === 'workflow' ? Workflow : Wrench
   return (
     <div className="overflow-hidden rounded-2xl border border-white/10 bg-obsidian-900 shadow-glow-sm">
       <div className="relative h-40 overflow-hidden bg-gradient-to-br from-accent-500/80 via-cyan-400/35 to-obsidian-900">
         {previewUrl ? <img src={previewUrl} alt="" className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center"><Icon size={38} className="text-white" /></div>}
         <span className="absolute right-3 top-3 rounded-full border border-white/15 bg-black/35 px-2 py-1 text-xs font-medium text-white backdrop-blur">
-          {kind === 'agent' ? 'Agent' : 'Workflow'}
+          {kind === 'agent' ? 'Agent' : kind === 'workflow' ? 'Workflow' : 'Tool config'}
         </span>
       </div>
       <div className="p-4">
@@ -74,9 +74,11 @@ export function PublishListing() {
   })
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: agentsApi.list })
   const { data: workflows = [] } = useQuery({ queryKey: ['workflows'], queryFn: workflowsApi.list })
+  const { data: tools = [] } = useQuery({ queryKey: ['custom-tools'], queryFn: customToolsApi.list })
   const selectedAgent = agents.find(agent => agent.id === selectedId)
   const selectedWorkflow = workflows.find(workflow => workflow.id === selectedId)
-  const selectedName = kind === 'agent' ? selectedAgent?.name : selectedWorkflow?.name
+  const selectedTool = (tools as CustomTool[]).find(tool => tool.id === selectedId)
+  const selectedName = kind === 'agent' ? selectedAgent?.name : kind === 'workflow' ? selectedWorkflow?.name : selectedTool?.name
   const tags = useMemo(() => form.tags.split(',').map(tag => tag.trim().toLowerCase()).filter(Boolean), [form.tags])
 
   const publish = useMutation({
@@ -87,9 +89,9 @@ export function PublishListing() {
         preview_image_url: form.preview_image_url || undefined,
         source_url: form.source_url || undefined,
       }
-      return kind === 'agent'
-        ? marketplaceApi.publishAgent(selectedId, payload)
-        : marketplaceApi.publishWorkflow(selectedId, payload)
+      if (kind === 'agent') return marketplaceApi.publishAgent(selectedId, payload)
+      if (kind === 'workflow') return marketplaceApi.publishWorkflow(selectedId, payload)
+      return marketplaceApi.publishTool(selectedId, payload)
     },
     onSuccess: () => {
       toast.success('Submitted for review')
@@ -98,31 +100,42 @@ export function PublishListing() {
     onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not submit listing'),
   })
 
-  const choose = (nextKind: PublishKind, item: Agent | WorkflowType) => {
+  const choose = (nextKind: PublishKind, item: Agent | WorkflowType | CustomTool) => {
     setKind(nextKind)
     setSelectedId(item.id)
     setForm(current => ({
       ...current,
       name: item.name,
-      tagline: nextKind === 'agent' ? `${(item as Agent).role} agent ready to install into your AI company` : `${item.name} workflow ready to customize and run`,
+      tagline: nextKind === 'agent'
+        ? `${(item as Agent).role} agent ready to install into your AI company`
+        : nextKind === 'workflow'
+          ? `${item.name} workflow ready to customize and run`
+          : `${item.name} tool config ready to install into your agent toolbelt`,
       description: item.description || '',
     }))
     setStep(2)
   }
 
   const submit = () => {
-    if (!selectedId) return toast.error('Choose an agent or workflow first')
+    if (!selectedId) return toast.error('Choose an agent, workflow, or tool config first')
     if (form.tagline.length < 50 || form.tagline.length > 150) return toast.error('Tagline must be 50-150 characters')
     if (form.description.length < 100) return toast.error('Description must be at least 100 characters')
     publish.mutate()
   }
 
-  const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
-    event.preventDefault()
-    const file = event.dataTransfer.files?.[0]
+  const previewLocalImage = (file?: File | null) => {
     if (!file || !file.type.startsWith('image/')) return
     setPreviewUrl(URL.createObjectURL(file))
-    toast('Preview loaded locally. Add an image URL to publish it.')
+    toast.info('Preview loaded locally. Add an image URL to publish it.')
+  }
+
+  const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    previewLocalImage(event.dataTransfer.files?.[0])
+  }
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    previewLocalImage(event.target.files?.[0])
   }
 
   if (step === 3) {
@@ -142,7 +155,7 @@ export function PublishListing() {
   }
 
   return (
-    <div className="min-h-screen overflow-y-auto bg-obsidian-950 text-white">
+    <div className="min-h-dvh bg-obsidian-950 text-white">
       <header className="border-b border-white/10 bg-obsidian-950/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
           <Link to="/marketplace" className="btn-ghost px-2"><ArrowLeft size={16} /> Marketplace</Link>
@@ -154,11 +167,11 @@ export function PublishListing() {
         <div className="mb-8">
           <p className="font-mono text-xs uppercase tracking-[0.24em] text-cyan-300">Step {step} of 2</p>
           <h1 className="mt-2 text-4xl font-semibold tracking-[-0.05em]">Publish to Marketplace</h1>
-          <p className="mt-2 text-sm text-obsidian-400">Turn your best agents and workflows into installable company building blocks.</p>
+          <p className="mt-2 text-sm text-obsidian-400">Turn your best agents, workflows, and tool configs into installable company building blocks.</p>
         </div>
 
         {step === 1 ? (
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid gap-6 lg:grid-cols-3">
             <section className="card p-5">
               <div className="mb-5 flex items-center gap-3">
                 <div className="grid h-11 w-11 place-items-center rounded-xl bg-accent-500/15 text-accent-200"><Bot size={20} /></div>
@@ -194,6 +207,25 @@ export function PublishListing() {
                   </button>
                 ))}
                 {!workflows.length && <p className="rounded-2xl border border-white/10 p-5 text-sm text-obsidian-500">No workflows yet. Build one before publishing.</p>}
+              </div>
+            </section>
+
+            <section className="card p-5">
+              <div className="mb-5 flex items-center gap-3">
+                <div className="grid h-11 w-11 place-items-center rounded-xl bg-amber-500/15 text-amber-200"><Wrench size={20} /></div>
+                <div>
+                  <h2 className="text-xl font-semibold">Publish a Tool Config</h2>
+                  <p className="text-sm text-obsidian-500">Share a reusable custom tool.</p>
+                </div>
+              </div>
+              <div className="space-y-3">
+                {(tools as CustomTool[]).map(tool => (
+                  <button key={tool.id} className="w-full rounded-2xl border border-white/10 bg-white/[0.025] p-4 text-left transition hover:border-amber-400/40 hover:bg-white/[0.05]" onClick={() => choose('tool_config', tool)}>
+                    <div className="font-medium text-white">{tool.name}</div>
+                    <div className="mt-1 line-clamp-1 text-sm text-obsidian-400">{tool.description}</div>
+                  </button>
+                ))}
+                {!(tools as CustomTool[]).length && <p className="rounded-2xl border border-white/10 p-5 text-sm text-obsidian-500">No custom tools yet. Create one before publishing.</p>}
               </div>
             </section>
           </div>
@@ -254,13 +286,28 @@ export function PublishListing() {
                 </div>
               </div>
 
+              <label className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+                <div>
+                  <div className="text-sm font-medium text-white">Free listing</div>
+                  <p className="mt-1 text-xs text-obsidian-500">Phase 5 marketplace listings are always free. Paid marketplace pricing can be enabled later.</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={form.is_free}
+                  disabled
+                  onChange={event => setForm({ ...form, is_free: event.target.checked })}
+                  className="h-5 w-5 rounded border-white/20 bg-obsidian-900 text-accent-500"
+                />
+              </label>
+
               <label
                 onDrop={handleDrop}
                 onDragOver={event => event.preventDefault()}
                 className="grid cursor-pointer place-items-center rounded-2xl border border-dashed border-white/15 bg-white/[0.025] p-8 text-center transition hover:border-accent-400/40"
               >
+                <input type="file" accept="image/*" className="sr-only" onChange={handleFileChange} />
                 <FileUp className="text-obsidian-500" />
-                <p className="mt-2 text-sm text-obsidian-300">Drag a preview image here for local preview</p>
+                <p className="mt-2 text-sm text-obsidian-300">Drag a preview image here, or click to choose one for local preview</p>
                 <p className="mt-1 text-xs text-obsidian-500">Phase 5 saves image URLs only; binary upload comes later.</p>
               </label>
 

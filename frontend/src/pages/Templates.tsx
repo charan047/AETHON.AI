@@ -3,8 +3,8 @@ import { workflowsApi, agentsApi } from '../api/client'
 import { Layers, GitBranch, Bot, Wand2, CheckCircle } from 'lucide-react'
 import { useState } from 'react'
 import { clsx } from 'clsx'
-import toast from 'react-hot-toast'
 import type { Template } from '../types'
+import { toast } from '../lib/toast'
 
 function TemplateCard({ template, onUse }: { template: Template; onUse: (t: Template) => void }) {
   return (

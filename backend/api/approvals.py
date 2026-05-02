@@ -13,6 +13,7 @@ from auth.org_context import OrgContext, get_org_context
 from config import settings
 from database.db import get_db
 from database.models import Agent, ApprovalStatus, HumanApprovalRequest, User, Workflow
+from services.distributed_lock import DistributedLock
 from services.hitl_service import HITL_DECISIONS_CHANNEL
 from services.websocket_manager import ws_manager
 
@@ -96,6 +97,38 @@ async def _get_approval_or_404(
     return approval
 
 
+async def _process_decision(
+    approval_id: str,
+    decision: ApprovalStatus,
+    comment: str | None,
+    current_user: User,
+    db: AsyncSession,
+    org_id: str,
+) -> dict:
+    redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        async with DistributedLock(redis_client, f"hitl:{approval_id}", ttl=30, retry_count=1):
+            approval = await _get_approval_or_404(approval_id, db, org_id)
+            if approval.status != ApprovalStatus.pending:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Approval is no longer pending")
+
+            approval.status = decision
+            approval.reviewed_by_user_id = current_user.id
+            approval.reviewer_comment = comment
+            approval.reviewed_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(approval)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Approval is currently being processed") from exc
+    finally:
+        await redis_client.aclose()
+
+    decision_name = decision.value if hasattr(decision, "value") else str(decision)
+    await _publish_decision(approval, decision_name, comment)
+    await ws_manager.broadcast({"type": f"hitl_{decision_name}", "approval_id": approval.id})
+    return _serialize_approval(approval)
+
+
 @router.get("/pending")
 async def get_pending_approvals(
     db: AsyncSession = Depends(get_db),
@@ -173,20 +206,14 @@ async def approve_request(
     db: AsyncSession = Depends(get_db),
     ctx: OrgContext = Depends(get_org_context),
 ) -> dict:
-    approval = await _get_approval_or_404(approval_id, db, ctx.org.id)
-    if approval.status != ApprovalStatus.pending:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Approval is no longer pending")
-
-    approval.status = ApprovalStatus.approved
-    approval.reviewed_by_user_id = current_user.id
-    approval.reviewer_comment = payload.comment
-    approval.reviewed_at = datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(approval)
-
-    await _publish_decision(approval, "approved", payload.comment)
-    await ws_manager.broadcast({"type": "hitl_approved", "approval_id": approval.id})
-    return _serialize_approval(approval)
+    return await _process_decision(
+        approval_id,
+        ApprovalStatus.approved,
+        payload.comment,
+        current_user,
+        db,
+        ctx.org.id,
+    )
 
 
 @router.post("/{approval_id}/reject")
@@ -197,17 +224,11 @@ async def reject_request(
     db: AsyncSession = Depends(get_db),
     ctx: OrgContext = Depends(get_org_context),
 ) -> dict:
-    approval = await _get_approval_or_404(approval_id, db, ctx.org.id)
-    if approval.status != ApprovalStatus.pending:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Approval is no longer pending")
-
-    approval.status = ApprovalStatus.rejected
-    approval.reviewed_by_user_id = current_user.id
-    approval.reviewer_comment = payload.comment
-    approval.reviewed_at = datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(approval)
-
-    await _publish_decision(approval, "rejected", payload.comment)
-    await ws_manager.broadcast({"type": "hitl_rejected", "approval_id": approval.id})
-    return _serialize_approval(approval)
+    return await _process_decision(
+        approval_id,
+        ApprovalStatus.rejected,
+        payload.comment,
+        current_user,
+        db,
+        ctx.org.id,
+    )

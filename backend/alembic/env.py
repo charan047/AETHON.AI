@@ -13,7 +13,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from config import settings
 from database.db import Base
-from database.models import Agent, AgentFeedback, AgentMemoryConfig, AgentReputation, ApprovalStatus, CompanyProfile, ExecutionCostLog, ExecutionStatus, FeedbackType, HumanApprovalRequest, InAppNotification, IntegrationType, ListingStatus, ListingType, MarketplaceCategory, MarketplaceInstall, MarketplaceListing, MarketplaceReview, NotificationPriority, OrgInvite, OrgMember, Organization, ToolCallLog, UserIntegration, WebhookEndpoint, WorkflowVersion, Workflow, Execution, Message, CustomTool, User  # noqa: F401
+from database.models import Agent, AgentFeedback, AgentMemoryConfig, AgentMessage, AgentReputation, ApiKey, ApprovalStatus, AuditAction, AuditLog, CompanyProfile, EvalCase, EvalCaseResult, EvalRun, EvalRunStatus, EvalSuite, EvalSuiteStatus, ExecutionCostLog, ExecutionStatus, ExecutionStep, FeedbackType, HumanApprovalRequest, InAppNotification, IntegrationType, ListingStatus, ListingType, MarketplaceCategory, MarketplaceInstall, MarketplaceListing, MarketplaceReview, ModelConfig, NotificationPriority, OrgInvite, OrgMember, Organization, ScoringMethod, ToolCallLog, UserIntegration, WebhookEndpoint, WebhookEventLog, WorkflowVersion, Workflow, Execution, Message, CustomTool, User  # noqa: F401
 
 config = context.config
 

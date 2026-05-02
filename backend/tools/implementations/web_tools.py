@@ -3,11 +3,9 @@ import base64
 import difflib
 import hashlib
 import json
-import os
 import socket
 import ssl
 import time
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -383,20 +381,16 @@ class WebIntelligenceTool(BaseTool):
     async def _screenshot_url_impl(self, url: str) -> str:
         if async_playwright is None:
             raise RuntimeError("Playwright is not installed. Run pip install -r requirements.txt.")
-        os.makedirs("/tmp/screenshots", exist_ok=True)
-        path = f"/tmp/screenshots/{uuid.uuid4()}.png"
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
             page = await browser.new_page(user_agent=USER_AGENT, viewport={"width": 1440, "height": 1000})
             await page.goto(url, wait_until="networkidle", timeout=30000)
-            await page.screenshot(path=path, full_page=True, type="png", timeout=30000)
+            image_bytes = await page.screenshot(full_page=True, type="png", timeout=30000)
             title = await page.title()
             await browser.close()
-        with open(path, "rb") as image_file:
-            encoded = base64.b64encode(image_file.read()).decode("ascii")
+        encoded = base64.b64encode(image_bytes).decode("ascii")
         return json.dumps(
             {
-                "path": path,
                 "description": f"Full-page screenshot of {url} ({title})",
                 "base64_png": encoded,
             }

@@ -3,12 +3,14 @@ from datetime import datetime
 from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
+import redis.asyncio as redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database.db import AsyncSessionLocal
 from database.models import AgentFeedback, AgentReputation, FeedbackType
+from services.distributed_lock import DistributedLock
 
 
 class ReputationService:
@@ -58,30 +60,35 @@ class ReputationService:
         await db.commit()
 
     async def _update_reputation(self, agent_id: str, db: AsyncSession) -> None:
-        result = await db.execute(select(AgentFeedback).where(AgentFeedback.agent_id == agent_id))
-        feedback_items = result.scalars().all()
-        total_tasks = len(feedback_items)
-        approved_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.approved)
-        rejected_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.rejected)
-        edited_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.edited)
-        approval_rate = approved_count / total_tasks if total_tasks else 0.0
+        redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+        try:
+            async with DistributedLock(redis_client, f"reputation:{agent_id}", ttl=10):
+                result = await db.execute(select(AgentFeedback).where(AgentFeedback.agent_id == agent_id))
+                feedback_items = result.scalars().all()
+                total_tasks = len(feedback_items)
+                approved_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.approved)
+                rejected_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.rejected)
+                edited_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.edited)
+                approval_rate = approved_count / total_tasks if total_tasks else 0.0
 
-        distances = [
-            self._normalized_edit_distance(item.original_output, item.edited_output)
-            for item in feedback_items
-            if item.edited_output
-        ]
-        avg_edit_distance = sum(distances) / len(distances) if distances else 0.0
+                distances = [
+                    self._normalized_edit_distance(item.original_output, item.edited_output)
+                    for item in feedback_items
+                    if item.edited_output
+                ]
+                avg_edit_distance = sum(distances) / len(distances) if distances else 0.0
 
-        reputation = await self.get_reputation(agent_id, db)
-        reputation.total_tasks = total_tasks
-        reputation.approved_count = approved_count
-        reputation.rejected_count = rejected_count
-        reputation.edited_count = edited_count
-        reputation.approval_rate = approval_rate
-        reputation.avg_edit_distance = avg_edit_distance
-        reputation.last_updated = datetime.utcnow()
-        await db.flush()
+                reputation = await self.get_reputation(agent_id, db)
+                reputation.total_tasks = total_tasks
+                reputation.approved_count = approved_count
+                reputation.rejected_count = rejected_count
+                reputation.edited_count = edited_count
+                reputation.approval_rate = approval_rate
+                reputation.avg_edit_distance = avg_edit_distance
+                reputation.last_updated = datetime.utcnow()
+                await db.flush()
+        finally:
+            await redis_client.aclose()
 
     async def _extract_learning(
         self,

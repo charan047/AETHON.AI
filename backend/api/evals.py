@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth.dependencies import get_current_user
+from auth.dependencies import get_current_user, require_editor
 from auth.org_context import OrgContext, get_org_context
 from auth.security import generate_api_key, verify_password
 from database import get_db
@@ -478,7 +478,7 @@ async def run_suite(
     suite_id: str,
     data: RunRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_editor),
     ctx: OrgContext = Depends(get_org_context),
 ):
     await _get_suite_for_user(suite_id, current_user.id, db, ctx.org.id)
@@ -518,7 +518,7 @@ async def run_single_case(
     suite_id: str,
     case_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_editor),
     ctx: OrgContext = Depends(get_org_context),
 ):
     suite = await _get_suite_for_user(suite_id, current_user.id, db, ctx.org.id)

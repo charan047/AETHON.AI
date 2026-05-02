@@ -22,7 +22,10 @@ class MemoryService:
             name=settings.chroma_collection_name,
             metadata={"hnsw:space": "cosine"},
         )
-        self._embedding_model = SentenceTransformer(settings.embedding_model)
+        # Force CPU embeddings for stability. The default auto-device selection
+        # can pick Apple MPS on macOS, which has been crashing worker processes
+        # during background workflow execution.
+        self._embedding_model = SentenceTransformer(settings.embedding_model, device="cpu")
 
     async def _encode(self, content: str) -> list[float]:
         embedding = await asyncio.to_thread(self._embedding_model.encode, content)

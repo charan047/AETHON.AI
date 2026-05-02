@@ -1,11 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import confetti from 'canvas-confetti'
 import { ArrowRight, CheckCircle2, Download, X } from 'lucide-react'
-import toast from 'react-hot-toast'
 import { agentsApi, billingApi, marketplaceApi } from '../../api/client'
 import { useAuth } from '../../contexts/AuthContext'
+import { toast } from '../../lib/toast'
 import type { MarketplaceListing } from '../../types'
 
 type InstallModalProps = {
@@ -17,11 +17,13 @@ type InstallModalProps = {
 function targetPath(type: string, resourceId?: string | null) {
   if (type === 'agent') return resourceId ? `/agents?agent=${resourceId}` : '/agents'
   if (type === 'workflow') return resourceId ? `/workflows?workflow=${resourceId}` : '/workflows'
+  if (type === 'tool_config') return resourceId ? `/tools?tool=${resourceId}` : '/tools'
   if (type === 'eval_suite') return '/evals'
   return '/'
 }
 
 function resourceLabel(type: string) {
+  if (type === 'tool_config') return 'tool config'
   return type === 'eval_suite' ? 'eval suite' : type
 }
 
@@ -31,6 +33,14 @@ export function InstallModal({ listing, open, onClose }: InstallModalProps) {
   const qc = useQueryClient()
   const [installed, setInstalled] = useState<{ resource_id: string | null; type: string } | null>(null)
   const [agentId, setAgentId] = useState('')
+  const [reinstall, setReinstall] = useState(false)
+
+  useEffect(() => {
+    setInstalled(null)
+    setAgentId('')
+    setReinstall(false)
+  }, [listing?.id, open])
+
   const { data: usage } = useQuery({
     queryKey: ['billing', 'usage', 'install-modal'],
     queryFn: billingApi.usage,
@@ -44,7 +54,13 @@ export function InstallModal({ listing, open, onClose }: InstallModalProps) {
 
   const warning = useMemo(() => {
     if (!usage || !listing) return null
-    const key = listing.listing_type === 'agent' ? 'agents' : listing.listing_type === 'workflow' ? 'workflows' : 'eval_suites'
+    const key = listing.listing_type === 'agent'
+      ? 'agents'
+      : listing.listing_type === 'workflow'
+        ? 'workflows'
+        : listing.listing_type === 'tool_config'
+          ? 'custom_tools'
+          : 'eval_suites'
     const item = usage[key]
     if (item?.percent >= 85) {
       return `Your ${key.replace('_', ' ')} usage is already at ${item.percent}%. This install may hit your plan limit soon.`
@@ -53,16 +69,21 @@ export function InstallModal({ listing, open, onClose }: InstallModalProps) {
   }, [usage, listing])
 
   const install = useMutation({
-    mutationFn: () => marketplaceApi.install(listing!.id, { agent_id: agentId || undefined }),
+    mutationFn: () => marketplaceApi.install(listing!.id, { agent_id: agentId || undefined, reinstall }),
     onSuccess: result => {
       qc.invalidateQueries({ queryKey: ['marketplace', 'installs'] })
       if (result.already_installed) {
-        toast('Already installed in this organization')
+        toast.info('Already installed in this organization. Enable reinstall to create a fresh copy.')
+      } else if (result.reinstalled) {
+        toast.success('Fresh copy installed')
       } else {
         confetti({ particleCount: 60, spread: 50, origin: { y: 0.72 }, disableForReducedMotion: true })
-        toast.success('Installed successfully')
+        toast.success(listing?.listing_type === 'agent' ? 'Agent installed' : 'Installed successfully')
       }
-      setInstalled({ resource_id: result.resource_id, type: result.type })
+      setInstalled({
+        resource_id: result.resource_id ?? result.agent_id ?? result.workflow_id ?? null,
+        type: result.type ?? 'agent',
+      })
     },
     onError: (error: any) => toast.error(error.response?.data?.detail || 'Install failed'),
   })
@@ -105,8 +126,11 @@ export function InstallModal({ listing, open, onClose }: InstallModalProps) {
               <h3 className="mt-3 text-lg font-semibold text-white">Installed!</h3>
               <p className="mt-2 text-sm text-emerald-100/80">Your new {resourceLabel(installed.type)} is ready.</p>
               <Link className="btn-primary mt-5" to={targetPath(installed.type, installed.resource_id)}>
-                View in {installed.type === 'agent' ? 'My Team' : installed.type === 'workflow' ? 'Workflows' : 'Eval Lab'}
+                View in {installed.type === 'agent' ? 'My Team' : installed.type === 'workflow' ? 'Workflows' : installed.type === 'tool_config' ? 'Tools' : 'Eval Lab'}
               </Link>
+              <button className="btn-ghost mt-3 w-full justify-center" onClick={onClose}>
+                Install another
+              </button>
             </div>
           ) : (
             <>
@@ -128,6 +152,11 @@ export function InstallModal({ listing, open, onClose }: InstallModalProps) {
                   </select>
                 </div>
               )}
+
+              <label className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-3 text-sm text-obsidian-300">
+                Create a fresh copy if already installed
+                <input type="checkbox" className="accent-accent-500" checked={reinstall} onChange={event => setReinstall(event.target.checked)} />
+              </label>
 
               {warning && <div className="rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100">{warning}</div>}
 

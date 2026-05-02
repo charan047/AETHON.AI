@@ -2,8 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Brain, Trash2, X } from 'lucide-react'
 import { agentsApi, memoryApi } from '../../api/client'
 import type { Agent } from '../../types'
-import toast from 'react-hot-toast'
 import { clsx } from 'clsx'
+import { useState } from 'react'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { toast } from '../../lib/toast'
 
 function formatDate(value?: string | null) {
   return value ? new Date(value).toLocaleString() : '-'
@@ -11,6 +13,7 @@ function formatDate(value?: string | null) {
 
 export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose: () => void }) {
   const qc = useQueryClient()
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false)
   const { data: stats } = useQuery({ queryKey: ['memory', agent.id, 'stats'], queryFn: () => memoryApi.stats(agent.id) })
   const { data: history = [] } = useQuery({ queryKey: ['memory', agent.id, 'history'], queryFn: () => memoryApi.history(agent.id, 10) })
   const { data: config } = useQuery({ queryKey: ['agent-memory-config', agent.id], queryFn: () => agentsApi.getMemoryConfig(agent.id) })
@@ -28,6 +31,7 @@ export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose: ()
     mutationFn: () => memoryApi.clearAgent(agent.id),
     onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ['memory', agent.id] })
+      setConfirmClearOpen(false)
       toast.success(`Deleted ${result.deleted} memories`)
     },
     onError: () => toast.error('Failed to clear memory'),
@@ -111,9 +115,7 @@ export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose: ()
 
             <button
               className="btn-danger w-full justify-center"
-              onClick={() => {
-                if (confirm(`Clear all memory for "${agent.name}"? This cannot be undone.`)) clearMemory.mutate()
-              }}
+              onClick={() => setConfirmClearOpen(true)}
             >
               <Trash2 size={15} /> Clear all memory
             </button>
@@ -124,7 +126,9 @@ export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose: ()
             <div className="divide-y divide-slate-800">
               {history.map((memory, index) => (
                 <div key={index} className="p-4">
-                  <div className="line-clamp-3 text-sm text-slate-300">{memory.content}</div>
+                  <div className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">
+                    {memory.content}
+                  </div>
                   <div className="mt-2 text-xs text-slate-600">
                     {formatDate(String(memory.metadata?.timestamp || ''))}
                   </div>
@@ -135,6 +139,15 @@ export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose: ()
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmClearOpen}
+        title={`Clear ${agent.name}'s memory?`}
+        description="This deletes stored memories for this agent. Future runs will no longer have access to those past interactions."
+        confirmLabel="Clear memory"
+        loading={clearMemory.isPending}
+        onClose={() => setConfirmClearOpen(false)}
+        onConfirm={() => clearMemory.mutate()}
+      />
     </div>
   )
 }

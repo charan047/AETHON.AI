@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, Bot, Boxes, CheckCircle2, Download, Search, ShieldCheck, Sparkles, Star, Store, Workflow } from 'lucide-react'
+import { ArrowRight, Bot, Boxes, CheckCircle2, Download, LogOut, Search, ShieldCheck, Sparkles, Star, Store, UserCircle, Workflow, Wrench } from 'lucide-react'
 import { clsx } from 'clsx'
 import { marketplaceApi } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
@@ -24,11 +24,13 @@ const CATEGORIES: { id: MarketplaceCategory | 'all'; label: string }[] = [
 const TYPE_LABELS: Record<MarketplaceListingType, string> = {
   agent: 'Agent',
   workflow: 'Workflow',
+  tool_config: 'Tool Config',
   eval_suite: 'Eval Suite',
 }
 
 function iconFor(type: MarketplaceListingType) {
   if (type === 'workflow') return Workflow
+  if (type === 'tool_config') return Wrench
   if (type === 'eval_suite') return ShieldCheck
   return Bot
 }
@@ -58,7 +60,7 @@ function ListingCard({ listing, index, installed, onInstall }: {
   return (
     <Link
       to={`/marketplace/${listing.slug}`}
-      className="group overflow-hidden rounded-2xl border border-white/10 bg-obsidian-900 transition-all duration-150 hover:-translate-y-1 hover:border-accent-400/40 hover:shadow-glow-md"
+      className="listing-card group overflow-hidden rounded-2xl border border-white/10 bg-obsidian-900 transition-all duration-150 hover:-translate-y-1 hover:border-accent-400/40 hover:shadow-glow-md"
     >
       <div className="relative h-36 overflow-hidden">
         {listing.preview_image_url ? (
@@ -109,7 +111,7 @@ function SearchResultRow({ listing, installed, onInstall }: {
 }) {
   const Icon = iconFor(listing.listing_type)
   return (
-    <div className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-obsidian-900 p-4 transition hover:border-accent-400/35 md:flex-row md:items-center">
+    <div className="listing-card flex flex-col gap-4 rounded-2xl border border-white/10 bg-obsidian-900 p-4 transition hover:border-accent-400/35 md:flex-row md:items-center">
       <Link to={`/marketplace/${listing.slug}`} className="grid h-20 w-20 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-accent-500/60 to-cyan-500/20">
         <Icon size={26} className="text-white" />
       </Link>
@@ -141,6 +143,7 @@ export function Marketplace() {
   const [freeOnly, setFreeOnly] = useState(false)
   const [selectedTag, setSelectedTag] = useState('')
   const [installing, setInstalling] = useState<MarketplaceListing | null>(null)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['marketplace', query, category, type, sortBy],
@@ -163,12 +166,13 @@ export function Marketplace() {
   const stats = useMemo(() => {
     const agentCount = rawItems.filter(item => item.listing_type === 'agent').length
     const workflowCount = rawItems.filter(item => item.listing_type === 'workflow').length
+    const toolCount = rawItems.filter(item => item.listing_type === 'tool_config').length
     const installsCount = rawItems.reduce((sum, item) => sum + item.install_count, 0)
-    return { agentCount, workflowCount, installsCount }
+    return { agentCount, workflowCount, toolCount, installsCount }
   }, [rawItems])
 
   return (
-    <div className="h-screen overflow-y-auto bg-obsidian-950 text-white">
+    <div className="min-h-dvh bg-obsidian-950 text-white">
       <header className="sticky top-0 z-30 border-b border-white/10 bg-obsidian-950/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 md:flex-row md:items-center">
           <Link to="/" className="flex items-center gap-3">
@@ -185,14 +189,42 @@ export function Marketplace() {
             <input
               autoFocus
               className="h-12 w-full rounded-xl border border-white/10 bg-white/[0.04] pl-11 pr-4 text-sm outline-none transition focus:border-accent-400/60 focus:shadow-glow-sm"
-              placeholder="Search agents, workflows, eval suites..."
+              placeholder="Search agents, workflows, tools, eval suites..."
               value={query}
               onChange={event => setQuery(event.target.value)}
             />
           </div>
           <div className="flex items-center gap-2">
             {auth.isAuthenticated ? (
-              <button className="btn-primary h-11" onClick={() => navigate('/marketplace/publish')}>Publish</button>
+              <>
+                <button className="btn-primary h-11" onClick={() => navigate('/marketplace/publish')}>Publish</button>
+                <div className="relative">
+                  <button
+                    className="flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-obsidian-200 transition hover:border-white/20 hover:bg-white/[0.07]"
+                    onClick={() => setUserMenuOpen(open => !open)}
+                  >
+                    <UserCircle size={18} />
+                    <span className="hidden max-w-32 truncate md:inline">{auth.email || 'Account'}</span>
+                  </button>
+                  {userMenuOpen && (
+                    <div className="absolute right-0 top-12 z-40 w-56 overflow-hidden rounded-2xl border border-white/10 bg-obsidian-900 shadow-glow-lg">
+                      <div className="border-b border-white/10 px-4 py-3">
+                        <div className="text-xs text-obsidian-500">Signed in as</div>
+                        <div className="mt-0.5 truncate text-sm font-medium text-white">{auth.email || 'Workspace user'}</div>
+                      </div>
+                      <button className="block w-full px-4 py-3 text-left text-sm text-obsidian-300 hover:bg-white/[0.04] hover:text-white" onClick={() => navigate('/')}>
+                        Command Center
+                      </button>
+                      <button
+                        className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-red-200 hover:bg-red-500/10"
+                        onClick={() => { auth.logout(); navigate('/login') }}
+                      >
+                        <LogOut size={15} /> Sign out
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
             ) : (
               <button className="btn-secondary h-11" onClick={() => navigate('/login')}>Sign in</button>
             )}
@@ -209,11 +241,12 @@ export function Marketplace() {
             </div>
             <h1 className="text-5xl font-semibold tracking-[-0.06em] md:text-7xl">The AI Company Starter Kit</h1>
             <p className="mx-auto mt-5 max-w-2xl text-lg leading-8 text-obsidian-300">
-              Pre-built agents and workflows from founders who’ve already solved the hard parts.
+              Pre-built agents, workflows, and tool configs from founders who’ve already solved the hard parts.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-3 font-mono text-sm text-obsidian-300">
               <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2">{stats.agentCount} agents</span>
               <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2">{stats.workflowCount} workflows</span>
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2">{stats.toolCount} tools</span>
               <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2">{formatCount(stats.installsCount)} installs this week</span>
             </div>
           </div>
@@ -243,6 +276,7 @@ export function Marketplace() {
                 <option value="all">All</option>
                 <option value="agent">Agents</option>
                 <option value="workflow">Workflows</option>
+                <option value="tool_config">Tool Configs</option>
                 <option value="eval_suite">Eval Suites</option>
               </select>
             </div>

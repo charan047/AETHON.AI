@@ -48,6 +48,54 @@ def _build_safe_namespace() -> dict:
     return safe
 
 
+def _is_dangerous_call(node: ast.Call) -> bool:
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id in {"__import__", "open", "eval", "exec", "compile", "input", "breakpoint"}
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        return (func.value.id, func.attr) in {
+            ("os", "system"),
+            ("os", "popen"),
+            ("subprocess", "run"),
+            ("subprocess", "Popen"),
+            ("subprocess", "call"),
+            ("subprocess", "check_output"),
+            ("pathlib", "Path"),
+        }
+    return False
+
+
+def validate_custom_tool_code(code: str) -> str | None:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        return f"Syntax error in tool code: {exc}"
+
+    has_run_function = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "run":
+            has_run_function = True
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            module_names = []
+            if isinstance(node, ast.Import):
+                module_names = [alias.name.split(".")[0] for alias in node.names]
+            else:
+                if node.module:
+                    module_names = [node.module.split(".")[0]]
+            for module_name in module_names:
+                if module_name not in _ALLOWED_IMPORTS:
+                    return (
+                        f"Import of '{module_name}' is not allowed in custom tools. "
+                        f"Allowed: {', '.join(sorted(_ALLOWED_IMPORTS))}"
+                    )
+        if isinstance(node, ast.Call) and _is_dangerous_call(node):
+            return "Dangerous file system or shell operations are not allowed in custom tools."
+
+    if not has_run_function:
+        return "Code must define a callable 'run(...)' function"
+    return None
+
+
 def parse_tool_params(code: str) -> list[dict]:
     """Parse the `run()` function signature from tool code using AST.
 
@@ -91,6 +139,10 @@ def execute_custom_tool_code(code: str, **kwargs) -> tuple[str, str | None]:
 
     Returns (output_string, error_string_or_None).
     """
+    validation_error = validate_custom_tool_code(code)
+    if validation_error:
+        return "", validation_error
+
     try:
         import docker
     except ImportError:
@@ -109,7 +161,7 @@ else:
     wrapped_code = f"{code}\n\n{invocation}"
 
     try:
-        client = docker.from_env()
+        client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
         try:
             client.images.get(settings.docker_execution_image)
         except Exception:

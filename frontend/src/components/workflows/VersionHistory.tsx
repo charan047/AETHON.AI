@@ -2,11 +2,12 @@ import { useMemo, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Clock3, GitCompareArrows, RotateCcw, X } from 'lucide-react'
-import toast from 'react-hot-toast'
 import { workflowsApi } from '../../api/client'
 import type { Workflow, WorkflowVersion, WorkflowVersionDetail } from '../../types'
 import { AgentAvatar } from '../ui/AgentAvatar'
 import { SkeletonCard } from '../ui/Skeleton'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { toast } from '../../lib/toast'
 
 interface VersionHistoryProps {
   workflow: Partial<Workflow>
@@ -55,6 +56,7 @@ export function VersionHistory({ workflow, open, onClose, onRestored }: VersionH
   const queryClient = useQueryClient()
   const [selectedVersion, setSelectedVersion] = useState<WorkflowVersion | null>(null)
   const [diffVersion, setDiffVersion] = useState<WorkflowVersion | null>(null)
+  const [restoreVersion, setRestoreVersion] = useState<WorkflowVersion | null>(null)
 
   const versionsQuery = useQuery({
     queryKey: ['workflow-versions', workflowId],
@@ -146,12 +148,7 @@ export function VersionHistory({ workflow, open, onClose, onRestored }: VersionH
                       </button>
                       <button
                         className="btn-danger flex-1 text-xs"
-                        onClick={() => {
-                          if (confirm(`Restore workflow to v${version.version_number}? A new version will be created and current history will not be lost.`)) {
-                            setSelectedVersion(version)
-                            rollbackMutation.mutate(version.version_number)
-                          }
-                        }}
+                        onClick={() => setRestoreVersion(version)}
                         disabled={rollbackMutation.isPending}
                       >
                         <RotateCcw size={12} /> Restore
@@ -213,6 +210,21 @@ export function VersionHistory({ workflow, open, onClose, onRestored }: VersionH
           </div>
         </div>
       </aside>
+      <ConfirmDialog
+        open={Boolean(restoreVersion)}
+        title={`Restore workflow to v${restoreVersion?.version_number || ''}?`}
+        description="A new version will be created from this snapshot. Your current version history will not be lost."
+        confirmLabel="Restore version"
+        tone="warning"
+        loading={rollbackMutation.isPending}
+        onClose={() => setRestoreVersion(null)}
+        onConfirm={() => {
+          if (!restoreVersion) return
+          setSelectedVersion(restoreVersion)
+          rollbackMutation.mutate(restoreVersion.version_number)
+          setRestoreVersion(null)
+        }}
+      />
     </div>
   )
 }

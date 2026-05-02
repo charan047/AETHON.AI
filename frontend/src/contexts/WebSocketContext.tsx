@@ -2,62 +2,134 @@ import { createContext, useContext, useEffect, useRef, useState, useCallback, ty
 import type { WsEvent } from '../types'
 import { useAuth } from './AuthContext'
 
-const WS_BASE_URL = `ws://${window.location.hostname}:8000/api/monitoring/ws`
+const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws'
+const WS_BASE_URL = `${WS_PROTOCOL}://${window.location.hostname}:8000/api/monitoring/ws`
 
 interface WsContextValue {
   events: WsEvent[]
   lastEvent: WsEvent | null
   connected: boolean
+  isConnected: boolean
   clearEvents: () => void
+  subscribe: (channel: string, handler: (msg: WsEvent) => void) => void
+  unsubscribe: (channel: string) => void
 }
 
 const WsContext = createContext<WsContextValue>({
   events: [],
   lastEvent: null,
   connected: false,
+  isConnected: false,
   clearEvents: () => {},
+  subscribe: () => {},
+  unsubscribe: () => {},
 })
 
 export function WsProvider({ children }: { children: ReactNode }) {
-  const { accessToken } = useAuth()
+  const { accessToken, activeOrg } = useAuth()
   const [events, setEvents] = useState<WsEvent[]>([])
   const [lastEvent, setLastEvent] = useState<WsEvent | null>(null)
   const [connected, setConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const channelHandlers = useRef(new Map<string, (msg: WsEvent) => void>())
+  const pendingSubscriptions = useRef(new Map<string, (msg: WsEvent) => void>())
+
+  const handleGlobalEvent = useCallback((event: WsEvent) => {
+    if (!event || typeof event.type !== 'string' || !event.type.trim()) return
+    setLastEvent(event)
+    setEvents(prev => [...prev.slice(-499), event])
+  }, [])
 
   const connect = useCallback(() => {
-    if (!accessToken) return
+    if (!accessToken || !activeOrg?.id) return
     if (wsRef.current?.readyState === WebSocket.OPEN) return
-    const ws = new WebSocket(`${WS_BASE_URL}?token=${encodeURIComponent(accessToken)}`)
+    const params = new URLSearchParams({ token: accessToken })
+    params.set('org_id', activeOrg.id)
+    const ws = new WebSocket(`${WS_BASE_URL}?${params.toString()}`)
     wsRef.current = ws
-    ws.onopen = () => { setConnected(true); if (reconnectTimer.current) clearTimeout(reconnectTimer.current) }
+    ws.onopen = () => {
+      setConnected(true)
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
+      for (const [channel, handler] of pendingSubscriptions.current.entries()) {
+        channelHandlers.current.set(channel, handler)
+      }
+      pendingSubscriptions.current.clear()
+      for (const channel of channelHandlers.current.keys()) {
+        ws.send(JSON.stringify({ action: 'subscribe', channel }))
+      }
+    }
     ws.onmessage = (e) => {
       try {
         const event = JSON.parse(e.data) as WsEvent
-        setLastEvent(event)
-        setEvents(prev => [...prev.slice(-499), event])
+
+        if (event.execution_id) {
+          const channel = `execution:${event.execution_id}`
+          const handler = channelHandlers.current.get(channel)
+          if (handler) {
+            handler(event)
+            return
+          }
+        }
+
+        if (event.event === 'subscribed' || event.event === 'unsubscribed') {
+          return
+        }
+
+        handleGlobalEvent(event)
       } catch {}
     }
     ws.onclose = () => {
       setConnected(false)
-      if (accessToken) reconnectTimer.current = setTimeout(connect, 3000)
+      if (accessToken && activeOrg?.id) reconnectTimer.current = setTimeout(connect, 3000)
     }
     ws.onerror = () => ws.close()
-  }, [accessToken])
+  }, [accessToken, activeOrg?.id, handleGlobalEvent])
 
   useEffect(() => {
     connect()
     return () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       reconnectTimer.current = null
+      channelHandlers.current.clear()
+      pendingSubscriptions.current.clear()
       wsRef.current?.close()
       wsRef.current = null
     }
   }, [connect])
 
+  useEffect(() => {
+    setEvents([])
+    setLastEvent(null)
+  }, [activeOrg?.id])
+
   const clearEvents = useCallback(() => setEvents([]), [])
-  return <WsContext.Provider value={{ events, lastEvent, connected, clearEvents }}>{children}</WsContext.Provider>
+  const subscribe = useCallback((channel: string, handler: (msg: WsEvent) => void) => {
+    const socket = wsRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      pendingSubscriptions.current.set(channel, handler)
+      return
+    }
+
+    channelHandlers.current.set(channel, handler)
+    socket.send(JSON.stringify({ action: 'subscribe', channel }))
+  }, [])
+
+  const unsubscribe = useCallback((channel: string) => {
+    channelHandlers.current.delete(channel)
+    pendingSubscriptions.current.delete(channel)
+
+    const socket = wsRef.current
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ action: 'unsubscribe', channel }))
+    }
+  }, [])
+
+  return (
+    <WsContext.Provider value={{ events, lastEvent, connected, isConnected: connected, clearEvents, subscribe, unsubscribe }}>
+      {children}
+    </WsContext.Provider>
+  )
 }
 
 export function useWebSocket() {

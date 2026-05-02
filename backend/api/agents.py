@@ -3,7 +3,7 @@ from auth.org_context import OrgContext, check_plan_limit, get_org_context
 from database.models import User
 from fastapi import Depends
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field
@@ -12,17 +12,21 @@ from datetime import datetime
 from uuid import uuid4
 
 from database import get_db
-from database.models import Agent, AgentMemoryConfig, CustomTool
+from database.models import Agent, AgentMemoryConfig, AuditAction, CustomTool
 from config import AVAILABLE_MODELS, AVAILABLE_TOOLS, settings
+from services import audit_log_service
+from services.long_running_agent import LongRunningAgentService
+from utils.sanitize import sanitize_text
 
 router = APIRouter(dependencies=[Depends(get_current_user), Depends(get_org_context)])
+long_running_agent_service = LongRunningAgentService()
 
 
 class AgentCreate(BaseModel):
-    name: str
-    role: str
-    description: str = ""
-    system_prompt: str
+    name: str = Field(..., min_length=1, max_length=255)
+    role: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(default="", max_length=5000)
+    system_prompt: str = Field(..., min_length=1, max_length=50000)
     model: str = settings.default_model
     tools: List[str] = []
     memory_enabled: bool = True
@@ -39,10 +43,10 @@ class AgentCreate(BaseModel):
 
 
 class AgentUpdate(BaseModel):
-    name: Optional[str] = None
-    role: Optional[str] = None
-    description: Optional[str] = None
-    system_prompt: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    role: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    system_prompt: Optional[str] = Field(default=None, max_length=50000)
     model: Optional[str] = None
     tools: Optional[List[str]] = None
     memory_enabled: Optional[bool] = None
@@ -61,11 +65,13 @@ class AgentUpdate(BaseModel):
 
 class AgentResponse(BaseModel):
     id: str
+    org_id: str
     name: str
     role: str
     description: str
     system_prompt: str
     model: str
+    model_config_id: Optional[str] = None
     tools: List[str]
     memory_enabled: bool
     memory_window: int
@@ -104,6 +110,11 @@ class AgentMemoryConfigResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class LongTaskStartRequest(BaseModel):
+    task: str = Field(..., min_length=1)
+    max_duration_hours: int = Field(default=4, ge=1, le=24)
+
+
 async def get_or_create_memory_config(agent_id: str, db: AsyncSession, org_id: str) -> AgentMemoryConfig:
     agent_result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.org_id == org_id))
     if not agent_result.scalar_one_or_none():
@@ -133,15 +144,19 @@ async def list_agents(db: AsyncSession = Depends(get_db), ctx: OrgContext = Depe
 async def create_agent(
     data: AgentCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
     ctx: OrgContext = Depends(get_org_context),
 ):
     await check_plan_limit("agents", ctx.org, db)
     if data.memory_enabled:
         await check_plan_limit("memory_enabled", ctx.org, db)
+    payload = data.model_dump()
+    payload["system_prompt"] = sanitize_text(payload["system_prompt"], max_length=50000)
+    payload["tools"] = list(dict.fromkeys([*(payload.get("tools") or []), "agent_communication"]))
     agent = Agent(
         id=str(uuid4()),
         org_id=ctx.org.id,
-        **data.model_dump(),
+        **payload,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
@@ -149,6 +164,62 @@ async def create_agent(
     await db.commit()
     await db.refresh(agent)
     return agent
+
+
+@router.post("/{agent_id}/long-tasks", status_code=202)
+async def start_long_running_agent_task(
+    agent_id: str,
+    data: LongTaskStartRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    agent = await db.scalar(select(Agent).where(Agent.id == agent_id, Agent.org_id == ctx.org.id))
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    task_id = await long_running_agent_service.start_long_task(
+        agent_id=agent_id,
+        task=data.task,
+        user_id=current_user.id,
+        org_id=ctx.org.id,
+        max_duration_hours=data.max_duration_hours,
+    )
+    return {"task_id": task_id, "status": "queued"}
+
+
+async def _get_org_scoped_long_task(task_id: str, ctx: OrgContext) -> dict:
+    payload = await long_running_agent_service.get_task_status(task_id)
+    if payload.get("org_id") != ctx.org.id:
+        raise HTTPException(status_code=404, detail="Long-running task not found")
+    return payload
+
+
+@router.get("/long-tasks/{task_id}")
+async def get_long_running_agent_task_status(
+    task_id: str,
+    ctx: OrgContext = Depends(get_org_context),
+):
+    return await _get_org_scoped_long_task(task_id, ctx)
+
+
+@router.post("/long-tasks/{task_id}/pause")
+async def pause_long_running_agent_task(
+    task_id: str,
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await _get_org_scoped_long_task(task_id, ctx)
+    return {"paused": await long_running_agent_service.pause_task(task_id)}
+
+
+@router.post("/long-tasks/{task_id}/cancel")
+async def cancel_long_running_agent_task(
+    task_id: str,
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await _get_org_scoped_long_task(task_id, ctx)
+    return {"cancelled": await long_running_agent_service.cancel_task(task_id)}
 
 
 @router.get("/{agent_id}/memory-config", response_model=AgentMemoryConfigResponse)
@@ -165,6 +236,7 @@ async def update_agent_memory_config(
     agent_id: str,
     data: AgentMemoryConfigUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
     ctx: OrgContext = Depends(get_org_context),
 ):
     memory_config = await get_or_create_memory_config(agent_id, db, ctx.org.id)
@@ -192,6 +264,7 @@ async def update_agent(
     agent_id: str,
     data: AgentUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
     ctx: OrgContext = Depends(get_org_context),
 ):
     result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.org_id == ctx.org.id))
@@ -200,7 +273,12 @@ async def update_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     if data.memory_enabled is True:
         await check_plan_limit("memory_enabled", ctx.org, db)
-    for field, value in data.model_dump(exclude_none=True).items():
+    updates = data.model_dump(exclude_none=True)
+    if "system_prompt" in updates:
+        updates["system_prompt"] = sanitize_text(updates["system_prompt"], max_length=50000)
+    if "tools" in updates:
+        updates["tools"] = list(dict.fromkeys([*(updates.get("tools") or []), "agent_communication"]))
+    for field, value in updates.items():
         setattr(agent, field, value)
     agent.updated_at = datetime.utcnow()
     await db.commit()
@@ -209,13 +287,30 @@ async def update_agent(
 
 
 @router.delete("/{agent_id}", status_code=204)
-async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db), ctx: OrgContext = Depends(get_org_context)):
+async def delete_agent(
+    agent_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
     result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.org_id == ctx.org.id))
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    deleted_name = agent.name
     await db.delete(agent)
     await db.commit()
+    await audit_log_service.log(
+        AuditAction.agent_deleted,
+        user_id=current_user.id,
+        org_id=ctx.org.id,
+        resource_type="agent",
+        resource_id=agent_id,
+        request=request,
+        details={"name": deleted_name},
+        db=db,
+    )
 
 
 @router.get("/meta/models")

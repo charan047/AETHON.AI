@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { monitoringApi, executionsApi } from '../api/client'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { Activity, Wifi, WifiOff, Trash2, Search, ChevronDown, ChevronRight, X, Bot, Sparkles } from 'lucide-react'
 import { clsx } from 'clsx'
+import { EmptyState } from '../components/ui/EmptyState'
+import { ExecutionRowSkeleton } from '../components/ui/Skeleton'
 import type { WsEvent } from '../types'
 
 const EVENT_BADGES: Record<string, string> = {
@@ -201,11 +203,11 @@ function ResultModal({ executionId, onClose }: { executionId: string; onClose: (
 }
 
 export function Monitoring() {
+  const navigate = useNavigate()
   const { events, connected, clearEvents } = useWebSocket()
   const [filter, setFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('all')
   const [selectedExecution, setSelectedExecution] = useState<string | null>(null)
-  const [resultExecutionId, setResultExecutionId] = useState<string | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
 
@@ -242,6 +244,12 @@ export function Monitoring() {
     rejected: 'Rejected by Human',
     timed_out: 'Timed Out',
   }
+
+  const openExecution = (executionId: string) => {
+    navigate(`/executions/${executionId}`)
+  }
+
+  const hasNoRuns = !recent?.length && !events.length
 
   return (
     <div className="h-screen flex flex-col overflow-hidden p-6 gap-4">
@@ -285,6 +293,9 @@ export function Monitoring() {
             >
               All executions
             </button>
+            {!recent && Array.from({ length: 5 }).map((_, index) => (
+              <ExecutionRowSkeleton key={index} />
+            ))}
             {(recent || []).map((ex: any) => (
               <button key={ex.id}
                 className={clsx('w-full text-left px-2 py-2 rounded text-xs transition-colors group',
@@ -304,8 +315,8 @@ export function Monitoring() {
                   {ex.status === 'completed' && (
                     <span
                       className="text-emerald-600 hover:text-emerald-400 transition-colors"
-                      onClick={e => { e.stopPropagation(); setResultExecutionId(ex.id) }}
-                      title="View result"
+                      onClick={e => { e.stopPropagation(); openExecution(ex.id) }}
+                      title="Open execution"
                     >
                       <Sparkles size={11} />
                     </span>
@@ -335,7 +346,14 @@ export function Monitoring() {
             </button>
           </div>
           <div ref={logRef} className="flex-1 overflow-y-auto p-2 space-y-0.5 font-mono">
-            {!filtered.length ? (
+            {hasNoRuns ? (
+              <EmptyState
+                icon="🎬"
+                title="No runs yet"
+                description="Run an agent to see the magic happen here. Watch it think, search, and work in real time."
+                action={{ label: 'Run an agent →', onClick: () => navigate('/agents') }}
+              />
+            ) : !filtered.length ? (
               <div className="flex flex-col items-center justify-center h-full text-slate-700">
                 <Activity size={32} className="mb-2" />
                 <div className="text-sm">Waiting for events...</div>
@@ -343,21 +361,16 @@ export function Monitoring() {
               </div>
             ) : (
               filtered.map((ev, i) => (
-                <LogEntry key={i} ev={ev} onViewResult={setResultExecutionId} />
+                <LogEntry key={i} ev={ev} onViewResult={openExecution} />
               ))
             )}
           </div>
           <div className="border-t border-slate-800 px-3 py-2 text-xs text-slate-600 flex-shrink-0">
             {filtered.length} events shown · {events.length} total buffered
-            <span className="ml-3 text-slate-700">· Click <span className="text-emerald-700">execution complete</span> or <Sparkles size={10} className="inline" /> to see the full answer</span>
+            <span className="ml-3 text-slate-700">· Click <span className="text-emerald-700">execution complete</span> or <Sparkles size={10} className="inline" /> to open the full execution view</span>
           </div>
         </div>
       </div>
-
-      {/* Result modal */}
-      {resultExecutionId && (
-        <ResultModal executionId={resultExecutionId} onClose={() => setResultExecutionId(null)} />
-      )}
     </div>
   )
 }

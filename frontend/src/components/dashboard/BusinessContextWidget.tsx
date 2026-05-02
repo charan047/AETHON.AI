@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import toast from 'react-hot-toast'
 import { ChevronDown, ChevronRight, DollarSign, Plus, Target, Trash2 } from 'lucide-react'
 import { businessApi } from '../../api/client'
 import { GlowCard } from '../ui/GlowCard'
+import { toast } from '../../lib/toast'
 
 function runwayTone(months: number | null | undefined) {
   if (months == null) return 'border-white/10 bg-white/[0.03] text-slate-400'

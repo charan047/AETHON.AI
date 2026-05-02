@@ -26,7 +26,7 @@ export function useDashboard() {
     if (last.type === 'agent_started' || last.type === 'tool_call') {
       setTeamStatus(current => current?.map(agent =>
         agent.name === agentName
-          ? { ...agent, status: 'running', current_task: String(last.task || last.input || 'Working...') }
+          ? { ...agent, status: 'working', current_task: String(last.task || last.input || 'Working...') }
           : agent,
       ) ?? current)
     }

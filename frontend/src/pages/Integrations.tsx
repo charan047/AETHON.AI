@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import toast from 'react-hot-toast'
 import { Github, Mail, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { integrationsApi } from '../api/client'
 import type { UserIntegration } from '../types'
 import { GlowCard } from '../components/ui/GlowCard'
+import { toast } from '../lib/toast'
 
 type ModalType = 'github' | 'email' | null
 

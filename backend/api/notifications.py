@@ -6,11 +6,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.dependencies import get_current_user
+from auth.org_context import OrgContext, get_org_context
 from database import get_db
 from database.models import InAppNotification, User
 
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter(dependencies=[Depends(get_current_user), Depends(get_org_context)])
 
 
 class NotificationResponse(BaseModel):
@@ -36,11 +37,12 @@ def _response(notification: InAppNotification) -> NotificationResponse:
     )
 
 
-async def _get_notification(notification_id: str, user_id: str, db: AsyncSession) -> InAppNotification:
+async def _get_notification(notification_id: str, user_id: str, org_id: str, db: AsyncSession) -> InAppNotification:
     result = await db.execute(
         select(InAppNotification).where(
             InAppNotification.id == notification_id,
             InAppNotification.user_id == user_id,
+            InAppNotification.org_id == org_id,
         )
     )
     notification = result.scalar_one_or_none()
@@ -55,8 +57,12 @@ async def list_notifications(
     limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
 ):
-    query = select(InAppNotification).where(InAppNotification.user_id == current_user.id)
+    query = select(InAppNotification).where(
+        InAppNotification.user_id == current_user.id,
+        InAppNotification.org_id == ctx.org.id,
+    )
     if unread_only:
         query = query.where(InAppNotification.is_read == False)  # noqa: E712
     result = await db.execute(query.order_by(InAppNotification.created_at.desc()).limit(limit))
@@ -67,10 +73,12 @@ async def list_notifications(
 async def notification_count(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
 ):
     unread = await db.scalar(
         select(func.count(InAppNotification.id)).where(
             InAppNotification.user_id == current_user.id,
+            InAppNotification.org_id == ctx.org.id,
             InAppNotification.is_read == False,  # noqa: E712
         )
     )
@@ -82,8 +90,9 @@ async def mark_notification_read(
     notification_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
 ):
-    notification = await _get_notification(notification_id, current_user.id, db)
+    notification = await _get_notification(notification_id, current_user.id, ctx.org.id, db)
     notification.is_read = True
     await db.commit()
     await db.refresh(notification)
@@ -94,10 +103,12 @@ async def mark_notification_read(
 async def mark_all_notifications_read(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
 ):
     result = await db.execute(
         select(InAppNotification).where(
             InAppNotification.user_id == current_user.id,
+            InAppNotification.org_id == ctx.org.id,
             InAppNotification.is_read == False,  # noqa: E712
         )
     )
@@ -113,7 +124,8 @@ async def delete_notification(
     notification_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
 ):
-    notification = await _get_notification(notification_id, current_user.id, db)
+    notification = await _get_notification(notification_id, current_user.id, ctx.org.id, db)
     await db.delete(notification)
     await db.commit()

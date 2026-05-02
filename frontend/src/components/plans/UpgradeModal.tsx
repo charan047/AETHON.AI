@@ -1,7 +1,5 @@
 import { X, Lock, Sparkles, ArrowRight } from 'lucide-react'
-import { useMutation } from '@tanstack/react-query'
-import toast from 'react-hot-toast'
-import { billingApi } from '../../api/client'
+import { useNavigate } from 'react-router-dom'
 import type { OrgPlan } from '../../types'
 
 type UpgradeModalProps = {
@@ -38,16 +36,9 @@ function titleFor(resource?: string) {
 }
 
 export function UpgradeModal({ open, onClose, resource, message, currentPlan = 'free' }: UpgradeModalProps) {
+  const navigate = useNavigate()
   const targetPlan = TARGET_PLAN[resource || ''] || TARGET_PLAN.default
   const price = targetPlan === 'team' ? '$99/month' : '$29/month'
-  const mutation = useMutation({
-    mutationFn: () => billingApi.upgrade(targetPlan),
-    onSuccess: data => {
-      toast.success(data.message || "Upgrade requested! You'll hear back within 24 hours.")
-      onClose()
-    },
-    onError: () => toast.error('Could not request upgrade. Please try again.'),
-  })
 
   if (!open) return null
 
@@ -93,17 +84,13 @@ export function UpgradeModal({ open, onClose, resource, message, currentPlan = '
               <Sparkles size={16} /> What changes
             </div>
             <p className="text-cyan-100/80">
-              Your current plan keeps the product lean. The upgrade unlocks the blocked capability without changing your existing agents, workflows, or data.
+              Your current plan keeps the product lean. Billing handles trials, upgrades, and payment collection in one place without affecting your existing agents or workflows.
             </p>
           </div>
 
           <div className="mt-6 flex items-center gap-3">
-            <button
-              className="btn-primary flex-1"
-              disabled={mutation.isPending}
-              onClick={() => mutation.mutate()}
-            >
-              {mutation.isPending ? 'Requesting...' : `Upgrade to ${targetPlan}`}
+            <button className="btn-primary flex-1" onClick={() => navigate(`/settings/billing?plan=${targetPlan}`)}>
+              Go to Billing
               <ArrowRight size={16} />
             </button>
             <button className="btn-ghost" onClick={onClose}>

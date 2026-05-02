@@ -83,6 +83,7 @@ class ParallelExecutor:
                     broadcast=broadcast,
                     workflow_id=workflow_id,
                     execution_id=execution_id,
+                    org_id=agent.org_id,
                 )
 
             results = await asyncio.gather(

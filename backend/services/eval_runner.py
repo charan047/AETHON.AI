@@ -24,6 +24,7 @@ from runtime.agent_runner import AgentRunner
 from services.cost_tracker import cost_tracker
 from services.scoring_service import ScoringService
 from services.websocket_manager import ws_manager
+from utils.secret_scanner import redact_secrets
 
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,7 @@ class EvalRunner:
             await ws_manager.broadcast(
                 {
                     "type": "eval_run_completed",
+                    "org_id": suite.org_id,
                     "run_id": run.id,
                     "suite_score": suite_score,
                     "passed": passed,
@@ -161,6 +163,7 @@ class EvalRunner:
                 db.add(
                     InAppNotification(
                         id=str(uuid.uuid4()),
+                        org_id=suite.org_id,
                         user_id=user_id,
                         title=f"Eval suite '{suite.name}' failed",
                         message=(
@@ -233,6 +236,7 @@ class EvalRunner:
                     thread_id=f"eval_{run_id}_{case.id}",
                     workflow_id=None,
                     execution_id=None,
+                    org_id=getattr(agent, "org_id", None),
                 )
 
                 score, details = await ScoringService().score(case, actual_output)
@@ -246,7 +250,7 @@ class EvalRunner:
                 error_message = str(exc)
                 details = {"error": error_message}
 
-            result.actual_output = actual_output
+            result.actual_output = redact_secrets(actual_output)
             result.score = score
             result.passed = passed
             result.scoring_details = json.dumps(details, default=str)

@@ -45,10 +45,25 @@ class WorkflowEngine:
     ) -> tuple[str, int]:
         started = time.time()
         status = "failed"
-        workflow_result = await self.db.execute(select(Workflow).where(Workflow.id == workflow_id))
+        execution = await self.db.scalar(select(Execution).where(Execution.id == execution_id))
+        if not execution:
+            raise RuntimeError("Execution not found")
+
+        workflow_result = await self.db.execute(
+            select(Workflow).where(
+                Workflow.id == workflow_id,
+                Workflow.org_id == execution.org_id,
+            )
+        )
         workflow = workflow_result.scalar_one_or_none()
         if not workflow:
             raise RuntimeError("Workflow not found")
+
+        if execution:
+            execution.status = ExecutionStatus.running
+            execution.started_at = datetime.utcnow()
+            execution.error = None
+            await self.db.commit()
 
         active_count = await self.db.scalar(
             select(func.count(Execution.id)).where(Execution.status == ExecutionStatus.running)
@@ -56,7 +71,12 @@ class WorkflowEngine:
         telemetry_service.set_active_executions(active_count)
 
         agent_ids = self._collect_agent_ids(workflow)
-        agents_result = await self.db.execute(select(Agent).where(Agent.id.in_(agent_ids)))
+        agents_result = await self.db.execute(
+            select(Agent).where(
+                Agent.id.in_(agent_ids),
+                Agent.org_id == execution.org_id,
+            )
+        )
         agents = {agent.id: agent for agent in agents_result.scalars().all()}
 
         configs_result = await self.db.execute(
@@ -69,7 +89,11 @@ class WorkflowEngine:
         custom_tools = []
         if custom_ids:
             tools_result = await self.db.execute(
-                select(CustomTool).where(CustomTool.id.in_(custom_ids), CustomTool.is_active == True)
+                select(CustomTool).where(
+                    CustomTool.id.in_(custom_ids),
+                    CustomTool.org_id == execution.org_id,
+                    CustomTool.is_active == True,
+                )
             )
             custom_tools = tools_result.scalars().all()
 

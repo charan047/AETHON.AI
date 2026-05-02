@@ -12,10 +12,18 @@ const styles: Record<StatusKind, { label: string; className: string; dot: string
   active: { label: 'Active', className: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300', dot: 'bg-emerald-400' },
 }
 
-export function StatusBadge({ status, label }: { status: StatusKind | string; label?: string }) {
+export function StatusBadge({
+  status,
+  label,
+  className,
+}: {
+  status: StatusKind | string
+  label?: string
+  className?: string
+}) {
   const style = styles[status as StatusKind] ?? styles.idle
   return (
-    <span className={clsx('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium', style.className)}>
+    <span className={clsx('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium', style.className, className)}>
       <span className={clsx('h-1.5 w-1.5 rounded-full', style.dot, style.pulse && 'animate-pulse')} />
       {label ?? style.label}
     </span>

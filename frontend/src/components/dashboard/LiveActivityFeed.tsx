@@ -1,11 +1,14 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
-import { Activity, Radio } from 'lucide-react'
+import { Activity, Ban, Clock3, Eye, Pause, Radio, X } from 'lucide-react'
+import { agentsApi } from '../../api/client'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { AgentAvatar } from '../ui/AgentAvatar'
 import { Skeleton } from '../ui/Skeleton'
-import type { WsEvent } from '../../types'
+import type { LongTaskStatus, WsEvent } from '../../types'
+import { toast } from '../../lib/toast'
 
 type FormattedEvent = {
   id: string
@@ -46,6 +49,14 @@ export function formatEvent(wsEvent: WsEvent): FormattedEvent {
     agent_retry: `${name} retrying (attempt ${wsEvent.attempt || 1}/${wsEvent.max_retries || '?'})`,
     agent_retry_succeeded: `${name} recovered after retry ${wsEvent.attempt || ''}`,
     agent_retry_exhausted: `${name} exhausted retries: ${wsEvent.error || 'unknown error'}`,
+    agent_message: `${wsEvent.from || 'Agent'} messaged ${wsEvent.to || 'another agent'}: ${wsEvent.preview || ''}`,
+    agent_message_response: `${wsEvent.from || 'Agent'} replied to ${wsEvent.to || 'another agent'}: ${wsEvent.preview || ''}`,
+    long_task_started: `${name} started a long-running task: ${wsEvent.task_preview || 'background work'}`,
+    long_task_progress: `${name} long task progress: ${wsEvent.progress || 0}%`,
+    long_task_completed: `${name} completed long-running task`,
+    long_task_paused: `${name} long-running task paused`,
+    long_task_cancelled: `${name} long-running task cancelled`,
+    long_task_failed: `${name} long-running task failed: ${wsEvent.error || 'unknown error'}`,
     parallel_group_started: `${wsEvent.agent_count || 'Multiple'} agents started parallel work`,
     parallel_group_completed: `${wsEvent.succeeded || wsEvent.agent_count || 'Multiple'} agents finished parallel task`,
     parallel_group_done: `${wsEvent.succeeded || 'Multiple'} agents finished parallel task`,
@@ -68,13 +79,42 @@ export function formatEvent(wsEvent: WsEvent): FormattedEvent {
   }
 }
 
+function shouldSurfaceEvent(event: WsEvent) {
+  return !['ws_connected', 'ws_disconnected'].includes(event.type)
+}
+
 function tone(type: string) {
   if (type.includes('error') || type.includes('rejected') || type.includes('exceeded')) return 'bg-red-400'
   if (type.includes('budget')) return 'bg-red-400'
   if (type.includes('hitl') || type.includes('approval')) return 'bg-amber-400'
   if (type.includes('workflow') || type.includes('execution')) return 'bg-cyan-400'
+  if (type.includes('long_task')) return 'bg-emerald-400'
+  if (type.includes('agent_message')) return 'bg-sky-400'
   if (type.includes('parallel')) return 'bg-fuchsia-400'
   return 'bg-accent-400'
+}
+
+function secondsLabel(seconds?: number) {
+  const value = Math.max(0, Number(seconds || 0))
+  if (value < 60) return `${value}s`
+  const minutes = Math.floor(value / 60)
+  if (minutes < 60) return `${minutes} min`
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
+function longTaskFromEvent(event: WsEvent): LongTaskStatus | null {
+  if (!event.type.startsWith('long_task_') || typeof event.task_id !== 'string') return null
+  return {
+    task_id: event.task_id,
+    agent_id: typeof event.agent_id === 'string' ? event.agent_id : undefined,
+    task_preview: typeof event.task_preview === 'string' ? event.task_preview : undefined,
+    status: event.type.replace('long_task_', ''),
+    progress: Number(event.progress || 0),
+    current_step: String(event.current_step || 'Working'),
+    intermediate_outputs: Array.isArray(event.intermediate_outputs) ? event.intermediate_outputs.map(String) : [],
+    elapsed_seconds: Number(event.elapsed_seconds || 0),
+    error: typeof event.error === 'string' ? event.error : undefined,
+  }
 }
 
 const ActivityEventItem = memo(function ActivityEventItem({ event }: { event: FormattedEvent }) {
@@ -99,25 +139,179 @@ const ActivityEventItem = memo(function ActivityEventItem({ event }: { event: Fo
   )
 })
 
+function LongTaskProgressCard({
+  task,
+  onView,
+}: {
+  task: LongTaskStatus
+  onView: (task: LongTaskStatus) => void
+}) {
+  const pause = useMutation({
+    mutationFn: () => agentsApi.pauseLongTask(task.task_id),
+    onSuccess: () => toast.success('Pause requested'),
+    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not pause task'),
+  })
+  const cancel = useMutation({
+    mutationFn: () => agentsApi.cancelLongTask(task.task_id),
+    onSuccess: () => toast.success('Task cancelled'),
+    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not cancel task'),
+  })
+  const active = ['started', 'progress', 'running', 'queued'].includes(task.status)
+
+  return (
+    <div className="activity-enter rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.055] p-4 shadow-glow-sm">
+      <div className="flex items-start gap-3">
+        <AgentAvatar name={task.agent_id || 'Long task'} size="sm" running={active} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold text-white">{task.task_preview || task.task || 'Long-running agent task'}</div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-obsidian-800">
+            <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-cyan-300" style={{ width: `${Math.min(100, Math.max(0, task.progress))}%` }} />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-emerald-100/80">
+            <span className="font-mono">{Math.round(task.progress)}%</span>
+            <span>·</span>
+            <span className="inline-flex items-center gap-1"><Clock3 size={12} /> {secondsLabel(task.elapsed_seconds)}</span>
+            <span>·</span>
+            <span className="truncate">{task.current_step}</span>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button className="btn-secondary h-8 px-3 text-xs" disabled={!active || pause.isPending} onClick={() => pause.mutate()}>
+              <Pause size={13} /> Pause
+            </button>
+            <button className="btn-ghost h-8 px-3 text-xs text-red-300 hover:text-red-200" disabled={!active || cancel.isPending} onClick={() => cancel.mutate()}>
+              <Ban size={13} /> Cancel
+            </button>
+            <button className="btn-primary h-8 px-3 text-xs" onClick={() => onView(task)}>
+              <Eye size={13} /> View Progress
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LongTaskSlideOver({ task, onClose }: { task: LongTaskStatus | null; onClose: () => void }) {
+  const { data } = useQuery({
+    queryKey: ['long-task-status', task?.task_id],
+    queryFn: () => agentsApi.getLongTaskStatus(task!.task_id),
+    enabled: Boolean(task?.task_id),
+    refetchInterval: task && ['started', 'progress', 'running', 'queued'].includes(task.status) ? 5000 : false,
+  })
+  const detail = data || task
+  const cancel = useMutation({
+    mutationFn: () => agentsApi.cancelLongTask(detail!.task_id),
+    onSuccess: () => toast.success('Task cancelled'),
+    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not cancel task'),
+  })
+
+  if (!detail) return null
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-white/10 bg-obsidian-925 p-6 text-white shadow-glow-lg" onClick={event => event.stopPropagation()}>
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.22em] text-emerald-300">Long-running task</p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight">{detail.task_preview || detail.task || 'Agent background work'}</h2>
+            <p className="mt-2 text-sm text-obsidian-400">{detail.status} · {secondsLabel(detail.elapsed_seconds)} elapsed</p>
+          </div>
+          <button className="btn-ghost px-2" onClick={onClose}><X size={18} /></button>
+        </div>
+
+        <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+          <div className="mb-2 flex items-center justify-between text-sm">
+            <span className="text-obsidian-300">{detail.current_step}</span>
+            <span className="font-mono text-emerald-300">{Math.round(detail.progress)}%</span>
+          </div>
+          <div className="h-3 overflow-hidden rounded-full bg-obsidian-800">
+            <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-cyan-300" style={{ width: `${Math.min(100, Math.max(0, detail.progress))}%` }} />
+          </div>
+          <p className="mt-3 text-xs text-obsidian-500">Estimated completion updates as checkpoints arrive.</p>
+        </div>
+
+        <div className="mt-6">
+          <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.18em] text-white">Progress Timeline</h3>
+          <div className="space-y-3">
+            {detail.intermediate_outputs?.length ? detail.intermediate_outputs.map((output, index) => (
+              <div key={`${detail.task_id}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+                <div className="mb-2 font-mono text-xs text-cyan-300">Checkpoint {index + 1}</div>
+                <p className="whitespace-pre-wrap text-sm leading-6 text-obsidian-300">{output}</p>
+              </div>
+            )) : (
+              <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-6 text-sm text-obsidian-500">
+                No intermediate output yet. The agent is still sharpening its pencils.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <button className="btn-ghost mt-6 w-full justify-center text-red-300 hover:text-red-200" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
+          <Ban size={15} /> Cancel Task
+        </button>
+      </aside>
+    </div>
+  )
+}
+
 export function LiveActivityFeed() {
   const { events, lastEvent, connected } = useWebSocket()
   const [formatted, setFormatted] = useState<FormattedEvent[]>([])
+  const [longTasks, setLongTasks] = useState<Record<string, LongTaskStatus>>({})
+  const [selectedTask, setSelectedTask] = useState<LongTaskStatus | null>(null)
   const seenRef = useRef<Set<string>>(new Set())
-  const initialEvents = useMemo(() => events.slice(-30).reverse().map(formatEvent), [events])
+  const filteredInitialEvents = useMemo(
+    () => events.filter(shouldSurfaceEvent).slice(-30).reverse().map(formatEvent),
+    [events],
+  )
 
   useEffect(() => {
-    if (formatted.length || !initialEvents.length) return
-    seenRef.current = new Set(initialEvents.map(event => event.id))
-    setFormatted(initialEvents)
-  }, [formatted.length, initialEvents])
+    if (formatted.length || !filteredInitialEvents.length) return
+    seenRef.current = new Set(filteredInitialEvents.map(event => event.id))
+    setFormatted(filteredInitialEvents)
+  }, [filteredInitialEvents, formatted.length])
 
   useEffect(() => {
     if (!lastEvent) return
+    if (!shouldSurfaceEvent(lastEvent)) return
     const event = formatEvent(lastEvent)
+    const longTask = longTaskFromEvent(lastEvent)
+    if (longTask) {
+      setLongTasks(current => ({
+        ...current,
+        [longTask.task_id]: {
+          ...(current[longTask.task_id] || {}),
+          ...longTask,
+          intermediate_outputs: longTask.intermediate_outputs.length
+            ? longTask.intermediate_outputs
+            : current[longTask.task_id]?.intermediate_outputs || [],
+        },
+      }))
+    }
     if (seenRef.current.has(event.id)) return
     seenRef.current.add(event.id)
     setFormatted(current => [event, ...current].slice(0, 30))
   }, [lastEvent])
+
+  useEffect(() => {
+    const tasks = events.map(longTaskFromEvent).filter(Boolean) as LongTaskStatus[]
+    if (!tasks.length) return
+    setLongTasks(current => {
+      const next = { ...current }
+      for (const task of tasks) {
+        next[task.task_id] = {
+          ...(next[task.task_id] || {}),
+          ...task,
+          intermediate_outputs: task.intermediate_outputs.length
+            ? task.intermediate_outputs
+            : next[task.task_id]?.intermediate_outputs || [],
+        }
+      }
+      return next
+    })
+  }, [events])
+
+  const visibleLongTasks = Object.values(longTasks).sort((a, b) => a.task_id.localeCompare(b.task_id)).slice(-4).reverse()
 
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden border-x border-white/[0.08] bg-obsidian-950">
@@ -151,10 +345,14 @@ export function LiveActivityFeed() {
           </div>
         ) : (
           <div className="space-y-2">
+            {visibleLongTasks.map(task => (
+              <LongTaskProgressCard key={task.task_id} task={task} onView={setSelectedTask} />
+            ))}
             {formatted.map(event => <ActivityEventItem key={event.id} event={event} />)}
           </div>
         )}
       </div>
+      <LongTaskSlideOver task={selectedTask} onClose={() => setSelectedTask(null)} />
     </section>
   )
 }

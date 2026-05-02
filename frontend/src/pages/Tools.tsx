@@ -6,8 +6,9 @@ import {
   AlertCircle, ChevronRight, Code2, FlaskConical, RefreshCw,
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import toast from 'react-hot-toast'
 import type { CustomTool } from '../types'
+import { ConfirmDialog } from '../components/ui/ConfirmDialog'
+import { toast } from '../lib/toast'
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -376,6 +377,7 @@ function ToolEditor({
 export function Tools() {
   const qc = useQueryClient()
   const [editing, setEditing] = useState<Partial<CustomTool> | null | false>(false)
+  const [toolToDelete, setToolToDelete] = useState<CustomTool | null>(null)
 
   const { data: tools = [], isLoading } = useQuery({
     queryKey: ['custom-tools'],
@@ -387,6 +389,7 @@ export function Tools() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['custom-tools'] })
       qc.invalidateQueries({ queryKey: ['agent-tools'] })
+      setToolToDelete(null)
       toast.success('Tool deleted')
     },
   })
@@ -439,12 +442,21 @@ export function Tools() {
               key={t.id}
               tool={t}
               onEdit={() => setEditing(t)}
-              onDelete={() => confirm(`Delete "${t.name}"?`) && deleteMut.mutate(t.id)}
+              onDelete={() => setToolToDelete(t)}
               onToggle={() => toggleMut.mutate({ id: t.id, is_active: !t.is_active })}
             />
           ))}
         </div>
       )}
+      <ConfirmDialog
+        open={Boolean(toolToDelete)}
+        title={`Delete ${toolToDelete?.name || 'tool'}?`}
+        description="Agents using this custom tool will no longer be able to call it. This action cannot be undone."
+        confirmLabel="Delete tool"
+        loading={deleteMut.isPending}
+        onClose={() => setToolToDelete(null)}
+        onConfirm={() => toolToDelete && deleteMut.mutate(toolToDelete.id)}
+      />
     </div>
   )
 }

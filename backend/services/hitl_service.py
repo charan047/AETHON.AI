@@ -9,6 +9,7 @@ from sqlalchemy import select
 from config import settings
 from database.db import AsyncSessionLocal
 from database.models import ApprovalStatus, HumanApprovalRequest
+from services.distributed_lock import DistributedLock
 from services.telemetry_service import telemetry_service
 from services.websocket_manager import ws_manager
 
@@ -121,19 +122,27 @@ class HITLService:
 
     async def check_expired_approvals(self) -> int:
         now = datetime.now(timezone.utc)
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(HumanApprovalRequest).where(
-                    HumanApprovalRequest.status == ApprovalStatus.pending,
-                    HumanApprovalRequest.expires_at < now,
-                )
-            )
-            approvals = result.scalars().all()
-            for approval in approvals:
-                approval.status = ApprovalStatus.timed_out
-            if approvals:
-                await db.commit()
-            await self._update_pending_metric(db)
+        redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+        approvals = []
+        try:
+            async with DistributedLock(redis_client, "hitl:expired-scan", ttl=30, retry_count=1):
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(
+                        select(HumanApprovalRequest).where(
+                            HumanApprovalRequest.status == ApprovalStatus.pending,
+                            HumanApprovalRequest.expires_at < now,
+                        )
+                    )
+                    approvals = result.scalars().all()
+                    for approval in approvals:
+                        approval.status = ApprovalStatus.timed_out
+                    if approvals:
+                        await db.commit()
+                    await self._update_pending_metric(db)
+        except RuntimeError:
+            return 0
+        finally:
+            await redis_client.aclose()
 
         for approval in approvals:
             await ws_manager.broadcast(

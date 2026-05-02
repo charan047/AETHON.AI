@@ -33,7 +33,7 @@ class ScoringService:
         if method == ScoringMethod.exact_match.value:
             return self._score_exact_match(expected, actual)
         if method == ScoringMethod.contains.value:
-            return self._score_contains(config, actual)
+            return self._score_contains(config, actual, expected)
         if method == ScoringMethod.regex.value:
             return self._score_regex(config, actual)
         if method == ScoringMethod.llm_judge.value:
@@ -77,8 +77,10 @@ class ScoringService:
             "actual_normalized": actual_normalized,
         }
 
-    def _score_contains(self, config: dict, actual: str) -> tuple[float, dict]:
+    def _score_contains(self, config: dict, actual: str, expected: str = "") -> tuple[float, dict]:
         strings = config.get("strings") or []
+        if not strings and expected:
+            strings = [expected]
         if isinstance(strings, str):
             strings = [strings]
         strings = [str(item) for item in strings if str(item)]

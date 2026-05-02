@@ -15,4 +15,6 @@ limiter = Limiter(
     key_func=get_user_id_or_ip,
     storage_uri=settings.redis_url,
     default_limits=["200/minute"],
+    headers_enabled=True,
+    in_memory_fallback_enabled=True,
 )

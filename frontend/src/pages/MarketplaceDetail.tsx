@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Bot, Download, ExternalLink, Flag, ShieldCheck, Star, Store, Workflow } from 'lucide-react'
-import toast from 'react-hot-toast'
+import { ArrowLeft, Bot, Download, ExternalLink, Flag, LogOut, ShieldCheck, Star, Store, UserCircle, Workflow, Wrench } from 'lucide-react'
+import { formatDistanceToNow } from 'date-fns'
 import { clsx } from 'clsx'
 import { marketplaceApi } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
@@ -10,15 +10,18 @@ import { InstallModal } from '../components/marketplace/InstallModal'
 import { Skeleton } from '../components/ui/Skeleton'
 import { AgentAvatar } from '../components/ui/AgentAvatar'
 import type { MarketplaceListing, MarketplaceListingType } from '../types'
+import { toast } from '../lib/toast'
 
 const TYPE_LABELS: Record<MarketplaceListingType, string> = {
   agent: 'Agent',
   workflow: 'Workflow',
+  tool_config: 'Tool Config',
   eval_suite: 'Eval Suite',
 }
 
 function iconFor(type: MarketplaceListingType) {
   if (type === 'workflow') return Workflow
+  if (type === 'tool_config') return Wrench
   if (type === 'eval_suite') return ShieldCheck
   return Bot
 }
@@ -28,6 +31,10 @@ function formatCount(value: number) {
   return value.toString()
 }
 
+function slugifyHeading(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+}
+
 function MarkdownBlock({ content }: { content?: string | null }) {
   if (!content) return null
   const lines = content.split('\n')
@@ -35,15 +42,36 @@ function MarkdownBlock({ content }: { content?: string | null }) {
     <div className="space-y-3 text-sm leading-7 text-obsidian-300">
       {lines.map((line, index) => {
         if (!line.trim()) return <div key={index} className="h-2" />
-        if (line.startsWith('### ')) return <h3 key={index} className="pt-4 text-lg font-semibold text-white">{line.slice(4)}</h3>
-        if (line.startsWith('## ')) return <h2 key={index} className="pt-5 text-2xl font-semibold tracking-tight text-white">{line.slice(3)}</h2>
-        if (line.startsWith('# ')) return <h1 key={index} className="pt-5 text-3xl font-semibold tracking-tight text-white">{line.slice(2)}</h1>
+        if (line.startsWith('### ')) {
+          const text = line.slice(4)
+          return <h3 key={index} id={slugifyHeading(text)} className="scroll-mt-24 pt-4 text-lg font-semibold text-white">{text}</h3>
+        }
+        if (line.startsWith('## ')) {
+          const text = line.slice(3)
+          return <h2 key={index} id={slugifyHeading(text)} className="scroll-mt-24 pt-5 text-2xl font-semibold tracking-tight text-white">{text}</h2>
+        }
+        if (line.startsWith('# ')) {
+          const text = line.slice(2)
+          return <h1 key={index} id={slugifyHeading(text)} className="scroll-mt-24 pt-5 text-3xl font-semibold tracking-tight text-white">{text}</h1>
+        }
         if (line.startsWith('- ')) return <p key={index} className="pl-4 before:mr-2 before:text-accent-300 before:content-['•']">{line.slice(2)}</p>
         if (line.startsWith('```')) return <div key={index} className="rounded-xl border border-white/10 bg-obsidian-950 px-3 py-2 font-mono text-xs text-cyan-200">code block</div>
         return <p key={index}>{line}</p>
       })}
     </div>
   )
+}
+
+function readmeHeadings(content?: string | null) {
+  return (content || '')
+    .split('\n')
+    .filter(line => /^#{1,3}\s+/.test(line))
+    .map(line => {
+      const depth = line.match(/^#+/)?.[0].length || 1
+      const text = line.replace(/^#+\s*/, '').trim()
+      return { depth, text, id: slugifyHeading(text) }
+    })
+    .filter(heading => heading.text)
 }
 
 function ReviewForm({ listingId }: { listingId: string }) {
@@ -92,8 +120,10 @@ function ReviewForm({ listingId }: { listingId: string }) {
 
 export function MarketplaceDetail() {
   const { slug = '' } = useParams()
+  const navigate = useNavigate()
   const auth = useAuth()
   const [installing, setInstalling] = useState<MarketplaceListing | null>(null)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
   const { data: listing, isLoading } = useQuery({
     queryKey: ['marketplace', 'detail', slug],
     queryFn: () => marketplaceApi.detail(slug),
@@ -143,14 +173,53 @@ export function MarketplaceDetail() {
     )
   }
 
-  const installedPath = listing.listing_type === 'agent' ? '/agents' : listing.listing_type === 'workflow' ? '/workflows' : '/evals'
+  const installedPath = listing.listing_type === 'agent'
+    ? '/agents'
+    : listing.listing_type === 'workflow'
+      ? '/workflows'
+      : listing.listing_type === 'tool_config'
+        ? '/tools'
+        : '/evals'
+  const headings = readmeHeadings(listing.readme)
 
   return (
-    <div className="min-h-screen overflow-y-auto bg-obsidian-950 text-white">
+    <div className="min-h-dvh bg-obsidian-950 text-white">
       <header className="border-b border-white/10 bg-obsidian-950/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
           <Link to="/marketplace" className="btn-ghost px-2"><ArrowLeft size={16} /> Marketplace</Link>
-          <Link to="/" className="flex items-center gap-2 text-sm text-obsidian-400 hover:text-white"><Store size={16} /> Obsidian</Link>
+          <div className="flex items-center gap-2">
+            <Link to="/" className="hidden items-center gap-2 text-sm text-obsidian-400 hover:text-white sm:flex"><Store size={16} /> Obsidian</Link>
+            {auth.isAuthenticated ? (
+              <div className="relative">
+                <button
+                  className="flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-obsidian-200 transition hover:border-white/20 hover:bg-white/[0.07]"
+                  onClick={() => setUserMenuOpen(open => !open)}
+                >
+                  <UserCircle size={17} />
+                  <span className="hidden max-w-36 truncate md:inline">{auth.email || 'Account'}</span>
+                </button>
+                {userMenuOpen && (
+                  <div className="absolute right-0 top-12 z-40 w-56 overflow-hidden rounded-2xl border border-white/10 bg-obsidian-900 shadow-glow-lg">
+                    <div className="border-b border-white/10 px-4 py-3">
+                      <div className="text-xs text-obsidian-500">Signed in as</div>
+                      <div className="mt-0.5 truncate text-sm font-medium text-white">{auth.email || 'Workspace user'}</div>
+                    </div>
+                    <button className="block w-full px-4 py-3 text-left text-sm text-obsidian-300 hover:bg-white/[0.04] hover:text-white" onClick={() => navigate('/')}>
+                      Command Center
+                    </button>
+                    <button
+                      className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-red-200 hover:bg-red-500/10"
+                      onClick={() => { auth.logout(); navigate('/login') }}
+                    >
+                      <LogOut size={15} /> Sign out
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button className="btn-secondary h-10" onClick={() => navigate('/login')}>Sign in</button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -180,11 +249,29 @@ export function MarketplaceDetail() {
 
           {listing.readme && (
             <div className="card p-6">
-              <div className="mb-4 flex items-center justify-between">
+              <div className="mb-5 flex items-center justify-between">
                 <h2 className="text-2xl font-semibold text-white">Readme</h2>
                 <span className="font-mono text-xs text-obsidian-500">Markdown docs</span>
               </div>
-              <MarkdownBlock content={listing.readme} />
+              <div className={headings.length ? 'grid gap-6 lg:grid-cols-[180px_1fr]' : ''}>
+                {headings.length > 0 && (
+                  <nav className="h-max rounded-2xl border border-white/10 bg-white/[0.025] p-3">
+                    <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-obsidian-500">Contents</div>
+                    <div className="space-y-1">
+                      {headings.slice(0, 8).map(heading => (
+                        <a
+                          key={`${heading.id}-${heading.text}`}
+                          className={clsx('block truncate rounded-lg px-2 py-1 text-xs text-obsidian-400 hover:bg-white/[0.04] hover:text-white', heading.depth > 2 && 'pl-4')}
+                          href={`#${heading.id}`}
+                        >
+                          {heading.text}
+                        </a>
+                      ))}
+                    </div>
+                  </nav>
+                )}
+                <MarkdownBlock content={listing.readme} />
+              </div>
             </div>
           )}
 
@@ -220,12 +307,14 @@ export function MarketplaceDetail() {
               {(listing.reviews || []).map(review => (
                 <div key={review.id} className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
                   <div className="flex items-start gap-3">
-                    <AgentAvatar name={review.reviewer_user_id} size="sm" />
+                    <AgentAvatar name={review.reviewer?.name || review.reviewer_user_id} size="sm" />
                     <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium text-white">{review.title || 'Helpful review'}</span>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-obsidian-500">
+                        <span className="font-medium text-white">{review.reviewer?.name || 'Marketplace user'}</span>
                         <span className="font-mono text-xs text-amber-300">{review.rating}★</span>
+                        <span>{formatDistanceToNow(new Date(review.created_at), { addSuffix: true })}</span>
                       </div>
+                      <div className="mt-1 font-medium text-white">{review.title || 'Helpful review'}</div>
                       {review.body && <p className="mt-2 text-sm leading-6 text-obsidian-400">{review.body}</p>}
                     </div>
                   </div>
@@ -244,7 +333,7 @@ export function MarketplaceDetail() {
             </div>
             {installed ? (
               <Link className="btn-secondary h-12 w-full justify-center text-emerald-200" to={`${installedPath}${installedResource ? `?installed=${installedResource}` : ''}`}>
-                ✓ Installed — View in {listing.listing_type === 'agent' ? 'My Team' : listing.listing_type === 'workflow' ? 'Workflows' : 'Eval Lab'}
+                ✓ Installed — View in {listing.listing_type === 'agent' ? 'My Team' : listing.listing_type === 'workflow' ? 'Workflows' : listing.listing_type === 'tool_config' ? 'Tools' : 'Eval Lab'}
               </Link>
             ) : (
               <button className="btn-primary h-12 w-full" onClick={() => setInstalling(listing)}>
@@ -264,7 +353,9 @@ export function MarketplaceDetail() {
               <AgentAvatar name={listing.publisher_org?.name || listing.publisher?.name || 'Community'} size="md" />
               <div>
                 <div className="text-sm font-medium text-white">{listing.publisher_org?.name || listing.publisher?.name || 'Community publisher'}</div>
-                <div className="text-xs text-obsidian-500">Trusted marketplace contributor</div>
+                <div className="text-xs text-obsidian-500">
+                  Trusted contributor · {listing.publisher_other_listing_count ?? 0} other listing{(listing.publisher_other_listing_count ?? 0) === 1 ? '' : 's'}
+                </div>
               </div>
             </div>
           </div>
@@ -280,10 +371,17 @@ export function MarketplaceDetail() {
           <div className="card p-5">
             <h3 className="font-semibold text-white">Version history</h3>
             <div className="mt-3 space-y-2">
-              <div className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
-                <div className="font-mono text-xs text-accent-200">v{listing.version}</div>
-                <div className="mt-1 text-xs text-obsidian-500">Current published version</div>
-              </div>
+              {(listing.version_history?.length ? listing.version_history : [{ version: listing.version, note: 'Current published version', created_at: listing.published_at || listing.created_at }]).slice(0, 3).map((version, index) => (
+                <div key={`${version.version}-${index}`} className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
+                  <div className="font-mono text-xs text-accent-200">v{version.version}</div>
+                  <div className="mt-1 text-xs text-obsidian-500">{version.note || (index === 0 ? 'Current version' : 'Previous version')}</div>
+                  {(version.published_at || version.created_at) && (
+                    <div className="mt-1 text-[11px] text-obsidian-600">
+                      {formatDistanceToNow(new Date(version.published_at || version.created_at || ''), { addSuffix: true })}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
 
@@ -293,7 +391,12 @@ export function MarketplaceDetail() {
             </a>
           )}
 
-          <button className="btn-ghost w-full justify-start text-obsidian-500"><Flag size={15} /> Report listing</button>
+          <button
+            className="btn-ghost w-full justify-start text-obsidian-500"
+            onClick={() => toast.info('Thanks. A marketplace moderator will review this listing.')}
+          >
+            <Flag size={15} /> Report listing
+          </button>
         </aside>
       </main>
 

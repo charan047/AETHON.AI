@@ -3,6 +3,7 @@ import re
 import uuid
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,8 +20,10 @@ from auth.security import (
 )
 from config import settings
 from database.db import get_db
-from database.models import ApiKey, OrgMember, OrgMemberRole, OrgPlan, Organization, User, UserRole
+from database.seed_models import seed_org_default_model
+from database.models import ApiKey, AuditAction, OrgMember, OrgMemberRole, OrgPlan, Organization, User, UserRole
 from middleware.rate_limit import limiter
+from services import audit_log_service
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -90,6 +93,7 @@ def _token_response_for_user(user: User) -> TokenResponse:
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     payload: RegisterRequest,
+    request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
@@ -121,16 +125,28 @@ async def register(
         owner_user_id=user.id,
         billing_email=user.email,
     )
+    db.add(org)
+    await db.flush()
     member = OrgMember(
         id=str(uuid.uuid4()),
         org_id=org.id,
         user_id=user.id,
         role=OrgMemberRole.owner,
     )
-    db.add(org)
     db.add(member)
     await db.commit()
+    await seed_org_default_model(org.id, db)
     await db.refresh(user)
+    await audit_log_service.log(
+        AuditAction.user_registered,
+        user_id=user.id,
+        org_id=org.id,
+        resource_type="user",
+        resource_id=user.id,
+        request=request,
+        details={"email": user.email},
+        db=db,
+    )
     tokens = _token_response_for_user(user)
     _set_refresh_cookie(response, tokens.refresh_token)
     return tokens
@@ -149,12 +165,43 @@ async def login(
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalars().first()
     if not user or not verify_password(payload.password, user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=invalid_msg)
+        await audit_log_service.log(
+            AuditAction.user_login_failed,
+            request=request,
+            details={"email": str(payload.email).lower()},
+            db=db,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": invalid_msg},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is disabled")
+        await audit_log_service.log(
+            AuditAction.user_login_failed,
+            user_id=user.id,
+            request=request,
+            details={"email": user.email, "reason": "disabled"},
+            db=db,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "User account is disabled"},
+        )
 
     tokens = _token_response_for_user(user)
+    org_id = await db.scalar(select(OrgMember.org_id).where(OrgMember.user_id == user.id).limit(1))
+    await audit_log_service.log(
+        AuditAction.user_login,
+        user_id=user.id,
+        org_id=org_id,
+        resource_type="user",
+        resource_id=user.id,
+        request=request,
+        details={"email": user.email},
+        db=db,
+    )
     _set_refresh_cookie(response, tokens.refresh_token)
     return tokens
 
@@ -204,6 +251,7 @@ async def logout(response: Response) -> Response:
 @router.post("/api-keys")
 async def create_api_key(
     name: str = Query(..., min_length=1, max_length=100),
+    request: Request = None,
     current_user: User = Depends(get_current_user),
     ctx: OrgContext = Depends(get_org_context),
     db: AsyncSession = Depends(get_db),
@@ -221,6 +269,16 @@ async def create_api_key(
     db.add(api_key)
     await db.commit()
     await db.refresh(api_key)
+    await audit_log_service.log(
+        AuditAction.api_key_created,
+        user_id=current_user.id,
+        org_id=ctx.org.id,
+        resource_type="api_key",
+        resource_id=api_key.id,
+        request=request,
+        details={"name": api_key.name, "prefix": api_key.key_prefix},
+        db=db,
+    )
     return {
         "api_key": raw_key,
         "message": "Save this key — it will not be shown again",
@@ -257,6 +315,7 @@ async def list_api_keys(
 @router.delete("/api-keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_api_key(
     key_id: str,
+    request: Request,
     current_user: User = Depends(get_current_user),
     ctx: OrgContext = Depends(get_org_context),
     db: AsyncSession = Depends(get_db),
@@ -270,4 +329,14 @@ async def revoke_api_key(
 
     api_key.is_active = False
     await db.commit()
+    await audit_log_service.log(
+        AuditAction.api_key_revoked,
+        user_id=current_user.id,
+        org_id=ctx.org.id,
+        resource_type="api_key",
+        resource_id=api_key.id,
+        request=request,
+        details={"name": api_key.name, "prefix": api_key.key_prefix},
+        db=db,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

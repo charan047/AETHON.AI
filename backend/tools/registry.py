@@ -1,8 +1,10 @@
-from typing import Type
-import asyncio
+from __future__ import annotations
+
+from collections import OrderedDict
 import logging
 import sys
 import time
+from typing import Dict, List, Optional, Type
 
 from tools.base import BaseTool, ToolCategory, ToolHealth
 
@@ -11,74 +13,199 @@ logger = logging.getLogger("tool_registry")
 
 
 class ToolRegistry:
-    """
-    Central registry of all available tools.
-    Manages instantiation, health monitoring, and discovery.
-    A $10M company treats this like a service catalog.
-    """
+    _instance: Optional["ToolRegistry"] = None
 
-    _tools: dict[str, Type[BaseTool]] = {}
-    _instances: dict[str, BaseTool] = {}
-    _health_cache: dict[str, tuple[ToolHealth, str, float]] = {}
-    _health_check_interval: int = 300
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._tool_classes: Dict[str, Type[BaseTool]] = {}
+            cls._instance._tool_instances: Dict[str, BaseTool] = {}
+            cls._instance._catalog_instances: Dict[str, BaseTool] = {}
+            cls._instance._instances: "OrderedDict[str, tuple[BaseTool, float]]" = OrderedDict()
+            cls._instance._health_cache: dict[str, tuple[ToolHealth, str, float]] = {}
+            cls._instance._health_check_interval = 300
+            cls._instance._instance_cache_max = 256
+            cls._instance._instance_ttl_seconds = 1800
+        return cls._instance
 
-    @classmethod
-    def register(cls, tool_class: Type[BaseTool]):
-        """Decorator to register a tool class."""
-        cls._tools[tool_class.name] = tool_class
-        return tool_class
+    def register(self, tool: BaseTool | Type[BaseTool]):
+        """
+        Register either a tool instance (Phase 8 style) or a tool class
+        (existing decorator style). Returning the original object keeps the
+        decorator-based registrations working unchanged.
+        """
+        if isinstance(tool, type) and issubclass(tool, BaseTool):
+            name = tool.name
+            if not name:
+                raise ValueError("Registered tool classes must define a non-empty name")
+            if name in self._tool_instances:
+                logger.info("Tool already registered, keeping existing implementation: %s", name)
+                return tool
+            if name in self._tool_classes:
+                logger.info("Tool class already registered, keeping existing implementation: %s", name)
+                return tool
+            self._tool_classes[name] = tool
+            logger.info("Registered tool class: %s", name)
+            return tool
 
-    @classmethod
-    def get_available_tools(cls) -> list[dict]:
-        """Returns catalog of all registered tools with metadata."""
+        if isinstance(tool, BaseTool):
+            if not tool.name:
+                raise ValueError("Registered tool instances must define a non-empty name")
+            self._tool_classes.pop(tool.name, None)
+            self._tool_instances.pop(tool.name, None)
+            self._catalog_instances.pop(tool.name, None)
+            self._tool_instances[tool.name] = tool
+            logger.info("Registered tool instance: %s", tool.name)
+            return tool
+
+        raise TypeError("tool_registry.register expects a BaseTool instance or BaseTool subclass")
+
+    def _category_value(self, category: str | ToolCategory) -> str:
+        return category.value if isinstance(category, ToolCategory) else str(category)
+
+    def _get_catalog_instance(self, name: str) -> Optional[BaseTool]:
+        if name in self._tool_instances:
+            return self._tool_instances[name]
+        cached = self._catalog_instances.get(name)
+        if cached is not None:
+            return cached
+        tool_class = self._tool_classes.get(name)
+        if tool_class is None:
+            return None
+        try:
+            instance = tool_class(user_id="system", config={})
+        except TypeError:
+            instance = tool_class()  # pragma: no cover - compatibility fallback
+        self._catalog_instances[name] = instance
+        return instance
+
+    def get(self, name: str) -> Optional[BaseTool]:
+        return self._get_catalog_instance(name)
+
+    def get_all(self) -> List[BaseTool]:
+        names = list(dict.fromkeys([*self._tool_instances.keys(), *self._tool_classes.keys()]))
+        tools: List[BaseTool] = []
+        for name in names:
+            tool = self.get(name)
+            if tool:
+                tools.append(tool)
+        return tools
+
+    def get_by_category(self, category: str) -> List[BaseTool]:
         return [
-            {
-                "name": tool_class.name,
-                "description": tool_class.description,
-                "category": tool_class.category,
-                "requires_auth": tool_class.requires_auth,
-                "rate_limit_per_minute": tool_class.rate_limit_per_minute,
-                "health": cls._health_cache.get(tool_class.name, (ToolHealth.unchecked, "", 0))[0],
-            }
-            for tool_class in cls._tools.values()
+            tool
+            for tool in self.get_all()
+            if self._category_value(tool.category) == category
         ]
 
-    @classmethod
+    def get_for_agent(self, tool_names: List[str]) -> List[BaseTool]:
+        """Get specific tools for an agent."""
+        tools: List[BaseTool] = []
+        for name in tool_names:
+            tool = self.get(name)
+            if tool:
+                tools.append(tool)
+            else:
+                logger.warning("Tool not found: %s", name)
+        return tools
+
+    def to_openai_functions(self, tool_names: List[str]) -> List[dict]:
+        """Get OpenAI function-calling format for an agent."""
+        return [tool.to_openai_function() for tool in self.get_for_agent(tool_names)]
+
+    def load_all_tools(self) -> None:
+        """Auto-load all Phase 8 tool modules from the tools directory."""
+        tool_modules = [
+            "backend.tools.research.web_search",
+            "backend.tools.research.web_scrape",
+            "backend.tools.research.news_search",
+            "backend.tools.communication.gmail",
+            "backend.tools.communication.slack",
+            "backend.tools.productivity.google_docs",
+            "backend.tools.productivity.google_sheets",
+            "backend.tools.code.code_executor",
+            "backend.tools.file.csv_parser",
+            "backend.tools.file.pdf_parser",
+        ]
+        for module_path in tool_modules:
+            for candidate in (module_path, module_path.removeprefix("backend.")):
+                try:
+                    module = __import__(candidate, fromlist=["register_tool"])
+                    if hasattr(module, "register_tool"):
+                        module.register_tool(self)
+                    break
+                except ImportError as exc:
+                    if candidate == module_path.removeprefix("backend."):
+                        logger.warning("Could not load tool module %s: %s", module_path, exc)
+
+    def get_available_tools(self) -> list[dict]:
+        """Return a catalog of all registered tools with metadata."""
+        available = []
+        for tool in self.get_all():
+            health = self._health_cache.get(tool.name, (ToolHealth.unchecked, "", 0))[0]
+            available.append(
+                {
+                    "name": tool.name,
+                    "display_name": tool.display_name,
+                    "description": tool.description,
+                    "category": self._category_value(tool.category),
+                    "requires_auth": tool.requires_auth,
+                    "auth_type": tool.auth_type,
+                    "rate_limit_per_minute": getattr(tool, "rate_limit_per_minute", 60),
+                    "health": health,
+                }
+            )
+        return available
+
     async def get_tool_instance(
-        cls,
+        self,
         tool_name: str,
         user_id: str,
         config: dict | None = None,
     ) -> BaseTool:
-        """Gets or creates a tool instance for a user. Cached per session."""
+        """Get or create a user-scoped tool instance."""
         cache_key = f"{user_id}:{tool_name}"
-        if cache_key not in cls._instances:
-            tool_class = cls._tools.get(tool_name)
-            if not tool_class:
-                raise ValueError(f"Tool '{tool_name}' not registered")
-            cls._instances[cache_key] = tool_class(user_id=user_id, config=config)
-        elif config:
-            cls._instances[cache_key].config.update(config)
-        return cls._instances[cache_key]
+        self._evict_expired_instances()
+        cached_entry = self._instances.get(cache_key)
+        if cached_entry is not None:
+            instance, _ = cached_entry
+            if config:
+                instance.config.update(config)
+            self._instances.pop(cache_key, None)
+            self._instances[cache_key] = (instance, time.time())
+            return instance
 
-    @classmethod
+        if tool_name in self._tool_instances:
+            tool_class = self._tool_instances[tool_name].__class__
+        else:
+            tool_class = self._tool_classes.get(tool_name)
+        if tool_class is None:
+            raise ValueError(f"Tool '{tool_name}' not registered")
+
+        try:
+            instance = tool_class(user_id=user_id, config=config)
+        except TypeError:
+            instance = tool_class()  # pragma: no cover - compatibility fallback
+            instance.user_id = user_id
+            instance.config = config or {}
+
+        self._instances[cache_key] = (instance, time.time())
+        self._evict_overflow_instances()
+        return instance
+
     async def get_langchain_tools_for_agent(
-        cls,
+        self,
         tool_names: list[str],
         user_id: str,
         integrations: dict | None = None,
     ) -> list:
-        """
-        Main function called by AgentRunner.
-        Returns list of LangChain tool objects ready for create_react_agent.
-        """
         langchain_tools = []
         integrations = integrations or {}
 
         for tool_name in tool_names:
             try:
                 config = integrations.get(tool_name, {})
-                instance = await cls.get_tool_instance(tool_name, user_id, config)
+                instance = await self.get_tool_instance(tool_name, user_id, config)
                 tools = await instance.get_langchain_tools()
                 langchain_tools.extend(tools)
             except Exception as exc:
@@ -86,30 +213,37 @@ class ToolRegistry:
 
         return langchain_tools
 
-    @classmethod
-    async def run_health_checks(cls):
-        """
-        Background task. Runs health checks on all registered tools.
-        Call this every 5 minutes from main.py lifespan.
-        """
-        for name, tool_class in cls._tools.items():
-            if not tool_class.supports_health_check:
+    async def run_health_checks(self):
+        for tool in self.get_all():
+            if not getattr(tool, "supports_health_check", True):
                 continue
             try:
-                instance = tool_class(user_id="system", config={})
-                health, message = await instance.health_check()
-                cls._health_cache[name] = (health, message, time.time())
+                health, message = await tool.health_check()
+                self._health_cache[tool.name] = (health, message, time.time())
             except Exception as exc:
-                cls._health_cache[name] = (ToolHealth.unhealthy, str(exc), time.time())
+                self._health_cache[tool.name] = (ToolHealth.unhealthy, str(exc), time.time())
 
-    @classmethod
-    async def clear_user_cache(cls, user_id: str):
-        """Call when user updates their integrations."""
-        keys_to_remove = [key for key in cls._instances if key.startswith(f"{user_id}:")]
+    async def clear_user_cache(self, user_id: str):
+        keys_to_remove = [key for key in self._instances if key.startswith(f"{user_id}:")]
         for key in keys_to_remove:
-            del cls._instances[key]
+            del self._instances[key]
+
+    def _evict_expired_instances(self):
+        now = time.time()
+        expired = [
+            key
+            for key, (_, last_used_at) in self._instances.items()
+            if now - last_used_at > self._instance_ttl_seconds
+        ]
+        for key in expired:
+            self._instances.pop(key, None)
+
+    def _evict_overflow_instances(self):
+        while len(self._instances) > self._instance_cache_max:
+            self._instances.popitem(last=False)
 
 
+# Global singleton
 tool_registry = ToolRegistry()
 
 
@@ -124,6 +258,7 @@ def _register_runtime_tool(
         pass
 
     RuntimeToolAdapter.name = name
+    RuntimeToolAdapter.display_name = name.replace("_", " ").title()
     RuntimeToolAdapter.description = description
     RuntimeToolAdapter.category = category
     RuntimeToolAdapter.requires_auth = False
@@ -155,11 +290,11 @@ def _register_runtime_tool(
     RuntimeToolAdapter.health_check = health_check
     RuntimeToolAdapter.__name__ = f"{name.title().replace('_', '')}Tool"
     RuntimeToolAdapter.__abstractmethods__ = frozenset()
-    ToolRegistry.register(RuntimeToolAdapter)
+    tool_registry.register(RuntimeToolAdapter)
 
 
 def register_default_tools() -> None:
-    """Register built-in tools and integration tools once."""
+    """Register the current built-in runtime tools and legacy implementations."""
     from runtime.tools import calculator, datetime_tool, http_request, text_analysis, web_search
 
     def import_if_ready(module_name: str, class_name: str) -> bool:
@@ -171,6 +306,7 @@ def register_default_tools() -> None:
 
     import_if_ready("tools.implementations.code_executor", "CodeExecutorTool")
     import_if_ready("tools.implementations.code_review_tool", "CodeReviewTool")
+    import_if_ready("tools.implementations.agent_tool", "AgentTool")
     import_if_ready("tools.implementations.email_tool", "EmailTool")
     import_if_ready("tools.implementations.notifications_tool", "NotificationsTool")
     import_if_ready("tools.implementations.slack_tool", "SlackTool")
@@ -180,42 +316,38 @@ def register_default_tools() -> None:
         import_if_ready("tools.implementations.research_tool", "ResearchTool")
     import_if_ready("tools.implementations.github_tool", "GitHubTool")
 
-    if "web_search" not in ToolRegistry._tools:
-        _register_runtime_tool(
-            "web_search",
-            "Search the internet for information about a topic.",
-            ToolCategory.web,
-            web_search,
-            rate_limit_per_minute=30,
-        )
-    if "calculator" not in ToolRegistry._tools:
-        _register_runtime_tool(
-            "calculator",
-            "Evaluate mathematical expressions safely.",
-            ToolCategory.data,
-            calculator,
-        )
-    if "http_request" not in ToolRegistry._tools:
-        _register_runtime_tool(
-            "http_request",
-            "Make an HTTP GET request and return a response preview.",
-            ToolCategory.web,
-            http_request,
-            rate_limit_per_minute=30,
-        )
-    if "datetime_tool" not in ToolRegistry._tools:
-        _register_runtime_tool(
-            "datetime_tool",
-            "Get the current date and time.",
-            ToolCategory.productivity,
-            datetime_tool,
-        )
-    if "text_analysis" not in ToolRegistry._tools:
-        _register_runtime_tool(
-            "text_analysis",
-            "Analyze text length and basic statistics.",
-            ToolCategory.data,
-            text_analysis,
-        )
+    _register_runtime_tool(
+        "web_search",
+        "Search the internet for information about a topic.",
+        ToolCategory.web,
+        web_search,
+        rate_limit_per_minute=30,
+    )
+    _register_runtime_tool(
+        "calculator",
+        "Evaluate mathematical expressions safely.",
+        ToolCategory.data,
+        calculator,
+    )
+    _register_runtime_tool(
+        "http_request",
+        "Make an HTTP GET request and return a response preview.",
+        ToolCategory.web,
+        http_request,
+        rate_limit_per_minute=30,
+    )
+    _register_runtime_tool(
+        "datetime_tool",
+        "Get the current date and time.",
+        ToolCategory.productivity,
+        datetime_tool,
+    )
+    _register_runtime_tool(
+        "text_analysis",
+        "Analyze text length and basic statistics.",
+        ToolCategory.data,
+        text_analysis,
+    )
+
 
 register_default_tools()

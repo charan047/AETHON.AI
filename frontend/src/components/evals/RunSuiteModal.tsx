@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Play, X } from 'lucide-react'
-import toast from 'react-hot-toast'
 import { clsx } from 'clsx'
 import { evalsApi } from '../../api/client'
 import { useWebSocket } from '../../contexts/WebSocketContext'
 import type { EvalSuite } from '../../types'
 import { ScoreBadge } from './ScoreBadge'
+import { toast } from '../../lib/toast'
 
 export function RunSuiteModal({
   suite,

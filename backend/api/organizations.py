@@ -3,7 +3,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth.dependencies import get_current_user
 from auth.org_context import get_org_context, require_org_admin, require_org_owner
 from database.db import get_db
-from database.models import OrgInvite, OrgMember, OrgMemberRole, OrgPlan, Organization, User
+from database.seed_models import seed_org_default_model
+from database.models import AuditAction, OrgInvite, OrgMember, OrgMemberRole, OrgPlan, Organization, User
+from services import audit_log_service
+from utils.sanitize import validate_url
 
 
 router = APIRouter()
@@ -24,6 +27,7 @@ class OrganizationCreate(BaseModel):
 
 class OrganizationUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
+    slug: str | None = Field(default=None, min_length=1, max_length=100)
     timezone: str | None = Field(default=None, max_length=50)
     logo_url: str | None = Field(default=None, max_length=500)
 
@@ -31,6 +35,7 @@ class OrganizationUpdate(BaseModel):
 class InviteCreate(BaseModel):
     email: str = Field(..., min_length=3, max_length=255)
     role: OrgMemberRole = OrgMemberRole.member
+    message: str | None = Field(default=None, max_length=1000)
 
 
 class RoleUpdate(BaseModel):
@@ -91,6 +96,23 @@ def _member_payload(member: OrgMember, user: User | None = None) -> dict:
         "role": _enum_value(member.role),
         "invited_by_user_id": member.invited_by_user_id,
         "joined_at": member.joined_at,
+        "last_active_at": user.updated_at or user.created_at if user else None,
+    }
+
+
+def _invite_payload(invite: OrgInvite, inviter: User | None = None) -> dict:
+    return {
+        "id": invite.id,
+        "org_id": invite.org_id,
+        "email": invite.email,
+        "role": _enum_value(invite.role),
+        "token": invite.token,
+        "invited_by_user_id": invite.invited_by_user_id,
+        "invited_by": inviter.full_name or inviter.email if inviter else None,
+        "accepted_at": invite.accepted_at,
+        "created_at": invite.created_at,
+        "expires_at": invite.expires_at,
+        "invite_url": f"/invite/{invite.token}",
     }
 
 
@@ -125,18 +147,31 @@ async def my_organizations(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    member_count_sq = (
+        select(
+            OrgMember.org_id,
+            func.count(OrgMember.id).label("member_count"),
+        )
+        .group_by(OrgMember.org_id)
+        .subquery()
+    )
+
     result = await db.execute(
-        select(Organization, OrgMember)
+        select(
+            Organization,
+            OrgMember.role,
+            func.coalesce(member_count_sq.c.member_count, 0).label("member_count"),
+        )
         .join(OrgMember, OrgMember.org_id == Organization.id)
+        .outerjoin(member_count_sq, member_count_sq.c.org_id == Organization.id)
         .where(OrgMember.user_id == current_user.id, Organization.is_active == True)  # noqa: E712
         .order_by(OrgMember.joined_at.asc())
     )
     rows = result.all()
-    payload = []
-    for org, member in rows:
-        count = await db.scalar(select(func.count(OrgMember.id)).where(OrgMember.org_id == org.id)) or 0
-        payload.append(_org_payload(org, role=member.role, member_count=count))
-    return payload
+    return [
+        _org_payload(org, role=role, member_count=member_count)
+        for org, role, member_count in rows
+    ]
 
 
 @router.post("/organizations", status_code=201)
@@ -159,15 +194,17 @@ async def create_organization(
         owner_user_id=current_user.id,
         billing_email=current_user.email,
     )
+    db.add(org)
+    await db.flush()
     member = OrgMember(
         id=str(uuid.uuid4()),
         org_id=org.id,
         user_id=current_user.id,
         role=OrgMemberRole.owner,
     )
-    db.add(org)
     db.add(member)
     await db.commit()
+    await seed_org_default_model(org.id, db)
     await db.refresh(org)
     return _org_payload(org, role=OrgMemberRole.owner, member_count=1)
 
@@ -195,12 +232,38 @@ async def update_organization(
     org, member = await _get_org_member_or_403(org_id, current_user.id, db)
     if member.role not in (OrgMemberRole.owner, OrgMemberRole.admin):
         raise HTTPException(status_code=403, detail="Organization admin access required")
-    for field, value in data.model_dump(exclude_none=True).items():
+    updates = data.model_dump(exclude_none=True)
+    if "logo_url" in updates and not validate_url(updates["logo_url"]):
+        raise HTTPException(status_code=400, detail="Invalid logo URL")
+    owner_only_fields = {"name", "slug", "logo_url"}
+    if owner_only_fields.intersection(updates) and member.role != OrgMemberRole.owner:
+        raise HTTPException(status_code=403, detail="Only the organization owner can update identity settings")
+    if "slug" in updates:
+        next_slug = _slugify(updates.pop("slug"))
+        existing = await db.scalar(select(Organization.id).where(Organization.slug == next_slug, Organization.id != org_id))
+        if existing:
+            raise HTTPException(status_code=400, detail="Organization slug is already taken")
+        org.slug = next_slug
+    for field, value in updates.items():
         setattr(org, field, value)
     org.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(org)
     return _org_payload(org, role=member.role)
+
+
+@router.delete("/organizations/{org_id}", status_code=204)
+async def delete_organization(
+    org_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    org, member = await _get_org_member_or_403(org_id, current_user.id, db)
+    if member.role != OrgMemberRole.owner:
+        raise HTTPException(status_code=403, detail="Only the organization owner can delete this organization")
+    org.is_active = False
+    org.updated_at = datetime.now(timezone.utc)
+    await db.commit()
 
 
 @router.get("/organizations/{org_id}/members")
@@ -223,6 +286,8 @@ async def create_invite(
     org, member = await _get_org_member_or_403(org_id, current_user.id, db)
     if member.role not in (OrgMemberRole.owner, OrgMemberRole.admin):
         raise HTTPException(status_code=403, detail="Organization admin access required")
+    if data.role == OrgMemberRole.owner:
+        raise HTTPException(status_code=400, detail="Cannot invite a member as owner")
 
     invite = OrgInvite(
         id=str(uuid.uuid4()),
@@ -236,13 +301,66 @@ async def create_invite(
     db.add(invite)
     await db.commit()
     await db.refresh(invite)
-    return {
-        "id": invite.id,
-        "email": invite.email,
-        "role": _enum_value(invite.role),
-        "expires_at": invite.expires_at,
-        "invite_url": f"https://platform.com/invite/{invite.token}",
-    }
+    return _invite_payload(invite, current_user)
+
+
+@router.get("/organizations/{org_id}/invites")
+async def list_invites(
+    org_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    org, member = await _get_org_member_or_403(org_id, current_user.id, db)
+    if member.role not in (OrgMemberRole.owner, OrgMemberRole.admin):
+        raise HTTPException(status_code=403, detail="Organization admin access required")
+    result = await db.execute(
+        select(OrgInvite, User)
+        .join(User, OrgInvite.invited_by_user_id == User.id)
+        .where(
+            OrgInvite.org_id == org.id,
+            OrgInvite.accepted_at.is_(None),
+            OrgInvite.expires_at > datetime.now(timezone.utc),
+        )
+        .order_by(OrgInvite.created_at.desc())
+    )
+    return [_invite_payload(invite, inviter) for invite, inviter in result.all()]
+
+
+@router.post("/organizations/{org_id}/invites/{invite_id}/resend")
+async def resend_invite(
+    org_id: str,
+    invite_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    org, member = await _get_org_member_or_403(org_id, current_user.id, db)
+    if member.role not in (OrgMemberRole.owner, OrgMemberRole.admin):
+        raise HTTPException(status_code=403, detail="Organization admin access required")
+    invite = await db.scalar(select(OrgInvite).where(OrgInvite.id == invite_id, OrgInvite.org_id == org.id))
+    if not invite or invite.accepted_at:
+        raise HTTPException(status_code=404, detail="Pending invite not found")
+    invite.token = secrets.token_urlsafe(32)
+    invite.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    await db.commit()
+    await db.refresh(invite)
+    return _invite_payload(invite, await db.get(User, invite.invited_by_user_id))
+
+
+@router.delete("/organizations/{org_id}/invites/{invite_id}", status_code=204)
+async def revoke_invite(
+    org_id: str,
+    invite_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    org, member = await _get_org_member_or_403(org_id, current_user.id, db)
+    if member.role not in (OrgMemberRole.owner, OrgMemberRole.admin):
+        raise HTTPException(status_code=403, detail="Organization admin access required")
+    invite = await db.scalar(select(OrgInvite).where(OrgInvite.id == invite_id, OrgInvite.org_id == org.id))
+    if not invite or invite.accepted_at:
+        raise HTTPException(status_code=404, detail="Pending invite not found")
+    await db.delete(invite)
+    await db.commit()
 
 
 @router.get("/invites/{token}")
@@ -265,6 +383,7 @@ async def get_invite(
     if invite.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Invite expired")
     return {
+        "org_id": org.id,
         "org_name": org.name,
         "org_slug": org.slug,
         "email": invite.email,
@@ -305,26 +424,41 @@ async def accept_invite(
         )
     invite.accepted_at = datetime.now(timezone.utc)
     await db.commit()
-    return {"accepted": True, "org_id": invite.org_id}
+    org = await db.get(Organization, invite.org_id)
+    return {"accepted": True, "org_id": invite.org_id, "org_name": org.name if org else None}
 
 
 @router.delete("/organizations/{org_id}/members/{user_id}", status_code=204)
 async def remove_member(
     org_id: str,
     user_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     org, member = await _get_org_member_or_403(org_id, current_user.id, db)
     if member.role not in (OrgMemberRole.owner, OrgMemberRole.admin):
         raise HTTPException(status_code=403, detail="Organization admin access required")
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You cannot remove yourself")
     if user_id == org.owner_user_id:
         raise HTTPException(status_code=400, detail="Cannot remove the organization owner")
     target = await db.scalar(select(OrgMember).where(OrgMember.org_id == org_id, OrgMember.user_id == user_id))
     if not target:
         raise HTTPException(status_code=404, detail="Member not found")
+    removed_role = _enum_value(target.role)
     await db.delete(target)
     await db.commit()
+    await audit_log_service.log(
+        AuditAction.org_member_removed,
+        user_id=current_user.id,
+        org_id=org_id,
+        resource_type="org_member",
+        resource_id=user_id,
+        request=request,
+        details={"removed_user_id": user_id, "role": removed_role},
+        db=db,
+    )
 
 
 @router.put("/organizations/{org_id}/members/{user_id}/role")
@@ -332,18 +466,34 @@ async def change_member_role(
     org_id: str,
     user_id: str,
     data: RoleUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     org, member = await _get_org_member_or_403(org_id, current_user.id, db)
-    if member.role != OrgMemberRole.owner:
-        raise HTTPException(status_code=403, detail="Only the owner can change member roles")
+    if member.role not in (OrgMemberRole.owner, OrgMemberRole.admin):
+        raise HTTPException(status_code=403, detail="Organization admin access required")
     if user_id == org.owner_user_id:
         raise HTTPException(status_code=400, detail="Cannot change the owner's role")
     target = await db.scalar(select(OrgMember).where(OrgMember.org_id == org_id, OrgMember.user_id == user_id))
     if not target:
         raise HTTPException(status_code=404, detail="Member not found")
+    if member.role != OrgMemberRole.owner and (target.role == OrgMemberRole.admin or data.role == OrgMemberRole.admin):
+        raise HTTPException(status_code=403, detail="Only the owner can change admin roles")
+    if data.role == OrgMemberRole.owner:
+        raise HTTPException(status_code=400, detail="Ownership transfer is not supported here")
+    previous_role = _enum_value(target.role)
     target.role = data.role
     await db.commit()
     await db.refresh(target)
+    await audit_log_service.log(
+        AuditAction.org_member_role_changed,
+        user_id=current_user.id,
+        org_id=org_id,
+        resource_type="org_member",
+        resource_id=user_id,
+        request=request,
+        details={"previous_role": previous_role, "new_role": _enum_value(data.role)},
+        db=db,
+    )
     return _member_payload(target, await db.get(User, user_id))

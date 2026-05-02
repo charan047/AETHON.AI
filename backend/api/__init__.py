@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from config import settings
 from .auth import router as auth_router
 from .agents import router as agents_router
 from .workflows import router as workflows_router
@@ -22,6 +23,13 @@ from .evals import router as evals_router
 from .organizations import router as organizations_router
 from .billing import router as billing_router
 from .marketplace import router as marketplace_router
+from .models import public_router as public_models_router
+from .models import router as models_router, agent_model_router
+from .audit_logs import router as audit_logs_router
+if settings.enable_testing_api or settings.environment == "test":
+    from .testing import router as testing_router
+else:
+    testing_router = None
 
 api_router = APIRouter()
 api_router.include_router(auth_router)
@@ -47,3 +55,9 @@ api_router.include_router(evals_router, prefix="/evals", tags=["evals"])
 api_router.include_router(organizations_router, tags=["organizations"])
 api_router.include_router(billing_router, prefix="/billing", tags=["billing"])
 api_router.include_router(marketplace_router, prefix="/marketplace", tags=["marketplace"])
+api_router.include_router(public_models_router)
+api_router.include_router(models_router)
+api_router.include_router(agent_model_router)
+api_router.include_router(audit_logs_router)
+if testing_router is not None:
+    api_router.include_router(testing_router)

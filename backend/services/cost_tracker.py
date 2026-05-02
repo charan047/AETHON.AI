@@ -83,7 +83,7 @@ class CostTracker:
             )
         )
         await db.commit()
-        await self.check_budget_alert(user_id, db)
+        await self.check_budget_alert(user_id, execution.org_id, db)
         return cost
 
     async def get_user_costs(
@@ -142,19 +142,28 @@ class CostTracker:
             if owns_session:
                 await db.close()
 
-    async def check_budget_alert(self, user_id: str, db: AsyncSession | None = None) -> None:
+    async def check_budget_alert(self, user_id: str, org_id: str, db: AsyncSession | None = None) -> None:
         owns_session = db is None
         if owns_session:
             db = AsyncSessionLocal()
 
         try:
-            profile = await db.scalar(select(CompanyProfile).where(CompanyProfile.user_id == user_id))
+            profile = await db.scalar(
+                select(CompanyProfile).where(
+                    CompanyProfile.user_id == user_id,
+                    CompanyProfile.org_id == org_id,
+                )
+            )
             budget = float(getattr(profile, "monthly_budget_usd", 50.0) or 50.0)
             month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             spend = await db.scalar(
-                select(func.coalesce(func.sum(ExecutionCostLog.cost_usd), 0.0)).where(
+                select(func.coalesce(func.sum(ExecutionCostLog.cost_usd), 0.0))
+                .select_from(ExecutionCostLog)
+                .join(Execution, Execution.id == ExecutionCostLog.execution_id)
+                .where(
                     ExecutionCostLog.user_id == user_id,
                     ExecutionCostLog.created_at >= month_start,
+                    Execution.org_id == org_id,
                 )
             ) or 0.0
 
@@ -165,6 +174,7 @@ class CostTracker:
             await ws_manager.broadcast(
                 {
                     "type": event_type,
+                    "org_id": org_id,
                     "user_id": user_id,
                     "monthly_spend": round(spend, 4),
                     "monthly_budget": budget,
@@ -175,6 +185,7 @@ class CostTracker:
                 db.add(
                     InAppNotification(
                         id=str(uuid.uuid4()),
+                        org_id=org_id,
                         user_id=user_id,
                         title="Monthly AI budget exceeded",
                         message=f"This month's AI spend is ${spend:.2f}, above your ${budget:.2f} budget.",
@@ -188,8 +199,8 @@ class CostTracker:
                 await db.close()
 
     async def _infer_user_id(self, execution: Execution, db: AsyncSession) -> str | None:
-        # Workflows are currently global in this schema. Prefer an existing cost
-        # owner for this execution, otherwise fall back to the first company owner.
+        # Prefer an existing cost owner for this execution; otherwise resolve
+        # the founder from the execution's organization.
         existing = await db.scalar(
             select(ExecutionCostLog.user_id)
             .where(ExecutionCostLog.execution_id == execution.id)
@@ -197,7 +208,9 @@ class CostTracker:
         )
         if existing:
             return existing
-        profile = await db.scalar(select(CompanyProfile).limit(1))
+        profile = await db.scalar(
+            select(CompanyProfile).where(CompanyProfile.org_id == execution.org_id).limit(1)
+        )
         return profile.user_id if profile else None
 
 

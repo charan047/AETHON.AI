@@ -3,6 +3,7 @@ import type {
   Agent,
   Workflow,
   Execution,
+  ExecutionRunResponse,
   Stats,
   Template,
   ApprovalRequest,
@@ -10,6 +11,7 @@ import type {
   AgentMemoryStats,
   AgentMemoryItem,
   OnboardingStatus,
+  OnboardingHireResponse,
   CompanyProfile,
   CompanyProfileInput,
   CompanyState,
@@ -35,24 +37,50 @@ import type {
   EvalRunsResponse,
   EvalSuite,
   BillingPlan,
-  BillingPlanResponse,
+  BillingPlansResponse,
+  BillingInvoice,
+  BillingPaymentMethod,
+  BillingSubscriptionResponse,
+  BillingUpcomingInvoice,
   BillingUsageSummary,
+  InviteDetails,
+  LongTaskStatus,
   MarketplaceCategory,
   MarketplaceInstall,
   MarketplaceListing,
   MarketplaceListingType,
   MarketplaceSearchResponse,
+  ModelConfigRecord,
+  ModelTemplate,
+  ModelTestResult,
+  Organization,
+  OrgInvite,
+  OrgPlan,
+  OrgMember,
+  OrgMemberRole,
   ScoringMethod,
 } from '../types'
 
 export const api = axios.create({ baseURL: '/api', withCredentials: true })
+export const apiClient = api
+export const ACTIVE_ORG_STORAGE_KEY = 'ai-company-os-active-org-id'
+
+const storedOrgId = typeof window !== 'undefined' ? window.localStorage.getItem(ACTIVE_ORG_STORAGE_KEY) : null
+if (storedOrgId) {
+  api.defaults.headers.common['X-Org-Id'] = storedOrgId
+}
 
 api.interceptors.response.use(
   response => response,
   error => {
     const payload = error?.response?.data
-    if (error?.response?.status === 429 && payload?.code === 'plan_limit_reached') {
-      window.dispatchEvent(new CustomEvent('plan-limit-hit', { detail: payload }))
+    const limitPayload = payload?.code === 'plan_limit_reached'
+      ? payload
+      : payload?.detail?.code === 'plan_limit_reached'
+        ? payload.detail
+        : null
+    if ((error?.response?.status === 429 || error?.response?.status === 403) && limitPayload) {
+      window.dispatchEvent(new CustomEvent('plan-limit-hit', { detail: limitPayload }))
     }
     return Promise.reject(error)
   },
@@ -65,11 +93,18 @@ export const agentsApi = {
   create: (data: Partial<Agent>) => api.post<Agent>('/agents', data).then(r => r.data),
   update: (id: string, data: Partial<Agent>) => api.put<Agent>(`/agents/${id}`, data).then(r => r.data),
   delete: (id: string) => api.delete(`/agents/${id}`),
+  assignModel: (id: string, modelConfigId: string | null) =>
+    api.patch<Agent>(`/agents/${id}/model`, { model_config_id: modelConfigId }).then(r => r.data),
   getModels: () => api.get<{id: string; name: string; provider: string}[]>('/agents/meta/models').then(r => r.data),
   getTools: () => api.get<{id: string; name: string; description: string}[]>('/agents/meta/tools').then(r => r.data),
   getMemoryConfig: (id: string) => api.get<AgentMemoryConfig>(`/agents/${id}/memory-config`).then(r => r.data),
   updateMemoryConfig: (id: string, data: Partial<AgentMemoryConfig>) =>
     api.put<AgentMemoryConfig>(`/agents/${id}/memory-config`, data).then(r => r.data),
+  startLongTask: (id: string, data: { task: string; max_duration_hours?: number }) =>
+    api.post<{ task_id: string; status: string }>(`/agents/${id}/long-tasks`, data).then(r => r.data),
+  getLongTaskStatus: (taskId: string) => api.get<LongTaskStatus>(`/agents/long-tasks/${taskId}`).then(r => r.data),
+  pauseLongTask: (taskId: string) => api.post<{ paused: boolean }>(`/agents/long-tasks/${taskId}/pause`).then(r => r.data),
+  cancelLongTask: (taskId: string) => api.post<{ cancelled: boolean }>(`/agents/long-tasks/${taskId}/cancel`).then(r => r.data),
 }
 
 // Workflows
@@ -95,9 +130,41 @@ export const executionsApi = {
     api.get<Execution[]>('/executions', { params: { workflow_id: workflowId } }).then(r => r.data),
   get: (id: string) => api.get<Execution>(`/executions/${id}`).then(r => r.data),
   run: (workflowId: string, input: string) =>
-    api.post<Execution>(`/executions/workflows/${workflowId}/run`, { input_message: input }).then(r => r.data),
+    api.post<ExecutionRunResponse>(`/executions/workflows/${workflowId}/run`, { input_message: input }).then(r => r.data),
   getMessages: (id: string) =>
     api.get(`/executions/${id}/messages`).then(r => r.data),
+}
+
+export const modelsApi = {
+  templates: () => api.get<ModelTemplate[]>('/models/templates').then(r => r.data),
+  list: () => api.get<ModelConfigRecord[]>('/models').then(r => r.data),
+  get: (id: string) => api.get<ModelConfigRecord>(`/models/${id}`).then(r => r.data),
+  create: (data: {
+    provider: string
+    model_id: string
+    display_name: string
+    api_key?: string | null
+    base_url?: string | null
+    notes?: string | null
+    set_as_default?: boolean
+    context_window?: number | null
+    supports_tools?: boolean
+    supports_vision?: boolean
+    cost_per_million_input_tokens?: number | null
+    cost_per_million_output_tokens?: number | null
+  }) => api.post<ModelConfigRecord>('/models', data).then(r => r.data),
+  test: (data: { provider: string; model_id: string; api_key?: string | null; base_url?: string | null }) =>
+    api.post<ModelTestResult>('/models/test', data).then(r => r.data),
+  update: (id: string, data: { display_name?: string; notes?: string | null; is_active?: boolean }) =>
+    api.put<ModelConfigRecord>(`/models/${id}`, data).then(r => r.data),
+  rotateKey: (id: string, apiKey: string) =>
+    api.patch<{ success: boolean }>(`/models/${id}/rotate-key`, { api_key: apiKey }).then(r => r.data),
+  setDefault: (id: string) =>
+    api.post<{ success: boolean }>(`/models/${id}/set-default`).then(r => r.data),
+  testSaved: (id: string) =>
+    api.post<ModelTestResult>(`/models/${id}/test`).then(r => r.data),
+  delete: (id: string) =>
+    api.delete<{ success: boolean }>(`/models/${id}`).then(r => r.data),
 }
 
 // Custom Tools
@@ -152,6 +219,12 @@ export const memoryApi = {
 // First-run onboarding
 export const onboardingApi = {
   status: () => api.get<OnboardingStatus>('/onboarding/status').then(r => r.data),
+  saveCompany: (data: { company_name: string; company_description: string; primary_challenge: string }) =>
+    api.post<{ success: boolean; next_step: string }>('/onboarding/company', data).then(r => r.data),
+  hireFirstAgent: (data: { listing_slug: string; competitors: string; delivery_method: string }) =>
+    api.post<OnboardingHireResponse>('/onboarding/hire-first-agent', data).then(r => r.data),
+  skip: () =>
+    api.post<{ success: boolean }>('/onboarding/skip').then(r => r.data),
   saveCompanyProfile: (data: CompanyProfileInput) =>
     api.post<CompanyProfile>('/onboarding/company-profile', data).then(r => r.data),
   generateTeam: (companyProfileId: string, selectedRoles: string[]) =>
@@ -160,7 +233,7 @@ export const onboardingApi = {
       selected_roles: selectedRoles,
     }).then(r => r.data),
   complete: () =>
-    api.post<{ onboarding_complete: boolean; redirect: string }>('/onboarding/complete').then(r => r.data),
+    api.post<{ success?: boolean; onboarding_complete?: boolean; redirect: string }>('/onboarding/complete').then(r => r.data),
 }
 
 // Company OS
@@ -272,12 +345,44 @@ export const evalsApi = {
 
 export const billingApi = {
   usage: () => api.get<BillingUsageSummary>('/billing/usage').then(r => r.data),
-  plan: () => api.get<BillingPlanResponse>('/billing/plan').then(r => r.data),
-  plans: () => api.get<BillingPlan[]>('/billing/plans').then(r => r.data),
-  upgrade: (targetPlan: string) =>
-    api.post<{ message: string; current_plan: string; target_plan: string }>('/billing/upgrade', {
-      target_plan: targetPlan,
-    }).then(r => r.data),
+  subscription: () => api.get<BillingSubscriptionResponse>('/billing/subscription').then(r => r.data),
+  plan: () => api.get<BillingSubscriptionResponse>('/billing/plan').then(r => r.data),
+  plans: () => api.get<BillingPlansResponse>('/billing/plans').then(r => r.data),
+  invoices: () => api.get<BillingInvoice[]>('/billing/invoices').then(r => r.data),
+  upcomingInvoice: () => api.get<BillingUpcomingInvoice>('/billing/upcoming-invoice').then(r => r.data),
+  setupIntent: () => api.post<{ client_secret: string }>('/billing/setup-intent').then(r => r.data),
+  paymentMethods: () => api.get<BillingPaymentMethod[]>('/billing/payment-methods').then(r => r.data),
+  setDefaultPaymentMethod: (paymentMethodId: string) =>
+    api.post<{ updated: boolean }>(`/billing/payment-methods/${paymentMethodId}/set-default`).then(r => r.data),
+  deletePaymentMethod: (paymentMethodId: string) =>
+    api.delete<{ deleted: boolean }>(`/billing/payment-methods/${paymentMethodId}`).then(r => r.data),
+  subscribe: (plan: OrgPlan, paymentMethodId: string) =>
+    api.post('/billing/subscribe', { plan, payment_method_id: paymentMethodId }).then(r => r.data),
+  upgrade: (plan: OrgPlan) =>
+    api.post('/billing/upgrade', { plan }).then(r => r.data),
+  cancel: (immediately = false) =>
+    api.post('/billing/cancel', { immediately }).then(r => r.data),
+}
+
+export const organizationsApi = {
+  mine: () => api.get<Organization[]>('/organizations/me').then(r => r.data),
+  create: (data: { name: string; slug?: string }) => api.post<Organization>('/organizations', data).then(r => r.data),
+  get: (orgId: string) => api.get<Organization & { members: OrgMember[] }>(`/organizations/${orgId}`).then(r => r.data),
+  update: (orgId: string, data: Partial<Pick<Organization, 'name' | 'slug' | 'timezone' | 'logo_url'>>) =>
+    api.put<Organization>(`/organizations/${orgId}`, data).then(r => r.data),
+  delete: (orgId: string) => api.delete(`/organizations/${orgId}`),
+  members: (orgId: string) => api.get<OrgMember[]>(`/organizations/${orgId}/members`).then(r => r.data),
+  invites: (orgId: string) => api.get<OrgInvite[]>(`/organizations/${orgId}/invites`).then(r => r.data),
+  invite: (orgId: string, data: { email: string; role: Exclude<OrgMemberRole, 'owner'>; message?: string }) =>
+    api.post<OrgInvite>(`/organizations/${orgId}/invites`, data).then(r => r.data),
+  resendInvite: (orgId: string, inviteId: string) =>
+    api.post<OrgInvite>(`/organizations/${orgId}/invites/${inviteId}/resend`).then(r => r.data),
+  revokeInvite: (orgId: string, inviteId: string) => api.delete(`/organizations/${orgId}/invites/${inviteId}`),
+  updateMemberRole: (orgId: string, userId: string, role: OrgMemberRole) =>
+    api.put<OrgMember>(`/organizations/${orgId}/members/${userId}/role`, { role }).then(r => r.data),
+  removeMember: (orgId: string, userId: string) => api.delete(`/organizations/${orgId}/members/${userId}`),
+  inviteDetails: (token: string) => api.get<InviteDetails>(`/invites/${token}`).then(r => r.data),
+  acceptInvite: (token: string) => api.post<{ accepted: boolean; org_id: string; org_name?: string | null }>(`/invites/${token}/accept`).then(r => r.data),
 }
 
 export const marketplaceApi = {
@@ -296,13 +401,31 @@ export const marketplaceApi = {
     },
   }).then(r => r.data),
   detail: (slug: string) => api.get<MarketplaceListing>(`/marketplace/${slug}`).then(r => r.data),
-  install: (listingId: string, data?: { agent_id?: string; reinstall?: boolean }) =>
-    api.post<{ installed: boolean; already_installed?: boolean; resource_id: string | null; type: MarketplaceListingType }>(`/marketplace/${listingId}/install`, data || {}).then(r => r.data),
+  install: (listingId: string, data?: { agent_id?: string; reinstall?: boolean; agent_name?: string; workflow_name?: string; configured_inputs?: Record<string, unknown> }) =>
+    api.post<{
+      installed?: boolean
+      reinstalled?: boolean
+      already_installed?: boolean
+      resource_id?: string | null
+      type?: MarketplaceListingType
+      success?: boolean
+      agent_id?: string
+      workflow_id?: string
+      agent_name?: string
+      role?: string
+      autonomy_level?: string
+      trust_score?: number
+      what_they_can_do?: string[]
+      needs_configuration?: boolean
+      next_step?: 'configure' | 'ready'
+    }>(`/marketplace/${listingId}/install`, data || {}).then(r => r.data),
   myInstalls: () => api.get<MarketplaceInstall[]>('/marketplace/my-installs').then(r => r.data),
   publishAgent: (agentId: string, data: Record<string, unknown>) =>
     api.post<MarketplaceListing>(`/marketplace/publish/agent/${agentId}`, data).then(r => r.data),
   publishWorkflow: (workflowId: string, data: Record<string, unknown>) =>
     api.post<MarketplaceListing>(`/marketplace/publish/workflow/${workflowId}`, data).then(r => r.data),
+  publishTool: (toolId: string, data: Record<string, unknown>) =>
+    api.post<MarketplaceListing>(`/marketplace/publish/tool/${toolId}`, data).then(r => r.data),
   myListings: () => api.get<MarketplaceListing[]>('/marketplace/my-listings').then(r => r.data),
   review: (listingId: string, data: { rating: number; title?: string; body?: string }) =>
     api.post(`/marketplace/${listingId}/review`, data).then(r => r.data),

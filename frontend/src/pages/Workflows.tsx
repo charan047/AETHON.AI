@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import ReactFlow, {
   Background, Controls, MiniMap, addEdge,
@@ -12,12 +12,14 @@ import { AgentNode } from '../components/Workflow/AgentNode'
 import { ApprovalNode } from '../components/Workflow/nodes/ApprovalNode'
 import { ConditionNode } from '../components/Workflow/nodes/ConditionNode'
 import { ParallelGroupNode } from '../components/Workflow/nodes/ParallelGroupNode'
+import { EmptyState } from '../components/ui/EmptyState'
 import { VersionHistory } from '../components/workflows/VersionHistory'
 import { Plus, Save, Play, Trash2, GitBranch, ChevronLeft, X, Layers, MessageSquare, Copy, Cpu, GitMerge, Hand, GitCompareArrows } from 'lucide-react'
 import { clsx } from 'clsx'
-import toast from 'react-hot-toast'
 import type { Workflow, Agent } from '../types'
 import { SkeletonCard } from '../components/ui/Skeleton'
+import { ConfirmDialog } from '../components/ui/ConfirmDialog'
+import { toast } from '../lib/toast'
 
 const nodeTypes = {
   agentNode: AgentNode,
@@ -26,19 +28,33 @@ const nodeTypes = {
   parallel_group: ParallelGroupNode,
 }
 
+function normalizeNodeType(type?: string) {
+  if (!type || type === 'agent') return 'agentNode'
+  return type
+}
+
+function normalizeNodePosition(position: { x?: number; y?: number } | undefined, index: number) {
+  return {
+    x: typeof position?.x === 'number' ? position.x : 180 + index * 220,
+    y: typeof position?.y === 'number' ? position.y : 180,
+  }
+}
+
 function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
   workflow: Partial<Workflow>
   agents: Agent[]
   onSave: (wf: Partial<Workflow>) => void
   onClose: () => void
 }) {
+  const navigate = useNavigate()
   const availableNodeOptions = (workflow.nodes || []).map(n => ({
     id: n.id,
     label: String(n.data?.label || n.data?.title || n.id),
   }))
-  const initNodes: Node<any>[] = (workflow.nodes || []).map(n => ({
+  const initNodes: Node<any>[] = (workflow.nodes || []).map((n, index) => ({
     ...n,
-    type: n.type || 'agentNode',
+    type: normalizeNodeType(n.type),
+    position: normalizeNodePosition(n.position, index),
     data: {
       ...n.data,
       agentName: agents.find(a => a.id === n.data.agent_id)?.name,
@@ -139,8 +155,10 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
 
   const save = () => {
     if (!name) { toast.error('Please enter a workflow name'); return }
-    const cleanNodes = nodes.map(({ id, type, position, data }) => ({
-      id, type: type || 'agentNode', position,
+    const cleanNodes = nodes.map(({ id, type, position, data }, index) => ({
+      id,
+      type: normalizeNodeType(type),
+      position: normalizeNodePosition(position, index),
       data: {
         label: data.label,
         title: data.title,
@@ -166,9 +184,10 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
     if (!runInput) { toast.error('Enter an input message'); return }
     setRunning(true)
     try {
-      await executionsApi.run(workflow.id, runInput)
-      toast.success('Workflow started! Check Monitoring for live updates.')
+      const execution = await executionsApi.run(workflow.id, runInput)
+      toast.info('Run started')
       setRunInput('')
+      navigate(`/executions/${execution.execution_id}`)
     } catch (e: any) {
       toast.error(e.response?.data?.detail || 'Failed to run workflow')
     } finally {
@@ -243,7 +262,7 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Canvas */}
-        <div className="obsidian-grid relative flex-1">
+        <div className="obsidian-grid relative flex-1" data-testid="workflow-builder">
           <ReactFlow
             nodes={nodes} edges={edges}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
@@ -307,9 +326,10 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
               id: n.id,
               label: String(n.data?.label || n.data?.title || n.id),
             }))
-            setNodes((restored.nodes || []).map(n => ({
+            setNodes((restored.nodes || []).map((n, index) => ({
               ...n,
-              type: n.type || 'agentNode',
+              type: normalizeNodeType(n.type),
+              position: normalizeNodePosition(n.position, index),
               data: {
                 ...n.data,
                 agentName: agents.find(a => a.id === n.data.agent_id)?.name,
@@ -330,8 +350,10 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
 }
 
 export function Workflows() {
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const [editing, setEditing] = useState<Partial<Workflow> | null>(null)
+  const [workflowToDelete, setWorkflowToDelete] = useState<Workflow | null>(null)
 
   const { data: workflows = [], isLoading } = useQuery({ queryKey: ['workflows'], queryFn: workflowsApi.list })
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: agentsApi.list })
@@ -348,7 +370,7 @@ export function Workflows() {
   })
   const deleteMut = useMutation({
     mutationFn: workflowsApi.delete,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['workflows'] }); toast.success('Workflow deleted') },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['workflows'] }); setWorkflowToDelete(null); toast.success('Workflow deleted') },
   })
 
   const handleSave = (data: Partial<Workflow>) => {
@@ -386,19 +408,19 @@ export function Workflows() {
           {[...Array(3)].map((_, i) => <SkeletonCard key={i} className="h-44" />)}
         </div>
       ) : !workflows.length ? (
-        <div className="rounded-2xl border border-white/[0.08] bg-obsidian-900 py-24 text-center">
-          <GitBranch size={48} className="mx-auto mb-4 text-accent-300" />
-          <div className="font-medium text-white">No workflows yet - build your first automated process</div>
-          <div className="mb-5 mt-2 text-sm text-obsidian-500">Create a workflow or start from a template.</div>
-          <div className="flex gap-3 justify-center">
-            <button className="btn-primary" onClick={() => setEditing({})}><Plus size={16} /> New Workflow</button>
-            <a href="/templates" className="btn-secondary"><Layers size={16} /> Browse Templates</a>
-          </div>
+        <div className="rounded-2xl border border-white/[0.08] bg-obsidian-900">
+          <EmptyState
+            icon="⚡"
+            title="Automate your first task"
+            description="Workflows let your agents run automatically — on a schedule, triggered by an email, or on demand."
+            action={{ label: 'Install from marketplace →', onClick: () => navigate('/marketplace') }}
+            secondaryAction={{ label: 'Create from scratch', onClick: () => setEditing({}) }}
+          />
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {workflows.map(wf => (
-            <div key={wf.id} className="card card-hover flex flex-col gap-3 p-5">
+            <div key={wf.id} className="workflow-card card card-hover flex flex-col gap-3 p-5">
               <div className="flex items-start justify-between">
                 <div className="min-w-0 flex-1">
                   <div className="font-semibold text-white">{wf.name}</div>
@@ -444,9 +466,7 @@ export function Workflows() {
                 >
                   <MessageSquare size={13} /> Chat
                 </Link>
-                <button className="btn-danger text-xs px-3" onClick={() => {
-                  if (confirm(`Delete "${wf.name}"?`)) deleteMut.mutate(wf.id)
-                }}>
+                <button className="btn-danger text-xs px-3" onClick={() => setWorkflowToDelete(wf)}>
                   <Trash2 size={13} />
                 </button>
               </div>
@@ -454,6 +474,15 @@ export function Workflows() {
           ))}
         </div>
       )}
+      <ConfirmDialog
+        open={Boolean(workflowToDelete)}
+        title={`Delete ${workflowToDelete?.name || 'workflow'}?`}
+        description="This removes the workflow definition. Past executions remain available, but scheduled or webhook triggers for this workflow will stop working."
+        confirmLabel="Delete workflow"
+        loading={deleteMut.isPending}
+        onClose={() => setWorkflowToDelete(null)}
+        onConfirm={() => workflowToDelete && deleteMut.mutate(workflowToDelete.id)}
+      />
     </div>
   )
 }

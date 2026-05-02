@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "6f2a9c8d1e4b"
@@ -19,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     bind = op.get_bind()
-    marketplace_category = sa.Enum(
+    postgresql.ENUM(
         "productivity",
         "development",
         "marketing",
@@ -31,12 +32,34 @@ def upgrade() -> None:
         "data",
         "other",
         name="marketplacecategory",
+    ).create(bind, checkfirst=True)
+    postgresql.ENUM("agent", "workflow", "eval_suite", name="listingtype").create(bind, checkfirst=True)
+    postgresql.ENUM("draft", "pending", "published", "rejected", "archived", name="listingstatus").create(bind, checkfirst=True)
+
+    marketplace_category = postgresql.ENUM(
+        "productivity",
+        "development",
+        "marketing",
+        "finance",
+        "customer_support",
+        "research",
+        "hr",
+        "operations",
+        "data",
+        "other",
+        name="marketplacecategory",
+        create_type=False,
     )
-    listing_type = sa.Enum("agent", "workflow", "eval_suite", name="listingtype")
-    listing_status = sa.Enum("draft", "pending", "published", "rejected", "archived", name="listingstatus")
-    marketplace_category.create(bind, checkfirst=True)
-    listing_type.create(bind, checkfirst=True)
-    listing_status.create(bind, checkfirst=True)
+    listing_type = postgresql.ENUM("agent", "workflow", "eval_suite", name="listingtype", create_type=False)
+    listing_status = postgresql.ENUM(
+        "draft",
+        "pending",
+        "published",
+        "rejected",
+        "archived",
+        name="listingstatus",
+        create_type=False,
+    )
 
     op.create_table(
         "marketplace_listings",
@@ -76,16 +99,8 @@ def upgrade() -> None:
         "marketplace_listings",
         ["status", "category"],
     )
-    op.create_index(
-        "ix_marketplace_listings_install_count_desc",
-        "marketplace_listings",
-        [sa.text("install_count DESC")],
-    )
-    op.create_index(
-        "ix_marketplace_listings_rating_avg_desc",
-        "marketplace_listings",
-        [sa.text("rating_avg DESC")],
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_marketplace_listings_install_count_desc ON marketplace_listings (install_count DESC)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_marketplace_listings_rating_avg_desc ON marketplace_listings (rating_avg DESC)")
 
     op.create_table(
         "marketplace_installs",

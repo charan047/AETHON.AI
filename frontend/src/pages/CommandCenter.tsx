@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
+import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import toast from 'react-hot-toast'
 import { formatDistanceToNow } from 'date-fns'
 import {
   AlertTriangle,
@@ -21,6 +21,7 @@ import { LiveActivityFeed } from '../components/dashboard/LiveActivityFeed'
 import { BusinessContextWidget } from '../components/dashboard/BusinessContextWidget'
 import { Skeleton, SkeletonCard } from '../components/ui/Skeleton'
 import type { DashboardSummary } from '../types'
+import { toast } from '../lib/toast'
 
 function money(value = 0) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value)
@@ -40,8 +41,8 @@ function artifactIcon(type: string) {
 }
 
 function statusCopy(agent: DashboardSummary['team_status'][number]) {
-  if (agent.status === 'running') return agent.current_task || 'Running workflow...'
-  if (agent.status === 'waiting') return agent.current_task || 'Awaiting approval'
+  if (agent.status === 'working') return agent.current_task || 'Running workflow...'
+  if (agent.status === 'waiting_approval') return agent.current_task || 'Awaiting approval'
   if (agent.last_active) return `Last active ${formatDistanceToNow(new Date(agent.last_active), { addSuffix: true })}`
   return 'Ready for work'
 }
@@ -49,6 +50,7 @@ function statusCopy(agent: DashboardSummary['team_status'][number]) {
 export function CommandCenter() {
   const queryClient = useQueryClient()
   const { summary, loading } = useDashboard()
+  const [dismissedAttention, setDismissedAttention] = useState<Set<string>>(new Set())
 
   if (loading || !summary) {
     return (
@@ -79,7 +81,16 @@ export function CommandCenter() {
   }
 
   const profile = summary.company_profile
-  const activeCount = summary.team_status.filter(agent => agent.status === 'running' || agent.status === 'waiting').length
+  const activeCount = summary.team_status.filter(agent => agent.status === 'working' || agent.status === 'waiting_approval').length
+  const visibleAttention = summary.pending_attention.filter((item, index) => {
+    const key = item.id || `${item.type}-${item.title}-${index}`
+    return !dismissedAttention.has(key)
+  })
+  const dismissAttention = (item: DashboardSummary['pending_attention'][number], index: number, verb = 'Dismissed') => {
+    const key = item.id || `${item.type}-${item.title}-${index}`
+    setDismissedAttention(current => new Set(current).add(key))
+    toast.success(verb)
+  }
   const decideApproval = async (id: string | undefined, decision: 'approve' | 'reject') => {
     if (!id) return
     try {
@@ -148,14 +159,14 @@ export function CommandCenter() {
               {summary.team_status.map(agent => (
                 <Link key={agent.agent_id} to="/agents" className="block rounded-xl border border-white/[0.06] bg-white/[0.025] p-3 transition hover:border-white/[0.12] hover:bg-white/[0.045]">
                   <div className="flex gap-3">
-                    <AgentAvatar name={agent.name} size="md" running={agent.status === 'running'} />
+                    <AgentAvatar name={agent.name} size="md" running={agent.status === 'working'} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-white">{agent.name}</div>
                       <div className="truncate text-xs text-obsidian-500">{agent.role}</div>
                       <div className="mt-2 flex items-start gap-2 text-xs">
-                        <span className={clsx('mt-1.5 h-2 w-2 shrink-0 rounded-full', agent.status === 'running' ? 'animate-pulse bg-accent-400' : agent.status === 'waiting' ? 'bg-amber-400' : 'bg-obsidian-600')} />
-                        <span className={clsx(agent.status === 'running' ? 'text-accent-200' : agent.status === 'waiting' ? 'text-amber-200' : 'text-obsidian-500')}>
-                          {agent.status === 'running' ? 'Running' : agent.status === 'waiting' ? 'Waiting' : 'Idle'} · {statusCopy(agent)}
+                        <span className={clsx('mt-1.5 h-2 w-2 shrink-0 rounded-full', agent.status === 'working' ? 'animate-pulse bg-accent-400' : agent.status === 'waiting_approval' ? 'bg-amber-400' : 'bg-obsidian-600')} />
+                        <span className={clsx(agent.status === 'working' ? 'text-accent-200' : agent.status === 'waiting_approval' ? 'text-amber-200' : 'text-obsidian-500')}>
+                          {agent.status === 'working' ? 'Running' : agent.status === 'waiting_approval' ? 'Waiting' : 'Idle'} · {statusCopy(agent)}
                         </span>
                       </div>
                     </div>
@@ -185,10 +196,10 @@ export function CommandCenter() {
               <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-white">Needs Attention</h2>
               <p className="text-xs text-obsidian-500">Human input queue</p>
             </div>
-            <AlertTriangle size={16} className={summary.pending_attention.length ? 'text-amber-300' : 'text-emerald-300'} />
+            <AlertTriangle size={16} className={visibleAttention.length ? 'text-amber-300' : 'text-emerald-300'} />
           </div>
           <div className="p-3">
-            {!summary.pending_attention.length ? (
+            {!visibleAttention.length ? (
               <div className="grid min-h-64 place-items-center">
                 <div className="text-center">
                   <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl border border-emerald-400/20 bg-emerald-400/10 text-emerald-300">
@@ -200,7 +211,7 @@ export function CommandCenter() {
               </div>
             ) : (
               <div className="space-y-3">
-                {summary.pending_attention.map((item, index) => (
+                {visibleAttention.map((item, index) => (
                   <div key={`${item.title}-${index}`} className="rounded-xl border border-white/[0.08] bg-white/[0.035] p-3">
                     <div className="mb-2 flex items-center justify-between">
                       <span className={item.priority === 'urgent' ? 'badge-red' : 'badge-yellow'}>{item.priority}</span>
@@ -216,12 +227,12 @@ export function CommandCenter() {
                         </>
                       ) : item.type === 'budget_alert' ? (
                         <>
-                          <Link to={item.action_url || '/'} className="btn-primary h-8 flex-1 px-3 text-xs">View Details</Link>
-                          <button className="btn-secondary h-8 px-3 text-xs">Dismiss</button>
+                          <Link to={item.action_url?.startsWith('/') ? item.action_url : '/billing'} className="btn-primary h-8 flex-1 px-3 text-xs">View Details</Link>
+                          <button className="btn-secondary h-8 px-3 text-xs" onClick={() => dismissAttention(item, index)}>Dismiss</button>
                         </>
                       ) : (
                         <>
-                          <button className="btn-secondary h-8 flex-1 px-3 text-xs">Acknowledge</button>
+                          <button className="btn-secondary h-8 flex-1 px-3 text-xs" onClick={() => dismissAttention(item, index, 'Acknowledged')}>Acknowledge</button>
                           <Link to={item.action_url || '/monitoring'} className="btn-primary h-8 flex-1 px-3 text-xs">Investigate</Link>
                         </>
                       )}
@@ -244,24 +255,40 @@ export function CommandCenter() {
         <div className="flex gap-3 overflow-x-auto px-5 pb-4">
           {summary.recent_artifacts.length ? summary.recent_artifacts.map((artifact, index) => {
             const Icon = artifactIcon(artifact.type)
-            return (
-              <a
-                key={`${artifact.title}-${index}`}
-                href={artifact.url || '#'}
-                className="group w-64 shrink-0 rounded-xl border border-white/[0.08] bg-white/[0.035] p-4 transition hover:-translate-y-0.5 hover:border-accent-400/30 hover:shadow-glow-sm"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.04] text-cyan-300">
-                    <Icon size={18} />
+            return artifact.url ? (
+                <a
+                  key={`${artifact.title}-${index}`}
+                  href={artifact.url}
+                  className="group w-64 shrink-0 rounded-xl border border-white/[0.08] bg-white/[0.035] p-4 transition hover:-translate-y-0.5 hover:border-accent-400/30 hover:shadow-glow-sm"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.04] text-cyan-300">
+                      <Icon size={18} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="line-clamp-2 text-sm font-medium leading-5 text-white">{artifact.title}</p>
+                      <p className="mt-2 truncate text-xs text-obsidian-500">{artifact.agent_name}</p>
+                      {artifact.created_at && <p className="mt-1 font-mono text-[10px] text-obsidian-600">{formatDistanceToNow(new Date(artifact.created_at), { addSuffix: true })}</p>}
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="line-clamp-2 text-sm font-medium leading-5 text-white">{artifact.title}</p>
-                    <p className="mt-2 truncate text-xs text-obsidian-500">{artifact.agent_name}</p>
-                    {artifact.created_at && <p className="mt-1 font-mono text-[10px] text-obsidian-600">{formatDistanceToNow(new Date(artifact.created_at), { addSuffix: true })}</p>}
+                </a>
+              ) : (
+                <div
+                  key={`${artifact.title}-${index}`}
+                  className="w-64 shrink-0 rounded-xl border border-white/[0.08] bg-white/[0.035] p-4"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.04] text-cyan-300">
+                      <Icon size={18} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="line-clamp-2 text-sm font-medium leading-5 text-white">{artifact.title}</p>
+                      <p className="mt-2 truncate text-xs text-obsidian-500">{artifact.agent_name}</p>
+                      {artifact.created_at && <p className="mt-1 font-mono text-[10px] text-obsidian-600">{formatDistanceToNow(new Date(artifact.created_at), { addSuffix: true })}</p>}
+                    </div>
                   </div>
                 </div>
-              </a>
-            )
+              )
           }) : (
             <div className="grid h-28 w-full place-items-center rounded-xl border border-white/[0.08] bg-white/[0.02] text-sm text-obsidian-500">
               No artifacts yet this week. Connect GitHub or Email, then let the team ship.

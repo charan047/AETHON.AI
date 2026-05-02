@@ -6,8 +6,17 @@
 **/platform.db
 **/*.pyc
 **/.pytest_cache/
+**/.ruff_cache/
 **/.mypy_cache/
 **/.coverage
 **/coverage/
+**/htmlcov/
 frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
 backend/chroma_db/
+backend/reports/
+coverage_report/
+backend/coverage_report/
+backups/
+docs/.DS_Store

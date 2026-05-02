@@ -152,9 +152,15 @@ Decision Framework:
 
         success_rate = round((completed_count / total_count) * 100, 1) if total_count else 0
         message_count = func.count(Message.id).label("message_count")
-        active_result = await db.execute(
+        active_query = (
             select(Message.from_agent, message_count)
+            .join(Execution, Execution.id == Message.execution_id)
             .where(Message.timestamp >= cutoff)
+        )
+        if org_id:
+            active_query = active_query.where(Execution.org_id == org_id)
+        active_result = await db.execute(
+            active_query
             .group_by(Message.from_agent)
             .order_by(desc(message_count))
             .limit(3)

@@ -5,7 +5,7 @@ import { Sidebar } from './Sidebar'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { executionsApi } from '../../api/client'
 import { Sparkles, X, Bot } from 'lucide-react'
-import { CommandPalette } from '../CommandPalette'
+import { PlanLimitBanner } from '../billing/PlanLimitBanner'
 
 function GlobalResultModal({ executionId, onClose }: { executionId: string; onClose: () => void }) {
   const { data: execution, isLoading } = useQuery({
@@ -81,20 +81,31 @@ export function Layout() {
       lastHandledId.current = execId
       qc.invalidateQueries({ queryKey: ['recent-executions'] })
       qc.invalidateQueries({ queryKey: ['execution', execId] })
-      // Chat page shows results inline — no popup needed there
-      if (!location.pathname.startsWith('/chat/')) {
+      // Chat and dedicated execution pages already show results inline.
+      if (!location.pathname.startsWith('/chat/') && !location.pathname.startsWith('/executions/')) {
         setResultId(execId)
       }
     }
   }, [events, qc, location.pathname])
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar />
-      <main className="app-shell flex-1 overflow-y-auto bg-obsidian-950">
-        <Outlet />
-      </main>
-      <CommandPalette />
+    <div className="relative flex h-screen overflow-hidden bg-base-100 text-content-primary">
+      <div
+        className="pointer-events-none fixed inset-x-0 top-0 z-0 h-[280px]"
+        style={{
+          background:
+            'radial-gradient(ellipse 70% 60% at 50% 0%, rgba(108,99,255,0.14) 0%, rgba(0,212,255,0.08) 35%, transparent 75%)',
+        }}
+      />
+      <div className="relative z-10 flex h-full w-full overflow-hidden">
+        <Sidebar />
+        <main className="app-shell relative flex flex-1 flex-col overflow-hidden bg-transparent">
+          <PlanLimitBanner />
+          <div className="flex-1 overflow-y-auto">
+            <Outlet />
+          </div>
+        </main>
+      </div>
       {resultId && <GlobalResultModal executionId={resultId} onClose={() => setResultId(null)} />}
     </div>
   )

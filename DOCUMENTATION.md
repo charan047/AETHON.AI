@@ -1,1060 +1,1952 @@
-# AI Agent Orchestration Platform — Technical Documentation
+# AETHON Technical Documentation
 
-This document is written for an engineer reading this codebase for the first time. It covers every component, every flow, every design decision, and every integration — top to bottom.
+This document is the long-form engineering guide for the AETHON codebase as it exists today. It is intentionally detailed and is meant for:
+
+- new engineers onboarding to the system
+- technical reviewers evaluating architecture and delivery maturity
+- operators preparing private staging or production-style environments
+- future maintainers who need a map of how the platform is wired end to end
+
+It replaces older challenge-era documentation with a current-state view of the product and codebase.
 
 ---
 
 ## Table of Contents
 
-1. [What This Project Is](#1-what-this-project-is)
-2. [Technology Stack](#2-technology-stack)
-3. [Repository Layout](#3-repository-layout)
-4. [System Architecture Overview](#4-system-architecture-overview)
-5. [Backend — FastAPI Application](#5-backend--fastapi-application)
-   - 5.1 [Startup & Lifespan](#51-startup--lifespan)
-   - 5.2 [API Routers](#52-api-routers)
-   - 5.3 [Database Layer](#53-database-layer)
-   - 5.4 [WebSocket Manager](#54-websocket-manager)
-6. [Runtime — Agent System](#6-runtime--agent-system)
-   - 6.1 [AgentRunner](#61-agentrunner)
-   - 6.2 [Built-in Tools](#62-built-in-tools)
-   - 6.3 [Custom Tools — Sandbox & AST Parsing](#63-custom-tools--sandbox--ast-parsing)
-7. [Runtime — Workflow Execution](#7-runtime--workflow-execution)
-   - 7.1 [Sequential Mode](#71-sequential-mode)
-   - 7.2 [Orchestrator Mode](#72-orchestrator-mode)
-8. [Execution Pipeline — End-to-End Flow](#8-execution-pipeline--end-to-end-flow)
-9. [Real-time System — WebSocket Architecture](#9-real-time-system--websocket-architecture)
-10. [Telegram Integration](#10-telegram-integration)
-11. [Frontend Architecture](#11-frontend-architecture)
-    - 11.1 [Routing & Layout](#111-routing--layout)
-    - 11.2 [State Management](#112-state-management)
-    - 11.3 [Pages & Components](#113-pages--components)
-12. [Database Schema](#12-database-schema)
-13. [API Reference](#13-api-reference)
-14. [Configuration Reference](#14-configuration-reference)
-15. [WebSocket Event Reference](#15-websocket-event-reference)
-16. [Security Model](#16-security-model)
-17. [Extension Guide](#17-extension-guide)
+1. [What AETHON is](#1-what-aethon-is)
+2. [Product mental model](#2-product-mental-model)
+3. [Technology stack](#3-technology-stack)
+4. [Repository layout](#4-repository-layout)
+5. [System architecture overview](#5-system-architecture-overview)
+6. [Backend application lifecycle](#6-backend-application-lifecycle)
+7. [Configuration model](#7-configuration-model)
+8. [Authentication, org context, and tenancy](#8-authentication-org-context-and-tenancy)
+9. [Database schema](#9-database-schema)
+10. [Backend API surface](#10-backend-api-surface)
+11. [Agent runtime](#11-agent-runtime)
+12. [Workflow runtime](#12-workflow-runtime)
+13. [Tools and integrations](#13-tools-and-integrations)
+14. [WebSocket and live monitoring](#14-websocket-and-live-monitoring)
+15. [Onboarding flow](#15-onboarding-flow)
+16. [Marketplace system](#16-marketplace-system)
+17. [Model control plane](#17-model-control-plane)
+18. [Billing, plans, and limits](#18-billing-plans-and-limits)
+19. [Approvals, feedback, memory, and governance](#19-approvals-feedback-memory-and-governance)
+20. [Frontend architecture](#20-frontend-architecture)
+21. [Routing and major pages](#21-routing-and-major-pages)
+22. [UI shell and design system direction](#22-ui-shell-and-design-system-direction)
+23. [Testing and verification](#23-testing-and-verification)
+24. [Deployment and operations](#24-deployment-and-operations)
+25. [Current caveats and engineering notes](#25-current-caveats-and-engineering-notes)
+26. [Recommended reading order](#26-recommended-reading-order)
 
 ---
 
-## 1. What This Project Is
+## 1. What AETHON is
 
-A full-stack platform that lets you:
+AETHON is an AI Company Operating System.
 
-- **Create AI agents** — configure model, system prompt, tools, memory, and iteration limits
-- **Build workflows** — visually connect agents in a drag-and-drop canvas
-- **Run workflows** in two modes:
-  - **Sequential** — agents execute in a fixed pipeline order, each receiving the previous agent's output
-  - **Orchestrator** — an LLM reads an orchestration prompt and decides which agents to call, in what order, and synthesizes the final result
-- **Write custom tools** — Python functions with multiple typed parameters, executed in a sandboxed environment and exposed to agents as LangChain tools
-- **Chat with workflows** — a dedicated per-workflow chat interface with live activity updates
-- **Monitor everything** — real-time WebSocket event feed, token/cost tracking, execution history
-- **Receive messages via Telegram** — any agent with `telegram_enabled` handles Telegram messages
+At the product level, it is not positioned as a one-off chatbot, prompt playground, or narrow automation dashboard. The intended model is:
 
----
+- a company is the tenant
+- a founder or operator acts as the CEO
+- agents are AI employees
+- workflows are operating processes
+- executions are the historical record of work
+- approvals, billing, memory, and audit controls make those agents governable
+- the marketplace distributes pre-built capabilities
+- the model control plane lets the company choose which LLM powers which agent
 
-## 2. Technology Stack
+The codebase already includes meaningful support for:
 
-| Layer | Technology | Why It Was Chosen |
-|-------|------------|-------------------|
-| AI orchestration | **LangGraph** | Stateful graph-based agent execution; supports `create_react_agent` for ReAct pattern, `StateGraph` for multi-agent pipelines, and `MemorySaver` for per-thread conversation memory |
-| LLM client | **LangChain + ChatOpenAI** | OpenAI-compatible interface works with Groq, Together AI, OpenRouter, Ollama, and real OpenAI by swapping base URL and key |
-| LLM provider | **Groq** (default) | Free tier, fast inference, llama-3.3-70b-versatile as default model |
-| Backend framework | **FastAPI** | Native async, automatic OpenAPI docs, first-class WebSocket support, integrates directly with LangChain async APIs |
-| ORM | **SQLAlchemy 2 + aiosqlite** | Fully async database access; SQLite requires zero infrastructure; swap to Postgres by changing `DATABASE_URL` |
-| Web server | **Uvicorn** | ASGI server, works with FastAPI's async and WebSocket support |
-| Frontend framework | **React 18 + Vite + TypeScript** | Fast dev server, strict typing, excellent ecosystem |
-| Canvas | **React Flow** | Drag-and-drop node/edge canvas for the visual workflow builder |
-| Server state | **TanStack Query** | Caching, background refetch, and mutation state for all API calls |
-| Styling | **TailwindCSS + clsx** | Utility-first styling; clsx for conditional class composition |
-| Routing | **React Router v6** | Nested routes with `Layout` as the shared shell |
-| HTTP client | **Axios** | Used in the frontend API client (`src/api/client.ts`) |
-| Messaging | **python-telegram-bot** | Long-poll Telegram bot, starts as a background task in the FastAPI lifespan |
+- multi-organization accounts
+- org-scoped data isolation
+- onboarding for newly created companies
+- live dashboard and monitoring surfaces
+- agent CRUD and configuration
+- workflow authoring and execution
+- model configuration and per-agent assignment
+- marketplace installs
+- billing and plan enforcement
+- approvals and human-in-the-loop pauses
+- notifications, memory, and audit scaffolding
+
+The product direction is operational software for AI-native companies, not just a demo of model calls.
 
 ---
 
-## 3. Repository Layout
+## 2. Product mental model
 
-```
-ai-agent-platform/
-│
+The cleanest way to understand the system is through the company metaphor the app uses internally and in the UI.
+
+### 2.1 Core entities
+
+- `Organization`
+  The tenant boundary. Most important data must be scoped to `org_id`.
+- `User`
+  A human account. A user can belong to multiple orgs.
+- `OrgMember`
+  The membership join table that ties users to orgs with roles.
+- `Agent`
+  An AI teammate with role, prompt, tools, trust, autonomy, retry behavior, and model settings.
+- `Workflow`
+  A reusable process that defines how one or more agents run.
+- `Execution`
+  A concrete run of a workflow.
+- `ExecutionStep`
+  Step-by-step execution trace, including tool calls and final answer output.
+- `ModelConfig`
+  An org-scoped model provider configuration.
+- `MarketplaceListing`
+  A publishable marketplace asset that can be installed into an org.
+- `HumanApprovalRequest`
+  A pause point where a workflow waits for explicit human review.
+
+### 2.2 Typical user flow
+
+1. A user signs up and a default organization is created.
+2. The user is redirected into onboarding.
+3. Onboarding writes company identity data to the org and company profile.
+4. A first marketplace agent can be installed and configured during onboarding.
+5. The user lands in the command center/dashboard.
+6. They inspect or edit agents, install more marketplace items, or build workflows.
+7. Executions stream into monitoring and execution detail pages.
+8. Higher-risk workflows may pause for approvals.
+9. Billing, model configuration, integrations, and team settings live in the settings surfaces.
+
+---
+
+## 3. Technology stack
+
+### 3.1 Backend
+
+- FastAPI for HTTP and WebSocket endpoints
+- SQLAlchemy async ORM for persistence
+- Alembic for database migrations
+- PostgreSQL as the main persistence layer in the current stack
+- Redis for WebSocket pub/sub and background coordination
+- Celery for asynchronous and longer-running task work
+- LangGraph / LangChain style orchestration for agents and workflows
+
+### 3.2 Frontend
+
+- React 18
+- TypeScript
+- Vite
+- React Router
+- TanStack Query
+- Tailwind CSS
+- Framer Motion
+- `cmdk` for the command palette
+- `sonner` for global toast notifications
+
+### 3.3 Runtime and integrations
+
+- OpenAI-compatible model support
+- Anthropic support
+- Ollama support
+- Stripe billing
+- Google/Gmail integration surfaces
+- Slack integration surfaces
+- Telegram channel support
+
+### 3.4 Test and quality tooling
+
+- Pytest for backend tests
+- Playwright for browser/E2E checks
+- GitHub Actions CI in `.github/workflows/test.yml`
+- Bandit security scan in CI
+
+---
+
+## 4. Repository layout
+
+```text
+.
 ├── backend/
-│   ├── main.py                     ← FastAPI app, lifespan, Telegram init, model migration
-│   ├── config.py                   ← Pydantic Settings, model registry, tool registry
-│   ├── requirements.txt
-│   │
-│   ├── api/
-│   │   ├── __init__.py             ← Assembles all routers into api_router
-│   │   ├── agents.py               ← CRUD + meta/models + meta/tools
-│   │   ├── workflows.py            ← CRUD + templates
-│   │   ├── executions.py           ← Run workflow, list/get executions and messages
-│   │   ├── monitoring.py           ← WebSocket endpoint, stats, logs, recent executions
-│   │   └── tools.py                ← CRUD + parse-params + test endpoint
-│   │
-│   ├── database/
-│   │   ├── __init__.py             ← Re-exports get_db, init_db
-│   │   ├── db.py                   ← SQLAlchemy engine, session factory, init_db (with migration)
-│   │   └── models.py               ← Agent, Workflow, Execution, Message, CustomTool
-│   │
-│   ├── runtime/
-│   │   ├── agent_runner.py         ← build_llm(), AgentRunner (LangGraph ReAct agent)
-│   │   ├── graph_builder.py        ← WorkflowExecutor (sequential StateGraph + orchestrator)
-│   │   └── tools.py                ← Built-in tools, custom tool sandbox, AST parser, get_tools()
-│   │
-│   ├── channels/
-│   │   ├── __init__.py
-│   │   └── telegram.py             ← TelegramChannel — long-poll bot, routes to AgentRunner
-│   │
-│   └── services/
-│       └── websocket_manager.py    ← ConnectionManager — broadcast to all WS clients, 500-event buffer
-│
-└── frontend/
-    ├── vite.config.ts              ← Proxies /api → :8000/api, /ws → ws://localhost:8000
-    ├── src/
-    │   ├── App.tsx                 ← WsProvider wrapper, BrowserRouter, all routes
-    │   ├── types/index.ts          ← TypeScript interfaces for all API objects
-    │   │
-    │   ├── api/
-    │   │   └── client.ts           ← Axios API wrappers for every backend endpoint
-    │   │
-    │   ├── contexts/
-    │   │   └── WebSocketContext.tsx ← Singleton WS connection shared across all pages
-    │   │
-    │   ├── hooks/
-    │   │   └── useWebSocket.ts     ← Re-exports useWebSocket() from context
-    │   │
-    │   ├── components/
-    │   │   ├── Layout/
-    │   │   │   ├── index.tsx       ← Shell with Sidebar + Outlet + GlobalResultModal
-    │   │   │   └── Sidebar.tsx     ← Navigation links
-    │   │   └── Workflow/
-    │   │       └── AgentNode.tsx   ← Custom React Flow node component
-    │   │
-    │   └── pages/
-    │       ├── Dashboard.tsx       ← Stats cards + recent executions
-    │       ├── Agents.tsx          ← Agent list + create/edit form (AgentForm)
-    │       ├── Workflows.tsx       ← Workflow list + visual builder (WorkflowBuilder)
-    │       ├── WorkflowChat.tsx    ← Per-workflow chat UI with live activity feed
-    │       ├── Tools.tsx           ← Custom tool list + code editor + test panel
-    │       ├── Monitoring.tsx      ← Live WebSocket event log + stats
-    │       └── Templates.tsx       ← Pre-built workflow templates
+│   ├── api/                    # FastAPI routers
+│   ├── alembic/                # Migrations
+│   ├── auth/                   # Auth helpers and org context
+│   ├── channels/               # External messaging channels
+│   ├── database/               # SQLAlchemy models, DB session, seeders
+│   ├── docs/                   # Backend-facing reports and notes
+│   ├── marketplace/            # Marketplace templates and seeding
+│   ├── middleware/             # Plan limits, security headers, rate limits
+│   ├── onboarding/             # Demo seeders and onboarding support
+│   ├── runtime/                # Agent and workflow runtime
+│   ├── services/               # Domain services
+│   ├── tasks/                  # Celery tasks
+│   ├── tests/                  # Backend test suite
+│   ├── tools/                  # Built-in and custom tools
+│   ├── config.py               # Runtime configuration
+│   └── main.py                 # FastAPI app entrypoint
+├── frontend/
+│   ├── e2e/                    # Playwright tests
+│   ├── src/
+│   │   ├── api/                # HTTP client wrappers
+│   │   ├── components/         # UI and domain components
+│   │   ├── contexts/           # Auth and WebSocket context
+│   │   ├── hooks/              # Shared frontend hooks
+│   │   ├── lib/                # Design tokens, utilities, toast helpers
+│   │   ├── pages/              # Route-level pages
+│   │   └── types/              # Shared TS types
+│   ├── package.json
+│   └── tailwind.config.js
+├── nginx/                      # Load balancer config
+├── docs/                       # Deployment and release docs
+├── backups/                    # Local recovery artifacts, intentionally ignored
+├── docker-compose.yml
+├── README.md
+├── CONTRIBUTING.md
+└── SECURITY.md
 ```
 
 ---
 
-## 4. System Architecture Overview
+## 5. System architecture overview
 
+### 5.1 High-level flow
+
+```text
+Browser
+  ├─ React app shell
+  ├─ Command palette, toasts, auth state
+  ├─ Route-level pages
+  └─ WebSocket context
+       │
+       ├─ REST calls → FastAPI routers
+       └─ WebSocket subscriptions → monitoring / execution channels
+
+FastAPI
+  ├─ auth + org context
+  ├─ domain routers
+  ├─ model control plane
+  ├─ marketplace / onboarding
+  ├─ workflow execution entrypoints
+  └─ billing / approvals / audit surfaces
+       │
+       ├─ PostgreSQL
+       ├─ Redis
+       ├─ Celery
+       ├─ external model providers
+       └─ external integrations
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        BROWSER (React 18)                           │
-│                                                                     │
-│  WsProvider (singleton WebSocket)                                   │
-│  ┌──────────┐ ┌────────────┐ ┌────────┐ ┌──────────┐ ┌──────────┐  │
-│  │Dashboard │ │  Agents    │ │Workflow│ │  Tools   │ │Monitoring│  │
-│  │          │ │  (CRUD)    │ │Builder │ │ (CRUD+   │ │(live log)│  │
-│  │Stats +   │ │            │ │+Chat   │ │  test)   │ │          │  │
-│  │History   │ │  AgentForm │ │        │ │          │ │          │  │
-│  └──────────┘ └────────────┘ └────────┘ └──────────┘ └──────────┘  │
-│                         │ Axios REST          │ WebSocket            │
-└─────────────────────────┼─────────────────────┼─────────────────────┘
-                          │ /api/*              │ /api/monitoring/ws
-┌─────────────────────────▼─────────────────────▼─────────────────────┐
-│                    FastAPI (Uvicorn / ASGI)                          │
-│                                                                     │
-│  ┌──────────┐ ┌──────────┐ ┌───────────┐ ┌────────┐ ┌───────────┐  │
-│  │ /agents  │ │/workflows│ │/executions│ │/tools  │ │/monitoring│  │
-│  └──────────┘ └──────────┘ └─────┬─────┘ └────────┘ └─────┬─────┘  │
-│                                  │                         │        │
-│                    BackgroundTask │                  WebSocket│       │
-│                                  ▼                         │        │
-│  ┌───────────────────────────────────────────────┐         │        │
-│  │  WorkflowExecutor                             │         │        │
-│  │                                               │         │        │
-│  │  mode=sequential ──► StateGraph               │         │        │
-│  │                       AgentRunner × N  ───────┼─────────┘        │
-│  │  mode=orchestrator ─► Plan LLM call           │  broadcast()     │
-│  │                       AgentRunner × N         │                  │
-│  │                       Synthesize LLM call     │                  │
-│  └───────────────────────────────────────────────┘                  │
-│                                                                     │
-│  ┌──────────────────────┐    ┌──────────────────────────────────┐   │
-│  │  TelegramChannel     │    │  SQLite (aiosqlite)              │   │
-│  │  (long-poll bot)     │    │  Agents · Workflows · Executions │   │
-│  │  → AgentRunner       │    │  Messages · CustomTools          │   │
-│  └──────────────────────┘    └──────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
-                          │
-               ┌──────────▼──────────┐
-               │  Groq API (or any   │
-               │  OpenAI-compatible  │
-               │  endpoint)          │
-               └─────────────────────┘
-```
+
+### 5.2 Important architectural facts
+
+- the product is multi-tenant and `org_id` is the critical isolation boundary
+- most frontend data fetches are only safe after auth and active-org readiness
+- live events are delivered through WebSockets and also backed by Redis pub/sub
+- the runtime is a mix of direct in-process behavior and background task execution
+- older “legacy model string” behavior still exists for compatibility while newer model config behavior is layered on top
+- not every page name reflects final product naming yet; some routes preserve older structure or redirects for compatibility
 
 ---
 
-## 5. Backend — FastAPI Application
+## 6. Backend application lifecycle
 
-### 5.1 Startup & Lifespan
+Primary file: [backend/main.py](backend/main.py)
 
-`main.py` uses FastAPI's `lifespan` context manager (replaces the deprecated `on_event("startup")`):
+### 6.1 Startup sequence
 
-```
-FastAPI startup
-  │
-  ├─ init_db()
-  │    ├─ Base.metadata.create_all()     ← creates tables if they don't exist
-  │    └─ ALTER TABLE workflows ADD ...  ← adds new columns to existing DBs (safe no-op if column exists)
-  │
-  ├─ migrate_agent_models()
-  │    └─ finds agents using removed/renamed model IDs and resets them to DEFAULT_MODEL
-  │
-  ├─ telegram_bot.agent_runner_factory = telegram_runner_factory
-  ├─ telegram_bot.ws_manager = ws_manager
-  └─ telegram_bot.start(token)           ← starts long-poll loop in background (skipped if no token)
+The FastAPI application uses a lifespan context manager rather than old-style startup/shutdown hooks.
 
-[app runs]
+On startup it does the following:
 
-FastAPI shutdown
-  └─ telegram_bot.stop()                 ← graceful updater + app shutdown
-```
+1. validates `JWT_SECRET_KEY` length
+2. optionally installs Playwright Chromium if configured
+3. optionally runs Alembic migrations automatically
+4. initializes the database
+5. loads all tools into the tool registry
+6. seeds marketplace templates
+7. constructs app-level services:
+   - `MemoryService`
+   - `HITLService`
+   - `SchedulerService`
+8. starts background loops:
+   - approval expiration loop
+   - tool health check loop
+9. starts the scheduler
+10. starts the WebSocket manager
+11. migrates agents using unknown legacy models to the configured default model
+12. wires the Telegram channel factory
+13. conditionally starts the Telegram bot
 
-**Why `lifespan` instead of startup/shutdown events?**
-FastAPI's lifespan is the current recommended approach. It runs as a single async context manager, so the `yield` separates startup from shutdown. This ensures cleanup code always runs even if the app crashes during startup.
+### 6.2 Shutdown sequence
 
-**Model migration** (`migrate_agent_models`) solves a real problem: if an agent was created when Gemini was the default model and the platform has since switched to Groq, that agent would fail to run because `ChatOpenAI` doesn't know the old model ID. The migration rewrites the model field to `settings.default_model` for any agent with an unknown model ID.
+On shutdown it:
 
----
+- cancels background tasks
+- stops the scheduler
+- shuts down the WebSocket manager
+- stops the Telegram bot
 
-### 5.2 API Routers
+### 6.3 Middleware and app-level wiring
 
-All routers are assembled in `api/__init__.py` and mounted at `/api` in `main.py`.
+The app adds:
 
-| Prefix | File | Responsibility |
-|--------|------|---------------|
-| `/api/agents` | `agents.py` | Create, read, update, delete agents. `GET /agents/meta/models` returns all available model options. `GET /agents/meta/tools` returns all built-in AND custom tools (with `custom: true` flag). |
-| `/api/workflows` | `workflows.py` | CRUD for workflows. `GET /workflows/templates` returns 3 pre-built templates. |
-| `/api/executions` | `executions.py` | `POST /executions/workflows/{id}/run` triggers a workflow as a background task. `GET /executions` lists executions (filterable by workflow). `GET /executions/{id}/messages` returns step-by-step messages. |
-| `/api/tools` | `tools.py` | CRUD for custom Python tools. `POST /tools/parse-params` extracts typed parameters from code via AST. `POST /tools/{id}/test` runs the tool in the sandbox with provided parameters. |
-| `/api/monitoring` | `monitoring.py` | `GET /stats` returns aggregate stats. `GET /recent-executions` returns last N. `GET /logs` returns buffered events. `WS /monitoring/ws` is the live event stream. |
+- plan-limit middleware
+- CORS middleware
+- security header middleware
+- a rate-limit exceeded handler
+- request metrics middleware for telemetry
 
----
+### 6.4 App title and description
 
-### 5.3 Database Layer
+The FastAPI instance still has older title/description strings:
 
-**File:** `database/db.py`
+- title: `AI Agent Orchestration Platform`
+- description: `Build, configure, and orchestrate AI agents with LangGraph`
 
-```python
-engine = create_async_engine(settings.database_url, echo=False)
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-```
-
-- `expire_on_commit=False` — after `db.commit()`, the ORM objects remain accessible in memory without requiring another DB round-trip. Important for returning objects immediately after creation.
-- `get_db()` is a FastAPI dependency that yields an `AsyncSession` and closes it after the request.
-
-**Schema migration without Alembic:**
-
-```python
-for stmt in [
-    "ALTER TABLE workflows ADD COLUMN execution_mode VARCHAR DEFAULT 'sequential'",
-    "ALTER TABLE workflows ADD COLUMN orchestration_prompt TEXT DEFAULT ''",
-]:
-    try:
-        await conn.execute(text(stmt))
-    except Exception:
-        pass  # column already exists — safe to ignore
-```
-
-SQLite returns an error if you try to add a column that already exists. This pattern runs on every startup and silently ignores those errors — effectively giving us forward-only migration without Alembic.
+This is a branding inconsistency rather than a runtime problem. The product docs and frontend branding now reflect AETHON more clearly than this app metadata does.
 
 ---
 
-### 5.4 WebSocket Manager
+## 7. Configuration model
 
-**File:** `services/websocket_manager.py`
+Primary file: [backend/config.py](backend/config.py)
 
-```python
-class ConnectionManager:
-    active_connections: list[WebSocket]  # all currently open WS connections
-    log_buffer: deque(maxlen=500)        # ring buffer of last 500 events
-```
+### 7.1 Settings source
 
-**`connect(websocket)`** — accepts the WebSocket handshake, adds to `active_connections`, then replays the entire `log_buffer` to the new client. This means when you open the Monitoring page, you immediately see the last 500 events that happened before you connected.
+`Settings` is a `BaseSettings` model using `.env` and `extra="ignore"`.
 
-**`broadcast(message)`** — adds a UTC timestamp, appends to `log_buffer`, then sends the JSON to every active connection. Connections that raise an exception during send are collected in a `dead` list and removed — this avoids iterating over a mutating list mid-loop.
+### 7.2 Major configuration families
 
-**`send_personal(websocket, message)`** — sends to a single connection (used for ping/pong).
+#### Model / LLM settings
 
-The singleton `ws_manager` instance is imported by both `monitoring.py` (the WebSocket endpoint) and `executions.py` (the workflow runner), so all broadcast calls share the same connection list.
+- `openai_compatible_api_key`
+- `openai_compatible_base_url`
+- `openai_api_key`
+- `anthropic_api_key`
+- `ollama_base_url`
+- `default_model`
+- `embedding_model`
 
----
+#### Platform and auth settings
 
-## 6. Runtime — Agent System
+- `database_url`
+- `redis_url`
+- `jwt_secret_key`
+- `jwt_algorithm`
+- `access_token_expire_minutes`
+- `refresh_token_expire_days`
+- `environment`
+- `cors_origins`
 
-### 6.1 AgentRunner
+#### Runtime and background settings
 
-**File:** `runtime/agent_runner.py`
+- `db_pool_size`
+- `db_max_overflow`
+- `celery_broker_url`
+- `celery_result_backend`
+- `hitl_timeout_hours`
+- `docker_execution_image`
+- `otlp_endpoint`
+- `run_migrations_on_startup`
+- `enable_testing_api`
+- `pod_id`
 
-#### `build_llm(model, temperature, max_tokens)`
+#### Billing settings
 
-Creates a `ChatOpenAI` instance configured for the platform's OpenAI-compatible endpoint:
+- `default_monthly_budget_usd`
+- `stripe_secret_key`
+- `stripe_publishable_key`
+- `stripe_webhook_secret`
+- per-plan Stripe price IDs
 
-```python
-kwargs = {
-    "model": actual_model,
-    "temperature": temperature,
-    "max_tokens": max_tokens,
-    "api_key": settings.openai_compatible_api_key or "ollama",
-}
-if settings.openai_compatible_base_url:
-    kwargs["base_url"] = settings.openai_compatible_base_url
+#### Integration settings
 
-if not is_ollama:
-    kwargs["model_kwargs"] = {"parallel_tool_calls": False}
-```
+- `google_client_id`
+- `google_client_secret`
+- `telegram_bot_token`
+- `telegram_chat_id`
+- `tavily_api_key`
 
-**Why `parallel_tool_calls: False`?**
-Groq's hosted open-source models (LLaMA, Mixtral, Gemma) sometimes batch multiple tool invocations into a single malformed request where the tool name includes the JSON arguments. LangGraph's tool dispatch rejects this format with a validation error. Setting `parallel_tool_calls: False` forces the model to emit one tool call at a time, preventing this. Ollama ignores/rejects this parameter, so it is conditionally applied.
+### 7.3 Static registries
 
-**Why `model.startswith("ollama/")`?**
-Local Ollama models are identified by this prefix. The prefix is stripped before passing to the API (`model.removeprefix("ollama/")`), and the `base_url` already points to the Ollama server.
+`backend/config.py` also defines:
 
-#### `AgentRunner.__init__`
+- `AVAILABLE_MODELS`
+  A legacy static list of selectable model strings, currently including Groq, Ollama, and Together variants.
+- `AVAILABLE_TOOLS`
+  A display registry for built-in tool IDs and names.
 
-```python
-self.llm = build_llm(agent_config.model, agent_config.temperature, agent_config.max_tokens)
-self.tools = get_tools(agent_config.tools or [], custom_tool_defs)
-self.memory = MemorySaver()
-self._graph = create_react_agent(
-    self.llm,
-    tools=self.tools,
-    checkpointer=self.memory,
-    prompt=agent_config.system_prompt or None,
-)
-```
+This is important because the codebase now has two model concepts:
 
-Each `AgentRunner` owns a `MemorySaver` checkpointer. LangGraph's `MemorySaver` stores the full message history for each `thread_id` in memory. Calls with the same `thread_id` continue the same conversation (agent has access to prior messages). Calls with different `thread_id` start fresh.
+1. the older legacy string-based model list in config
+2. the newer org-scoped `ModelConfig` control plane
 
-The `create_react_agent` function builds a LangGraph `StateGraph` that implements the **ReAct** (Reason + Act) loop:
-1. LLM receives messages → reasons about what to do
-2. If LLM calls a tool → tool executes → result added to messages
-3. Loop back to step 1 until LLM produces a final text response
-
-#### `AgentRunner.run(message, thread_id, broadcast)`
-
-Streams events from the ReAct graph and fires WebSocket broadcast calls for tool events:
-
-```
-astream_events()
-  ├─ on_chat_model_end → accumulate token counts
-  ├─ on_tool_start     → broadcast {type: "tool_call", tool, input}
-  └─ on_tool_end       → broadcast {type: "tool_result", tool, output}
-```
-
-**3-tier output recovery** (handles edge cases where streaming terminates without a clean final response):
-
-```
-1. Last AIMessage with non-empty text content
-        ↓ (if empty — model only emitted a tool-call intent)
-2. All ToolMessage contents joined — gives downstream agents the raw tool results
-        ↓ (if no tool messages either)
-3. Direct LLM call without the ReAct graph — plain ainvoke() as last resort
-```
-
-This is necessary because Groq's LLaMA models sometimes produce an AIMessage whose content is `""` (the actual answer is encoded as a tool call intent). When the tool call then fails validation, the graph exits with no usable text in state. The fallbacks ensure we always return something meaningful.
+The runtime prefers the new control plane where available, but legacy behavior remains in place for backward compatibility.
 
 ---
 
-### 6.2 Built-in Tools
+## 8. Authentication, org context, and tenancy
 
-**File:** `runtime/tools.py`
+### 8.1 Core rule
 
-Five tools are registered globally and available to all agents:
+The tenant boundary is `org_id`.
 
-| Tool ID | What it does |
-|---------|-------------|
-| `web_search` | DuckDuckGo search via `ddgs`, returns top 5 results formatted as title + body + URL |
-| `calculator` | Evaluates a math expression string using Python's `eval` with a safe namespace (only `math` module + basic builtins) |
-| `http_request` | Makes an HTTPS GET request via `httpx`, returns status code + first 2000 chars of body |
-| `datetime_tool` | Returns current UTC datetime as a formatted string |
-| `text_analysis` | Returns character count, word count, sentence count, and avg words/sentence |
+If a backend query returns or mutates org-owned data, it should be reviewed for org scoping. This is the highest-risk invariant in the system.
 
-All are decorated with `@tool` (LangChain), which introspects the function signature and docstring to create the tool schema the LLM sees.
+### 8.2 User and org model
 
-`TOOL_REGISTRY` maps ID → tool object. `BUILTIN_TOOL_IDS = set(TOOL_REGISTRY.keys())` is used by the execution runner to distinguish built-in tools from custom tools (which are identified by UUID).
+Relevant models:
 
----
+- `User`
+- `Organization`
+- `OrgMember`
+- `OrgInvite`
+- `ApiKey`
 
-### 6.3 Custom Tools — Sandbox & AST Parsing
+Important facts:
 
-**File:** `runtime/tools.py`
+- a user can belong to multiple organizations
+- one active org is selected in the client
+- requests carry active org information via headers/dependencies
+- backend routes commonly use `get_org_context`
 
-#### Security sandbox
+### 8.3 Organization fields
 
-Custom tools are user-written Python functions executed at runtime. To prevent malicious code:
+The `Organization` model includes:
 
-```python
-def _build_safe_namespace() -> dict:
-    safe = {k: getattr(builtins, k) for k in dir(builtins) if not k.startswith("_")}
-    # Remove dangerous builtins
-    for dangerous in ("eval", "exec", "compile", "open", "breakpoint", "input", "__import__"):
-        safe.pop(dangerous, None)
-    # Replace __import__ with an allowlist version
-    safe["__import__"] = _make_safe_importer()
-    return safe
-```
+- identity: `id`, `name`, `slug`, `owner_user_id`
+- plan controls: `plan`, `max_members`, `max_agents`, `max_workflows`, `max_monthly_executions`
+- Stripe/billing linkage
+- monthly budget and usage counters
+- onboarding fields:
+  - `onboarding_completed`
+  - `onboarding_step`
+  - `company_description`
+  - `primary_challenge`
+  - `competitors`
+- org presentation fields:
+  - `timezone`
+  - `logo_url`
+  - `custom_domain`
 
-The safe importer only allows:
-```
-json, math, re, datetime, hashlib, base64, random, string, time,
-collections, itertools, functools, typing, httpx, urllib, html, textwrap
-```
+### 8.4 Multi-tenant behavior in the frontend
 
-Any other import raises `ImportError`. This prevents access to `os`, `sys`, `subprocess`, `socket`, and other dangerous modules.
+The frontend auth context manages:
 
-The code runs as:
-```python
-namespace = {"__builtins__": _build_safe_namespace()}
-exec(code, namespace)
-run_fn = namespace.get("run")
-result = run_fn(**kwargs)
-```
+- authentication state
+- active org selection
+- route gating
+- silent refresh
+- logout behavior
 
-#### AST parameter parsing
+Global queries that depend on org-scoped APIs must wait for:
 
-Instead of executing the code to discover its parameters, we parse the `run()` function signature using Python's `ast` module:
+- authenticated user
+- active org
+- auth loading to finish
 
-```python
-tree = ast.parse(code)
-for node in ast.walk(tree):
-    if isinstance(node, ast.FunctionDef) and node.name == "run":
-        for i, arg in enumerate(node.args.args):
-            type_str = ast.unparse(arg.annotation)   # e.g. "int", "str", "list"
-            default = ast.literal_eval(args.defaults[di])  # safe literal eval
-            params.append({name, type, required, default})
-```
-
-This is safe — no code is executed, only the AST is traversed. The result is a list of typed parameter definitions that are used in two places:
-1. **Frontend test panel** — renders type-appropriate inputs (text, number spinner, JSON textarea, toggle)
-2. **LangChain StructuredTool** — builds a Pydantic model from the params so the LLM sees named, typed fields instead of a single opaque string
-
-#### LangChain integration
-
-```python
-InputSchema = create_model(f"_{name}_schema", **{
-    param_name: (python_type, ...)       # required
-    param_name: (python_type, default)   # optional with default
-    param_name: (Optional[python_type], None)  # optional, no default
-})
-
-return StructuredTool.from_function(
-    func=runner,       # runner(**kwargs) calls execute_custom_tool_code(code, **kwargs)
-    name=name,
-    description=description,
-    args_schema=InputSchema,
-)
-```
-
-The LLM sees this as a typed tool with named parameters — it can fill them contextually rather than guessing a single string format.
+This pattern matters because otherwise pages can issue requests too early and either leak data or produce noisy error states.
 
 ---
 
-## 7. Runtime — Workflow Execution
+## 9. Database schema
 
-**File:** `runtime/graph_builder.py`
+Primary file: [backend/database/models.py](backend/database/models.py)
 
-### 7.1 Sequential Mode
+Below is the schema inventory with grouped explanations.
 
-The workflow's nodes and edges define a directed graph. The executor:
+### 9.1 Agent and execution models
 
-1. Builds an **edge map**: `{source_node_id → target_node_id}`
-2. Finds the **start node**: valid nodes that are never a target (i.e., no incoming edges)
-3. Walks the edge map to produce **execution order** — a flat list of node IDs
-4. Creates a LangGraph `StateGraph` with one node per agent
+#### `Agent`
 
-**WorkflowState** passed between nodes:
-```python
-class WorkflowState(TypedDict):
-    messages: Annotated[list, add_messages]  # full message history
-    execution_id: str
-    current_node: str
-    agent_outputs: dict   # {agent_name → response_text}
-```
+Represents an AI teammate.
 
-Each node function:
-- Reads `agent_outputs` from state (all previous agents' responses)
-- Builds a task string that includes prior context + original task
-- Calls `AgentRunner.run()` with a unique `thread_id = "{execution_id}-{node_id}"`
-- Returns an `AIMessage` and updated `agent_outputs`
+Important fields:
 
-The `thread_id` scoping means each agent has its own memory per workflow execution, and re-running the workflow doesn't contaminate the next run's memory.
+- tenant and identity:
+  - `id`
+  - `org_id`
+  - `name`
+  - `role`
+  - `description`
+- prompt and model:
+  - `system_prompt`
+  - `model`
+  - `model_config_id`
+- role-aware identity:
+  - `role_slug`
+  - `seniority_level`
+  - `autonomy_level`
+  - `trust_score`
+- execution controls:
+  - `tools`
+  - `memory_enabled`
+  - `memory_window`
+  - `max_tokens`
+  - `temperature`
+  - `max_iterations`
+  - `timeout`
+  - retry fields
+- lifecycle:
+  - `telegram_enabled`
+  - `is_active`
+  - `installed_from_listing_id`
+  - `created_by_user_id`
 
-```
-START → node-1 → node-2 → node-3 → END
-```
+#### `AgentMemoryConfig`
 
-### 7.2 Orchestrator Mode
+Overrides or augments agent memory behavior:
 
-Instead of a fixed pipeline, the orchestrator mode uses a **plan → execute → synthesize** pattern:
+- `memory_enabled`
+- `max_memories_per_query`
+- `memory_window_days`
+- `auto_summarize`
 
-```
-Step 1: PLAN
-  LLM input: orchestration_prompt + list of available agents + user task
-  LLM output: JSON array of agent names in desired execution order
-              e.g. ["Research Agent", "Summary Agent"]
+#### `Workflow`
 
-Step 2: EXECUTE
-  For each agent in the plan (in order):
-    ├─ Build context: original task + all previous agent outputs
-    ├─ Call AgentRunner.run() — same path as sequential mode
-    └─ Broadcast agent_done event
+Represents a reusable process graph.
 
-Step 3: SYNTHESIZE (skipped if only 1 agent ran)
-  LLM input: original task + all agent outputs
-  LLM output: one coherent final answer
-```
+Important fields:
 
-**Why not use LangGraph's supervisor / ReAct pattern for the orchestrator?**
+- `org_id`
+- `name`
+- `description`
+- `nodes`
+- `edges`
+- `status`
+- `trigger`
+- `schedule`
+- `input_template`
+- `input_variables`
+- `configured_inputs`
+- `installed_from_listing_id`
+- `execution_mode`
+- `orchestration_prompt`
+- `max_cycles`
 
-The natural implementation would make each agent a LangChain `StructuredTool` and let a supervisor LLM call them via tool-calling. I tried this. It fails on Groq because open-source LLaMA models frequently generate malformed tool-call JSON for custom tool schemas (the model concatenates the arguments into the tool name, producing `"tool_name{...json...}"` instead of two separate fields). The error message is: `"Failed to call a function. Please adjust your prompt."`
+The code comments in the model document multiple supported node types and shapes, including:
 
-The plan→execute→synthesize approach avoids tool-calling entirely. The LLM only produces plain text at each step. This is fully compatible with all Groq models.
+- agent nodes
+- approval nodes
+- parallel group nodes
+- condition nodes
+
+#### `Execution`
+
+Represents a concrete workflow run.
+
+Important fields:
+
+- `org_id`
+- `workflow_id`
+- `trigger`
+- `status`
+- `input_message`
+- `output_message`
+- `started_at`
+- `completed_at`
+- `token_count`
+- `cost`
+- `error`
+- `is_demo`
+
+#### `ExecutionStep`
+
+The detailed execution trace table.
+
+Useful for:
+
+- live execution rendering
+- historical replay
+- tool debugging
+- demo data seeding
+
+Important fields:
+
+- `step_type`
+- `content`
+- `tool_name`
+- `tool_input`
+- `tool_output`
+- `tool_success`
+- `step_index`
+- `duration_ms`
+- `tokens_used`
+
+### 9.2 Conversation and messaging models
+
+#### `Message`
+
+Execution-associated messages.
+
+#### `AgentMessage`
+
+Direct or internal agent-oriented messaging records.
+
+### 9.3 User, org, and governance models
+
+- `User`
+- `Organization`
+- `OrgMember`
+- `OrgInvite`
+- `ApiKey`
+- `AuditLog`
+- `InAppNotification`
+
+These power:
+
+- access control
+- active organization switching
+- audit histories
+- notification counts and lists
+
+### 9.4 Integration and capability models
+
+#### `UserIntegration`
+
+Stores connected third-party account metadata and encrypted credentials/config.
+
+#### `CustomTool`
+
+Represents user-defined tools.
+
+#### `ToolCallLog`
+
+Captures usage of tools for analytics or traceability.
+
+### 9.5 Model control plane models
+
+#### `ModelConfig`
+
+This is the core persistence layer for the newer model library.
+
+Important fields:
+
+- `org_id`
+- `provider`
+- `model_id`
+- `display_name`
+- `api_key_encrypted`
+- `base_url`
+- `context_window`
+- `supports_tools`
+- `supports_vision`
+- input/output cost hints
+- `is_active`
+- `is_default`
+- `test_status`
+- `test_error`
+- `last_tested_at`
+- `notes`
+
+It is linked back to `Agent` through `model_config_id`.
+
+### 9.6 Quality and reputation models
+
+- `AgentFeedback`
+- `AgentReputation`
+- `ExecutionCostLog`
+
+These support:
+
+- approval/rejection learning
+- reputation summaries
+- cost tracking
+
+### 9.7 Evaluation models
+
+- `EvalSuite`
+- `EvalCase`
+- `EvalRun`
+- `EvalCaseResult`
+
+These power the eval lab and CI-style evaluation surfaces.
+
+### 9.8 Company and approval models
+
+#### `CompanyProfile`
+
+Stores company identity and business context:
+
+- `company_name`
+- `mission`
+- `industry`
+- `stage`
+- `monthly_revenue`
+- `monthly_budget_usd`
+- `runway_months`
+- `primary_tech_stack`
+- `goals`
+- `onboarding_complete`
+
+#### `HumanApprovalRequest`
+
+Backs approval nodes and HITL pauses:
+
+- `workflow_id`
+- `execution_id`
+- `node_id`
+- `title`
+- `description`
+- `context_data`
+- `status`
+- `requested_by_agent_id`
+- `reviewed_by_user_id`
+- `reviewer_comment`
+- `expires_at`
+- `resume_token`
+
+### 9.9 Marketplace models
+
+#### `MarketplaceListing`
+
+Stores a publishable marketplace artifact.
+
+Important fields:
+
+- publisher identity
+- `listing_type`
+- `category`
+- `status`
+- `name`
+- `slug`
+- `tagline`
+- `short_description`
+- `description`
+- `readme`
+- `template_data`
+- `tags`
+- `icon`
+- required and optional tools/integrations
+- install and rating stats
+- role-aware marketing metadata:
+  - `role_slug`
+  - `department_type`
+  - `hiring_tagline`
+  - `estimated_minutes_saved_per_week`
+  - `difficulty`
+
+#### `MarketplaceInstall`
+
+Tracks installations into orgs.
+
+#### `MarketplaceReview`
+
+Stores user ratings and reviews.
+
+### 9.10 Webhook and versioning models
+
+- `WebhookEndpoint`
+- `WebhookEventLog`
+- `WorkflowVersion`
+
+These support:
+
+- trigger-driven workflows
+- webhook replay/debugging
+- workflow version history and rollback
 
 ---
 
-## 8. Execution Pipeline — End-to-End Flow
+## 10. Backend API surface
 
-Here is the complete trace from a user clicking "Run" to seeing the result:
+Primary router assembly: [backend/api/__init__.py](backend/api/__init__.py)
 
-```
-[User clicks Run in WorkflowBuilder or sends a message in WorkflowChat]
-        │
-        ▼
-POST /api/executions/workflows/{workflow_id}/run
-  {input_message: "Research quantum computing trends"}
-        │
-        ▼
-executions.py — run_workflow()
-  ├─ Validate workflow exists
-  ├─ Create Execution row in DB (status="running")
-  ├─ Commit and return 202 Accepted (with execution_id)
-  └─ BackgroundTasks.add_task(run_workflow_background, ...)
-        │
-        │ [HTTP response returns immediately — non-blocking]
-        │
-        ▼
-run_workflow_background() [runs concurrently as asyncio task]
-  ├─ Open a new DB session (BackgroundTasks runs outside request context)
-  ├─ Load Workflow + all Agent records for nodes
-  ├─ Identify custom tool IDs (UUIDs not in BUILTIN_TOOL_IDS)
-  ├─ Load CustomTool records from DB
-  ├─ ws_manager.broadcast({type: "execution_start", ...})
-  │
-  ├─ WorkflowExecutor(workflow, agents_map, ws_manager, custom_tool_defs)
-  │       │
-  │       ▼
-  │   executor.execute(input_message, execution_id)
-  │       │
-  │       ├─ [sequential] _build_graph() → StateGraph.compile()
-  │       │    └─ graph.astream() → node by node:
-  │       │         ├─ AgentRunner.run(task, thread_id, broadcast)
-  │       │         │    ├─ LangGraph ReAct loop
-  │       │         │    │    ├─ LLM call → tool call? → execute tool
-  │       │         │    │    └─ ... repeat until final answer
-  │       │         │    ├─ ws_manager.broadcast({type:"tool_call", ...})
-  │       │         │    ├─ ws_manager.broadcast({type:"tool_result", ...})
-  │       │         │    └─ returns (response_text, token_count)
-  │       │         └─ ws_manager.broadcast({type:"agent_done", ...})
-  │       │
-  │       └─ [orchestrator] _run_orchestrator()
-  │            ├─ ws_manager.broadcast({type:"workflow_plan", mode:"orchestrator"})
-  │            ├─ Step 1: LLM → planned agent order (plain text JSON array)
-  │            ├─ Step 2: loop over planned agents → AgentRunner.run() each
-  │            │    └─ ws_manager.broadcast({type:"agent_done", ...})
-  │            └─ Step 3: LLM → synthesized final answer
-  │
-  ├─ Update Execution row: status="completed", output_message, token_count, cost
-  └─ ws_manager.broadcast({type:"execution_complete", execution_id, output, tokens, cost})
+The backend is split into domain routers. This section lists the current endpoint inventory and what each router is for.
 
-[All open browser tabs receive the WebSocket events in real time]
-        │
-        ▼
-Frontend (Layout.tsx — GlobalResultModal)
-  ├─ useEffect watches WebSocket events
-  ├─ Detects execution_complete event
-  ├─ If not on /chat/* page → shows GlobalResultModal popup
-  └─ Modal fetches GET /api/executions/{id} to display full output + cost
+### 10.1 Authentication
 
-Frontend (WorkflowChat.tsx)
-  ├─ Watches WebSocket events filtered by execution_id
-  ├─ Shows live badges: "Research Agent running...", "tool: web_search", "agent done"
-  └─ On execution_complete → refetches execution history → shows response as chat bubble
-```
+File: [backend/api/auth.py](backend/api/auth.py)
 
----
+Endpoints:
 
-## 9. Real-time System — WebSocket Architecture
+- `POST /api/register`
+- `POST /api/login`
+- `POST /api/refresh`
+- `POST /api/logout`
+- `POST /api/api-keys`
+- `GET /api/api-keys`
+- `DELETE /api/api-keys/{key_id}`
 
-### Backend
+Responsibilities:
 
-The WebSocket endpoint lives at `GET /api/monitoring/ws`. Vite proxies `/ws` → `ws://localhost:8000` in development.
+- user registration
+- login / refresh token lifecycle
+- API key management
+- bootstrap org creation on signup
 
-```python
-@router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await ws_manager.connect(websocket)   # accepts + replays buffer
-    try:
-        while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_text("pong")
-    except WebSocketDisconnect:
-        ws_manager.disconnect(websocket)
-```
+### 10.2 Organizations
 
-The server holds the connection open in a loop. When the client disconnects (page close, network drop), `WebSocketDisconnect` is raised and the connection is removed from `active_connections`.
+File: [backend/api/organizations.py](backend/api/organizations.py)
 
-### Frontend
+Endpoints include:
 
-**`WebSocketContext.tsx`** — singleton connection for the entire app:
+- `GET /api/organizations/me`
+- `POST /api/organizations`
+- `GET /api/organizations/{org_id}`
+- `PUT /api/organizations/{org_id}`
+- `DELETE /api/organizations/{org_id}`
+- membership and invite endpoints
 
-```typescript
-const WS_URL = `ws://${window.location.hostname}:8000/api/monitoring/ws`
+Responsibilities:
 
-// In WsProvider:
-ws.onopen    → setConnected(true)
-ws.onmessage → setEvents(prev => [...prev.slice(-499), JSON.parse(e.data)])
-ws.onclose   → setTimeout(connect, 3000)   // auto-reconnect
-ws.onerror   → ws.close()                  // triggers onclose → reconnect
-```
+- org CRUD
+- member management
+- invitations
+- org role updates
 
-The event buffer is capped at 500 entries (`.slice(-499)` keeps the newest). Auto-reconnect fires after 3 seconds on any disconnect.
+### 10.3 Onboarding
 
-**Why a context instead of a per-component hook?**
-If each page created its own WebSocket, opening Monitoring + WorkflowChat simultaneously would open two connections. The server broadcasts to both — you'd process every event twice, causing duplicate state updates and double DB invalidations. The context creates exactly one connection that all components read from.
+File: [backend/api/onboarding.py](backend/api/onboarding.py)
 
-**Stale event deduplication (Layout.tsx):**
+Endpoints:
 
-```typescript
-const lastHandledId = useRef<string | null>(null)
+- `GET /api/onboarding/status`
+- `POST /api/onboarding/company`
+- `POST /api/onboarding/hire-first-agent`
+- `POST /api/onboarding/complete`
+- `POST /api/onboarding/skip`
 
-useEffect(() => {
-  const last = events[events.length - 1]
-  if (last?.type === 'execution_complete' && last.execution_id) {
-    if (last.execution_id === lastHandledId.current) return  // already handled
-    lastHandledId.current = last.execution_id
-    // ... show popup
-  }
-}, [events, location.pathname])
-```
+Responsibilities:
 
-Without this ref, navigating between pages would re-evaluate the effect because `location.pathname` is a dependency. The last event in the buffer is still an `execution_complete` from a previous run, so the popup would re-appear on every page change. The ref tracks which execution ID was last handled and short-circuits duplicates.
+- route gating for first-run setup
+- company identity capture
+- installing the first marketplace agent
+- seeding demo execution history
 
----
+Important onboarding behavior:
 
-## 10. Telegram Integration
+- free-plan orgs cannot keep scheduled automation during onboarding, so onboarding can downgrade workflow trigger behavior to manual for compatibility
+- onboarding stores company context both on `Organization` and `CompanyProfile`
 
-### Setup
+### 10.4 Agents
 
-1. Create a bot via [@BotFather](https://t.me/BotFather) → get a token
-2. Set `TELEGRAM_BOT_TOKEN` in `.env`
-3. Enable **Telegram** toggle on at least one agent in the UI
-4. Restart the backend
+File: [backend/api/agents.py](backend/api/agents.py)
 
-### Full Message Flow
+Endpoints:
 
-```
-User types message in Telegram
-        │
-        ▼
-python-telegram-bot (long-poll, running inside FastAPI lifespan)
-  TelegramChannel._handle_message(update, context)
-        │
-        ├─ Reply immediately: "Processing your request..."
-        │
-        ├─ ws_manager.broadcast({type: "telegram_message", from, content})
-        │   → shows in Monitoring live feed
-        │
-        └─ agent_runner_factory(user_message, user_id)
-              │ queries DB: SELECT * FROM agents WHERE telegram_enabled=true AND is_active=true LIMIT 1
-              │ creates AgentRunner(agent)
-              ▼
-           runner.run(user_message, thread_id="telegram-{user_id}")
-              │
-              ├─ Full LangGraph ReAct loop (tools, memory — same as web)
-              └─ Returns (response_text, token_count)
-                    │
-                    ▼
-              update.message.reply_text(response)
-              → User sees the AI response in Telegram
-```
+- CRUD for agents
+- long-task endpoints
+- memory-config endpoints
+- metadata endpoints for models and tools
 
-**Per-user memory:** `thread_id = "telegram-{user_id}"` means each Telegram user has an independent conversation history with the agent. User A's messages don't affect User B's context.
+Responsibilities:
 
-**Multi-agent note:** Currently the factory picks the first active telegram-enabled agent. To route different users to different agents, you would extend the factory to match on user ID, group, or keyword.
+- create/update/delete agent records
+- manage agent memory configuration
+- expose legacy model catalog and tool catalog
 
----
+### 10.5 Workflows
 
-## 11. Frontend Architecture
+File: [backend/api/workflows.py](backend/api/workflows.py)
 
-### 11.1 Routing & Layout
+Endpoints:
 
-```
-App.tsx
-  └─ WsProvider                           ← singleton WebSocket
-      └─ BrowserRouter
-          └─ Routes
-              └─ Route element={<Layout>}  ← shared shell (Sidebar + Outlet + GlobalResultModal)
-                  ├─ /                    → Dashboard
-                  ├─ /agents              → Agents
-                  ├─ /workflows           → Workflows (list) or WorkflowBuilder (detail)
-                  ├─ /chat/:workflowId    → WorkflowChat
-                  ├─ /tools               → Tools
-                  ├─ /monitoring          → Monitoring
-                  └─ /templates           → Templates
-```
+- workflow CRUD
+- templates
+- version listing
+- diff
+- rollback
 
-`Layout` renders the `Sidebar` + `<Outlet />` (current page). It also owns the `GlobalResultModal` — when a workflow completes outside `/chat/*`, a popup appears over whatever page you're on.
+Responsibilities:
 
-### 11.2 State Management
+- store workflow graphs
+- maintain workflow history
+- expose versioning and rollback behavior
 
-**Server state — TanStack Query:**
-Every API call is wrapped in `useQuery` or `useMutation`. Query keys:
-- `['agents']` — agent list
-- `['agent', id]` — single agent
-- `['workflows']` — workflow list
-- `['tools']` — custom tool list
-- `['execution', id]` — single execution
-- `['recent-executions']` — dashboard history
+### 10.6 Executions
 
-After a mutation succeeds, `qc.invalidateQueries({ queryKey: [...] })` triggers a background refetch.
+File: [backend/api/executions.py](backend/api/executions.py)
 
-**Real-time state — WebSocket context:**
-`events: WsEvent[]` is a React state array (max 500). Every WebSocket message pushes onto this array. Components that care about live updates read from this array — they do not poll the HTTP API for live data.
+Endpoints:
 
-**Local UI state — `useState`:**
-Form inputs, modal open/closed, selected node, run input text, etc.
+- `POST /api/executions/workflows/{workflow_id}/run`
+- `GET /api/executions`
+- `GET /api/executions/{execution_id}`
+- `GET /api/executions/{execution_id}/messages`
 
-### 11.3 Pages & Components
+Responsibilities:
 
-#### Dashboard
-- Fetches `/api/monitoring/stats` and `/api/monitoring/recent-executions`
-- Renders stat cards (agents, workflows, executions, tokens, cost, success rate)
-- Recent execution table with status badges
+- execution creation
+- runtime kickoff
+- list/detail endpoints
+- expose execution steps/messages for the UI
 
-#### Agents (`Agents.tsx`)
-- Lists all agents with model badge, tool badges (resolved to display names), memory badge
-- `AgentForm` slide-over: all agent fields, multi-select tool picker (loaded from `GET /api/agents/meta/tools`)
-- Tool badges use a lookup map: `tools.find(t => t.id === toolId)?.name` — works for both built-in tools (by their `id` like `"web_search"`) and custom tools (by UUID)
+The execution detail response now includes `model_name` so the UI can show which model powered a run.
 
-#### Workflows (`Workflows.tsx`)
-Contains two views controlled by `editing` state:
+### 10.7 Monitoring
 
-**List view** — cards with node count, execution mode badge, copy ID button, Builder/Chat/Delete actions
+File: [backend/api/monitoring.py](backend/api/monitoring.py)
 
-**WorkflowBuilder** (shown when `editing !== null`):
-- React Flow canvas with custom `AgentNode` type
-- Toolbar: name/desc inputs, **Sequential/Orchestrator toggle**, Save, Run
-- Orchestration prompt bar (visible only in Orchestrator mode) — green-tinted textarea
-- Agent assignment panel (right sidebar, appears when a node is selected)
-- On save: strips React Flow internal fields, keeps `{id, type, position, data: {label, agent_id, role}}`
+Endpoints:
 
-#### WorkflowChat (`WorkflowChat.tsx`)
-- Fetches all executions for the workflow (conversation history)
-- Renders past executions as chat bubbles: user message on right, agent response on left
-- On send: calls `POST /executions/workflows/{id}/run` → shows `pendingMessage` immediately
-- Watches WebSocket events filtered by `runningId`:
-  - `workflow_plan` → shows "Running: Agent1, Agent2..."
-  - `agent_done` → shows agent completion badge
-  - `tool_call` → shows tool name badge
-  - `execution_complete` → refetches history, clears pending state
-- Enter to send, Shift+Enter for newline
+- `GET /api/monitoring/stats`
+- `GET /api/monitoring/recent-executions`
+- `GET /api/monitoring/logs`
+- WebSocket endpoint in this router as well
 
-#### Tools (`Tools.tsx`)
-- Lists custom tools with parameter type badges
-- **ToolEditor** split view:
-  - Left: code editor (`<textarea>` with monospace styling)
-  - Right: dynamic test panel with type-appropriate inputs per parameter
-- Code changes → 600ms debounce → `POST /tools/parse-params` → re-renders test inputs
-- Test button → `POST /tools/{id}/test` → shows output or error
+Responsibilities:
 
-#### Monitoring (`Monitoring.tsx`)
-- Stats row at top
-- Live event log scrolling list — one row per WebSocket event, color-coded by type
-- Recent executions table
+- aggregate monitoring statistics
+- recent execution history
+- replayable event logs
+- live event subscriptions
 
----
+### 10.8 Dashboard
 
-## 12. Database Schema
+File: [backend/api/dashboard.py](backend/api/dashboard.py)
 
-### `agents`
+Endpoints:
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | String (UUID) | Primary key |
-| `name` | String | Display name |
-| `role` | String | Role label (e.g. "researcher") |
-| `description` | Text | Optional description |
-| `system_prompt` | Text | Injected as the LLM's system message |
-| `model` | String | Model ID (e.g. "llama-3.3-70b-versatile") |
-| `tools` | JSON (list) | List of tool IDs — built-in IDs or custom tool UUIDs |
-| `memory_enabled` | Boolean | Whether to use MemorySaver (persistent conversation) |
-| `memory_window` | Integer | Max messages to retain (not currently applied in truncation) |
-| `max_tokens` | Integer | Max tokens per LLM response |
-| `temperature` | Float | LLM temperature (0.0–1.0) |
-| `max_iterations` | Integer | LangGraph recursion limit |
-| `timeout` | Integer | Timeout in seconds (not currently enforced in async path) |
-| `telegram_enabled` | Boolean | Whether this agent handles Telegram messages |
-| `is_active` | Boolean | Soft-delete flag |
-| `created_at` | DateTime | Creation timestamp |
-| `updated_at` | DateTime | Last update timestamp |
+- `GET /api/dashboard/summary`
 
-### `workflows`
+Responsibilities:
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | String (UUID) | Primary key |
-| `name` | String | Display name |
-| `description` | Text | Optional description |
-| `nodes` | JSON (list) | Array of `{id, type, position, data: {label, agent_id, role}}` |
-| `edges` | JSON (list) | Array of `{id, source, target, animated}` |
-| `status` | String | "draft" / "active" / "paused" |
-| `trigger` | String | "manual" (scheduler support is scaffolded) |
-| `schedule` | String | Cron expression (nullable) |
-| `template_id` | String | ID of template used to create this workflow |
-| `execution_mode` | String | "sequential" or "orchestrator" |
-| `orchestration_prompt` | Text | System prompt for the orchestrator planner LLM |
-| `created_at` | DateTime | Creation timestamp |
-| `updated_at` | DateTime | Last update timestamp |
+- power the Company Brain / Command Center
+- return:
+  - company profile summary
+  - overview metrics
+  - this-week metrics
+  - team status
+  - pending attention items
 
-### `executions`
+### 10.9 Business context and company profile
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | String (UUID) | Primary key |
-| `workflow_id` | String (FK) | References `workflows.id` (cascade delete) |
-| `trigger` | String | "manual" / "telegram" / "scheduled" |
-| `status` | String | "pending" / "running" / "completed" / "failed" |
-| `input_message` | Text | The user's original input |
-| `output_message` | Text | The final agent response |
-| `started_at` | DateTime | When execution was created |
-| `completed_at` | DateTime | When it finished (null if still running) |
-| `token_count` | Integer | Total tokens used |
-| `cost` | Float | Estimated cost (tokens × $0.000003) |
-| `error` | Text | Error message if status="failed" |
+Files:
 
-### `messages`
+- [backend/api/business.py](backend/api/business.py)
+- [backend/api/company.py](backend/api/company.py)
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | String (UUID) | Primary key |
-| `execution_id` | String (FK) | References `executions.id` (cascade delete) |
-| `from_agent` | String | Agent name that produced this message |
-| `to_agent` | String | Target agent (nullable, for future routing) |
-| `content` | Text | Message content |
-| `role` | String | "assistant" / "user" |
-| `token_count` | Integer | Tokens for this message |
-| `timestamp` | DateTime | When message was created |
-| `msg_metadata` | JSON | Extensible metadata dict |
+Responsibilities:
 
-### `custom_tools`
+- business summary
+- revenue/goals
+- company profile
+- YAML configuration surfaces
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | String (UUID) | Primary key — also used as the tool ID in `agent.tools` |
-| `name` | String (unique) | Snake_case identifier used as LangChain tool name |
-| `description` | Text | Shown to the LLM to decide when to call the tool |
-| `code` | Text | Python source code defining `run(**kwargs) → str` |
-| `is_active` | Boolean | Only active tools are loaded at runtime |
-| `created_at` | DateTime | Creation timestamp |
-| `updated_at` | DateTime | Last update timestamp |
+### 10.10 Billing
+
+File: [backend/api/billing.py](backend/api/billing.py)
+
+Endpoints include:
+
+- plans
+- subscription
+- plan
+- usage
+- invoices
+- upcoming invoice
+- setup intent
+- payment method management
+- subscribe / upgrade / cancel
+
+Responsibilities:
+
+- Stripe-backed subscription management
+- plan and payment method UI support
+- usage display
+
+### 10.11 Marketplace
+
+File: [backend/api/marketplace.py](backend/api/marketplace.py)
+
+Endpoints include:
+
+- admin moderation endpoints
+- list marketplace items
+- my installs / my listings
+- publish agent/workflow/tool
+- update listing and create new version
+- install listing
+- review listing
+- get listing by slug
+
+Responsibilities:
+
+- listing discovery
+- publishing
+- installation
+- moderation
+- reviews
+
+### 10.12 Models
+
+File: [backend/api/models.py](backend/api/models.py)
+
+Endpoints:
+
+- `GET /api/models/templates`
+- `GET /api/models`
+- `POST /api/models`
+- `POST /api/models/test`
+- `GET /api/models/{id}`
+- `PUT /api/models/{id}`
+- `PATCH /api/models/{id}/rotate-key`
+- `POST /api/models/{id}/set-default`
+- `POST /api/models/{id}/test`
+- `DELETE /api/models/{id}`
+- `PATCH /api/agents/{agent_id}/model`
+
+Responsibilities:
+
+- expose built-in model template gallery
+- persist org model configs
+- encrypt API keys at rest
+- test model connectivity before and after save
+- assign saved configs to agents
+
+### 10.13 Approvals, memory, notifications, analytics, tools, evals
+
+Other notable routers:
+
+- [backend/api/approvals.py](backend/api/approvals.py)
+- [backend/api/memory.py](backend/api/memory.py)
+- [backend/api/notifications.py](backend/api/notifications.py)
+- [backend/api/analytics.py](backend/api/analytics.py)
+- [backend/api/tools.py](backend/api/tools.py)
+- [backend/api/tools_registry.py](backend/api/tools_registry.py)
+- [backend/api/evals.py](backend/api/evals.py)
+- [backend/api/feedback.py](backend/api/feedback.py)
+- [backend/api/audit_logs.py](backend/api/audit_logs.py)
+- [backend/api/triggers.py](backend/api/triggers.py)
+- [backend/api/integrations.py](backend/api/integrations.py)
+
+Together these power:
+
+- HITL approval handling
+- memory management and retrieval
+- notification UIs
+- tool catalog and custom tool CRUD
+- evaluation suite management
+- audit and governance surfaces
+- webhook and scheduled triggers
+- integration management
 
 ---
 
-## 13. API Reference
+## 11. Agent runtime
 
-### Agents
+Primary file: [backend/runtime/agent_runner.py](backend/runtime/agent_runner.py)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/agents` | List all agents |
-| POST | `/api/agents` | Create agent |
-| GET | `/api/agents/{id}` | Get agent |
-| PUT | `/api/agents/{id}` | Update agent |
-| DELETE | `/api/agents/{id}` | Delete agent |
-| GET | `/api/agents/meta/models` | List available LLM models |
-| GET | `/api/agents/meta/tools` | List all tools (built-in + custom, with `custom` flag) |
+### 11.1 Core role
 
-### Workflows
+`AgentRunner` is the main runtime object for executing an agent with:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/workflows` | List all workflows |
-| POST | `/api/workflows` | Create workflow |
-| GET | `/api/workflows/templates` | Get pre-built templates |
-| GET | `/api/workflows/{id}` | Get workflow |
-| PUT | `/api/workflows/{id}` | Update workflow (nodes, edges, execution_mode, orchestration_prompt, etc.) |
-| DELETE | `/api/workflows/{id}` | Delete workflow (cascades to executions) |
+- its system prompt
+- selected tools
+- model configuration
+- memory configuration
+- reputation/business context dependencies
 
-### Executions
+### 11.2 LLM resolution
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/executions/workflows/{id}/run` | Trigger a workflow. Returns 202 with execution row immediately. Actual run is async. Body: `{input_message: str}` |
-| GET | `/api/executions` | List executions. Query param: `workflow_id` to filter |
-| GET | `/api/executions/{id}` | Get single execution |
-| GET | `/api/executions/{id}/messages` | Get step-by-step messages for an execution |
+Important behavior:
 
-### Custom Tools
+- the runtime first tries to load `ModelConfig` via `model_service.get_for_agent`
+- if the agent has a specific `model_config_id`, that is preferred
+- otherwise the org default model config is used
+- if no saved config exists, the runner falls back to the legacy string `Agent.model`
+- legacy `build_llm()` still exists and now delegates into the model service
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/tools` | List all custom tools |
-| POST | `/api/tools` | Create tool. Body: `{name, description, code}` |
-| GET | `/api/tools/{id}` | Get tool |
-| PUT | `/api/tools/{id}` | Update tool |
-| DELETE | `/api/tools/{id}` | Delete tool |
-| POST | `/api/tools/parse-params` | Extract typed parameters from code via AST. Body: `{code: str}`. No DB write. |
-| POST | `/api/tools/{id}/test` | Run the tool in sandbox. Body: `{params: {key: value, ...}}` |
+This preserves backward compatibility for older agents while moving the platform toward org-scoped model management.
 
-### Monitoring
+### 11.3 Tool resolution
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/monitoring/stats` | Aggregate platform stats |
-| GET | `/api/monitoring/recent-executions` | Last N executions with workflow name. Query param: `limit` (default 10) |
-| GET | `/api/monitoring/logs` | Returns the in-memory 500-event buffer |
-| WS | `/api/monitoring/ws` | WebSocket live event stream |
+The runner builds tool availability from:
 
----
+- tool registry-backed modern tools
+- custom tool definitions
+- auth-aware integration tools
 
-## 14. Configuration Reference
+It also warns if an assigned model claims not to support tools but the agent has tools configured.
 
-All variables are read from `backend/.env` via Pydantic Settings (`config.py`).
+### 11.4 Memory and execution-step persistence
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `OPENAI_COMPATIBLE_API_KEY` | Yes | `""` | API key for the LLM provider. For Groq: starts with `gsk_`. For Ollama: any non-empty string. |
-| `OPENAI_COMPATIBLE_BASE_URL` | Yes | `""` | Base URL for the OpenAI-compatible endpoint. Groq: `https://api.groq.com/openai/v1`. Ollama: `http://localhost:11434/v1`. Empty = real OpenAI. |
-| `DEFAULT_MODEL` | No | `"llama-3.3-70b-versatile"` | Default model for new agents and the orchestrator planner. Must match the provider's model ID. |
-| `DATABASE_URL` | No | `sqlite+aiosqlite:///./platform.db` | SQLAlchemy async database URL. Change to `postgresql+asyncpg://...` for Postgres. |
-| `CORS_ORIGINS` | No | `["http://localhost:5173"]` | JSON list of allowed CORS origins. |
-| `TELEGRAM_BOT_TOKEN` | No | `""` | Bot token from @BotFather. Leave empty to disable Telegram. |
+The runner includes helpers to:
+
+- persist execution steps
+- update execution steps
+- broadcast execution steps to execution-specific channels
+- extract token usage metadata
+- sanitize tool payloads for JSON persistence
+
+### 11.5 LangGraph usage
+
+The runner uses:
+
+- `create_react_agent`
+- `MemorySaver`
+
+This means agent execution follows a ReAct-style loop with tools and checkpoints.
 
 ---
 
-## 15. WebSocket Event Reference
+## 12. Workflow runtime
 
-Every event has a `timestamp` field (UTC ISO string) added automatically by `ConnectionManager.broadcast()`.
+Primary files:
 
-| `type` | Source | Payload fields |
-|--------|--------|----------------|
-| `execution_start` | executions.py | `execution_id`, `workflow`, `input`, `node_count`, `agent_count`, `unassigned_nodes` |
-| `workflow_plan` | graph_builder.py | `execution_id`, `plan` (list of agent names), `mode` (optional: "orchestrator") |
-| `tool_call` | agent_runner.py | `execution_id`, `node_id`, `agent`, `tool`, `input` |
-| `tool_result` | agent_runner.py | `execution_id`, `node_id`, `agent`, `tool`, `output` |
-| `agent_done` | graph_builder.py | `execution_id`, `node_id`, `agent`, `response` (first 500 chars), `tokens` |
-| `execution_complete` | executions.py | `execution_id`, `output` (first 500 chars), `tokens`, `cost` |
-| `execution_error` | executions.py | `execution_id`, `error` |
-| `telegram_message` | telegram.py | `from` (username or user_id), `content` |
+- [backend/runtime/workflow_engine.py](backend/runtime/workflow_engine.py)
+- [backend/runtime/graph_builder.py](backend/runtime/graph_builder.py)
 
----
+### 12.1 Workflow engine responsibilities
 
-## 16. Security Model
+`WorkflowEngine` is responsible for:
 
-### What is protected
-- **Custom tool sandbox** — `eval`, `exec`, `compile`, `open`, `breakpoint`, `input`, `__import__` are removed. Only an allowlisted set of modules can be imported. File system, network sockets, subprocess, and OS access are blocked.
-- **Tool name validation** — agent and tool names must match `^[a-zA-Z_][a-zA-Z0-9_]{0,49}$`. Spaces are converted to underscores. This prevents prompt injection via tool names.
-- **CORS** — origins are explicitly allowlisted in `settings.cors_origins`.
+- loading execution and workflow rows
+- validating org ownership
+- collecting agent IDs referenced by workflow nodes
+- loading agent memory configs
+- loading custom tools referenced by agent tool lists
+- constructing the `WorkflowExecutor`
+- updating execution status throughout the run
+- recording telemetry
 
-### What is NOT protected (appropriate for a local dev platform)
-- **No authentication** — any client that can reach the API has full access. For production: add OAuth2 / API key middleware.
-- **SQLite is local** — the database file is `platform.db` in the backend working directory. For multi-user or cloud deployment: switch to Postgres with proper credentials.
-- **Telegram is unauthenticated at the user level** — any Telegram user who knows the bot name can send it messages. For production: add a user allowlist by `user_id`.
-- **LLM API keys in `.env`** — never commit `.env` to source control.
+### 12.2 Workflow executor responsibilities
 
----
+`WorkflowExecutor` handles the graph semantics themselves.
 
-## 17. Extension Guide
+It supports:
 
-### Add a new built-in tool
+- agent execution nodes
+- approval/HITL nodes
+- condition nodes
+- parallel group nodes
 
-In `runtime/tools.py`:
-```python
-@tool
-def my_tool(param1: str, param2: int = 5) -> str:
-    """Describe what this tool does so the LLM knows when to call it."""
-    return f"result for {param1}"
+### 12.3 Node semantics
 
-TOOL_REGISTRY["my_tool"] = my_tool
-```
+#### Agent nodes
 
-In `config.py`:
-```python
-AVAILABLE_TOOLS.append({"id": "my_tool", "name": "My Tool", "description": "..."})
-```
+The normal “work happens here” node type.
 
-### Add a new LLM provider
+#### Approval nodes
 
-Set in `.env`:
-```env
-OPENAI_COMPATIBLE_API_KEY=<provider key>
-OPENAI_COMPATIBLE_BASE_URL=<provider base url>
-DEFAULT_MODEL=<provider model id>
-```
+Used to pause workflow progress and request explicit human review.
 
-For providers that support `parallel_tool_calls: False` — no code change needed.
-For providers that don't (like Ollama) — prefix the model name with `ollama/` to skip that parameter.
+Runtime behavior:
 
-### Add a workflow template
+1. create `HumanApprovalRequest`
+2. broadcast workflow-paused event
+3. mark execution `waiting_approval`
+4. wait for approval or timeout
+5. either resume or stop with rejected/timed-out status
 
-In `backend/api/workflows.py`, append to `WORKFLOW_TEMPLATES`:
-```python
-{
-    "id": "unique-template-id",
-    "name": "Template Display Name",
-    "description": "What it does",
-    "nodes": [
-        {"id": "node-1", "type": "agentNode", "position": {"x": 100, "y": 200},
-         "data": {"label": "First Agent", "role": "role_name"}},
-    ],
-    "edges": [
-        {"id": "e1-2", "source": "node-1", "target": "node-2", "animated": True},
-    ],
-    "suggested_agents": [
-        {"role": "role_name", "name": "Agent Name",
-         "system_prompt": "You are ...", "tools": ["web_search"]},
-    ],
-}
-```
+#### Parallel group nodes
 
-### Add a new messaging channel
+Fan out to multiple agents and merge results.
 
-1. Create `backend/channels/my_channel.py`:
-```python
-class MyChannel:
-    async def start(self): ...
-    async def stop(self): ...
-    async def _handle_message(self, message: str, user_id: str): ...
-```
+Supported merge strategies are documented in model comments:
 
-2. In `main.py` lifespan:
-```python
-from channels.my_channel import MyChannel
-my_channel = MyChannel(agent_runner_factory=..., ws_manager=ws_manager)
-await my_channel.start()
-yield
-await my_channel.stop()
-```
+- `concatenate`
+- `summarize`
+- `first_success`
 
-### Switch the database to Postgres
+#### Condition nodes
 
-```env
-DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/platform
-```
+Route workflow progress based on output evaluation.
 
-Add `asyncpg` to `requirements.txt`. The SQLAlchemy models require no changes — they use the generic ORM layer.
+Conditions can use different evaluation modes such as:
+
+- LLM-based checks
+- string containment
+- other configured modes depending on node data
+
+### 12.4 Execution statuses
+
+Statuses in the system include:
+
+- `pending`
+- `running`
+- `completed`
+- `failed`
+- `waiting_approval`
+- `rejected`
+- `timed_out`
+
+This matters because the workflow runtime and UI both rely on these same status names.
 
 ---
 
+## 13. Tools and integrations
+
+### 13.1 Tool registry
+
+Primary file: [backend/tools/registry.py](backend/tools/registry.py)
+
+The registry is the loader/discovery layer for modern tools.
+
+It auto-loads tool modules from:
+
+- research
+- communication
+- productivity
+- code
+- file utilities
+
+### 13.2 Tool families currently present
+
+Examples from [backend/tools](backend/tools):
+
+- research:
+  - `web_search`
+  - `web_scrape`
+  - `news_search`
+- communication:
+  - Gmail
+  - Slack
+- productivity:
+  - Google Docs
+  - Google Sheets
+- code:
+  - code executor
+- file:
+  - CSV parser
+  - PDF parser
+- implementation-level tools:
+  - notifications
+  - research
+  - GitHub
+  - email
+  - Telegram
+  - agent-to-agent messaging
+
+### 13.3 Custom tools
+
+Custom tool CRUD lives under [backend/api/tools.py](backend/api/tools.py).
+
+Capabilities include:
+
+- parse tool parameters from code
+- create and update custom tool definitions
+- test a tool
+
+### 13.4 Integrations
+
+Integration management lives under [backend/api/integrations.py](backend/api/integrations.py).
+
+Current integration types in the schema:
+
+- GitHub
+- Gmail
+- email SMTP
+- Slack
+- Notion
+- Linear
+
+Credentials/config are stored through encrypted paths already present in the codebase.
+
+---
+
+## 14. WebSocket and live monitoring
+
+Primary file: [backend/services/websocket_manager.py](backend/services/websocket_manager.py)
+
+### 14.1 Core design
+
+The WebSocket manager supports:
+
+- direct active connections
+- channel-specific subscriptions
+- org-aware delivery filtering
+- Redis pub/sub fanout across multiple backend instances
+- replayable recent logs
+
+### 14.2 Important constants
+
+- global Redis pub/sub channel: `ws:events`
+- Redis log key: `platform:ws:events`
+- per-pod connection tracking prefix: `platform:ws:connections:`
+- maximum retained log events: `500`
+
+### 14.3 Multi-pod behavior
+
+When Redis is available:
+
+- events are published to Redis
+- each backend pod listens and rebroadcasts locally
+- connection count is synchronized per pod
+
+When Redis is unavailable:
+
+- the system falls back to in-process local broadcast
+
+### 14.4 Org scoping
+
+Each WebSocket connection can be associated with an `org_id`.
+
+Delivery rules:
+
+- if a connection has no org context, it can receive generic events
+- if it does have org context, only matching `org_id` events should be delivered
+
+This is one of the places where multi-tenant safety matters most.
+
+---
+
+## 15. Onboarding flow
+
+Primary backend file: [backend/api/onboarding.py](backend/api/onboarding.py)
+
+Primary frontend file: [frontend/src/pages/OnboardingWizard.tsx](frontend/src/pages/OnboardingWizard.tsx)
+
+### 15.1 Goal
+
+The onboarding flow is designed around founding an AI company, not just configuring automation.
+
+### 15.2 Backend behavior
+
+The backend onboarding API:
+
+- reports whether onboarding is complete
+- saves company identity into org and company profile state
+- installs the first marketplace agent
+- seeds demo execution history on completion if appropriate
+
+### 15.3 First-agent install path
+
+The helper `_build_market_research_install()`:
+
+- loads marketplace template data
+- checks org plan limits for agent/workflow creation
+- renders system prompt and input templates with configured values
+- creates a real `Agent`
+- creates a real `Workflow`
+- uses a simple single-agent workflow graph
+- downgrades scheduled behavior to manual for free plans
+
+### 15.4 Demo seeding
+
+`backend/onboarding/demo_seeder.py` creates realistic demo executions and execution steps so first-time users do not land on an empty dashboard.
+
+---
+
+## 16. Marketplace system
+
+Primary files:
+
+- [backend/api/marketplace.py](backend/api/marketplace.py)
+- [backend/marketplace/seed.py](backend/marketplace/seed.py)
+- [backend/marketplace/templates](backend/marketplace/templates)
+
+### 16.1 Listing types
+
+The schema supports marketplace listings for:
+
+- `agent`
+- `workflow`
+- `tool_config`
+- `eval_suite`
+
+### 16.2 Install behavior
+
+Marketplace install logic currently creates real org-scoped records rather than mock installs.
+
+For agent template installs, the flow generally:
+
+- loads the listing
+- reads serialized template data
+- creates an `Agent`
+- creates a `Workflow`
+- records installation metadata
+- increments install counts
+
+### 16.3 Seeded templates
+
+The marketplace seed uses built-in templates from [backend/marketplace/templates](backend/marketplace/templates).
+
+Current seeded Aethon-built agents include examples such as:
+
+- Market Researcher
+- Content Writer
+- Lead Qualifier
+- Support Triage
+- Competitor Monitor
+
+### 16.4 Publishing flow
+
+The marketplace also supports publishing existing org assets:
+
+- agents
+- workflows
+- tools
+
+This means the marketplace is both:
+
+- a source of installable templates
+- a distribution surface for user-created assets
+
+---
+
+## 17. Model control plane
+
+Primary files:
+
+- [backend/api/models.py](backend/api/models.py)
+- [backend/database/seed_models.py](backend/database/seed_models.py)
+- [backend/services/model_service.py](backend/services/model_service.py)
+- [frontend/src/pages/ModelsPage.tsx](frontend/src/pages/ModelsPage.tsx)
+
+### 17.1 Goal
+
+The model control plane allows an org to:
+
+- browse built-in provider templates
+- save org-scoped model configs
+- encrypt provider API keys at rest
+- test a connection before using it
+- assign a model per agent
+- select one org default
+
+### 17.2 Providers currently supported by design
+
+Built-in template gallery covers:
+
+- OpenAI
+- Anthropic
+- Ollama
+- custom OpenAI-compatible endpoints
+
+### 17.3 Built-in model template gallery
+
+`BUILT_IN_MODELS` currently includes nine templates:
+
+- OpenAI:
+  - GPT-4o
+  - GPT-4o Mini
+  - GPT-4 Turbo
+- Anthropic:
+  - Claude Opus 4.5
+  - Claude Sonnet 4.5
+  - Claude Haiku 4.5
+- Ollama:
+  - Llama 3.2
+  - Mistral
+  - Qwen2.5 Coder
+
+### 17.4 Default seeding behavior
+
+When a new org is created, the system can seed a default `ModelConfig` from environment settings if usable credentials exist.
+
+This ensures:
+
+- new orgs can work without manually configuring models first
+- older fallback behavior still exists if no saved config is present
+
+### 17.5 Runtime interplay
+
+The runtime behavior is:
+
+1. try agent-specific model config
+2. fall back to org default model config
+3. fall back to legacy `Agent.model`
+4. fall back to `settings.default_model`
+
+This is an intentionally gradual compatibility strategy.
+
+---
+
+## 18. Billing, plans, and limits
+
+### 18.1 Billing system
+
+Primary files:
+
+- [backend/api/billing.py](backend/api/billing.py)
+- [backend/services/stripe_service.py](backend/services/stripe_service.py)
+- [backend/middleware/plan_limits.py](backend/middleware/plan_limits.py)
+- [frontend/src/pages/Billing.tsx](frontend/src/pages/Billing.tsx)
+
+### 18.2 Organization plans
+
+Schema enum includes:
+
+- `free`
+- `solo`
+- `team`
+- `business`
+- `enterprise`
+
+### 18.3 Plan-limited resources
+
+The middleware/service layer enforces limits around capabilities such as:
+
+- number of agents
+- workflows
+- scheduled automation
+- monthly executions
+
+### 18.4 Stripe integration
+
+The billing API includes support for:
+
+- setup intents
+- payment method listing
+- default payment method changes
+- subscription changes
+- invoice retrieval
+- cancellation
+
+The UI is designed to degrade gracefully when Stripe is not configured.
+
+---
+
+## 19. Approvals, feedback, memory, and governance
+
+### 19.1 Approvals / HITL
+
+Primary file: [backend/services/hitl_service.py](backend/services/hitl_service.py)
+
+The approvals system allows workflows to pause until a human approves or rejects a step.
+
+The surface includes:
+
+- pending approvals
+- approval history
+- approval detail
+- approve/reject actions
+
+### 19.2 Memory
+
+Primary files:
+
+- [backend/services/memory_service.py](backend/services/memory_service.py)
+- [backend/api/memory.py](backend/api/memory.py)
+
+Memory surfaces include:
+
+- stats
+- retrieval
+- history
+- deletion
+- session-specific deletion
+
+### 19.3 Feedback and reputation
+
+Primary files:
+
+- [backend/api/feedback.py](backend/api/feedback.py)
+- [backend/services/reputation_service.py](backend/services/reputation_service.py)
+
+This layer supports:
+
+- approving/rejecting/flagging agent output
+- agent-level reputation
+- historical learning traces
+
+### 19.4 Audit
+
+Primary file: [backend/api/audit_logs.py](backend/api/audit_logs.py)
+
+The codebase includes audit events for actions such as:
+
+- login events
+- API key events
+- destructive resource actions
+- HITL approvals/rejections
+- marketplace publishing
+- billing failures
+- model control plane actions
+
+### 19.5 Notifications
+
+Primary file: [backend/api/notifications.py](backend/api/notifications.py)
+
+Notifications are now org-scoped and support:
+
+- list
+- unread count
+- mark read
+- mark all read
+- delete
+
+---
+
+## 20. Frontend architecture
+
+### 20.1 App root
+
+Primary file: [frontend/src/App.tsx](frontend/src/App.tsx)
+
+The root app tree wraps:
+
+- `AuthProvider`
+- `WsProvider`
+- `BrowserRouter`
+- document-title manager
+- upgrade modal host
+- global `CommandPalette`
+- global `Toaster`
+
+This means command palette and toast behavior are available from every page.
+
+### 20.2 Contexts
+
+Frontend contexts currently present:
+
+- [frontend/src/contexts/AuthContext.tsx](frontend/src/contexts/AuthContext.tsx)
+- [frontend/src/contexts/WebSocketContext.tsx](frontend/src/contexts/WebSocketContext.tsx)
+
+Responsibilities:
+
+- auth state, token refresh, active org, logout
+- org-aware WebSocket connection and event buffer
+
+### 20.3 Layout shell
+
+Primary files:
+
+- [frontend/src/components/Layout/index.tsx](frontend/src/components/Layout/index.tsx)
+- [frontend/src/components/Layout/Sidebar.tsx](frontend/src/components/Layout/Sidebar.tsx)
+
+The layout is:
+
+- auth-protected
+- onboarding-gated
+- sidebar + main content shell
+- global command surface
+- settings-aware
+
+### 20.4 Data layer
+
+The frontend uses TanStack Query for:
+
+- data caching
+- mutation state
+- background refetch
+- org-sensitive query gating
+
+### 20.5 Shared UI primitives
+
+The codebase now includes multiple shared primitives in `frontend/src/components/ui`, including:
+
+- `GlassCard`
+- `Skeleton`
+- `EmptyState`
+- `TrustScoreBar`
+- `StatusDot`
+- legacy `GlowCard`
+- status badges
+- confirm dialog
+- avatars
+
+This is a transitional design system state: newer Mission OS surfaces are increasingly using the new primitives while older pages still carry some earlier obsidian/glow styling helpers.
+
+---
+
+## 21. Routing and major pages
+
+Primary route assembly: [frontend/src/App.tsx](frontend/src/App.tsx)
+
+### 21.1 Public routes
+
+- `/login`
+- `/register`
+- `/invite/:token`
+- `/marketplace`
+- `/marketplace/:slug`
+- `/pricing`
+
+### 21.2 Protected pre-shell routes
+
+- `/marketplace/publish`
+- `/onboarding`
+
+### 21.3 Protected shell routes
+
+- `/` and `/dashboard`
+- `/company-os`
+- `/company-chat`
+- `/messages`
+- `/agents`
+- `/org-chart`
+- `/workflows`
+- `/executions/:executionId`
+- `/approvals`
+- `/memory`
+- `/analytics`
+- `/evals`
+- `/monitoring`
+- `/templates`
+- `/chat/:workflowId`
+- `/tools`
+- `/integrations`
+- `/company`
+- `/settings/billing`
+- `/settings/models`
+- `/settings/team`
+- `/settings/org`
+
+### 21.4 Route aliasing and redirects
+
+Some pages intentionally alias or redirect:
+
+- `/messages` maps to company chat behavior
+- `/executions` redirects to `/monitoring`
+- `/billing` redirects to `/settings/billing`
+
+This is useful context for reviewers because not every navigation label maps one-to-one to a unique page file.
+
+### 21.5 Major page inventory
+
+Current page files under [frontend/src/pages](frontend/src/pages):
+
+- AcceptInvite
+- Agents
+- Analytics
+- Approvals
+- Billing
+- CommandCenter
+- CompanyChat
+- CompanyOS
+- Dashboard
+- Evaluations
+- ExecutionPage
+- Integrations
+- Login
+- Marketplace
+- MarketplaceDetail
+- Memory
+- ModelsPage
+- Monitoring
+- Onboarding
+- OnboardingWizard
+- OrgSettings
+- Pricing
+- PublishListing
+- Register
+- TeamManagement
+- Templates
+- Tools
+- WorkflowChat
+- Workflows
+
+### 21.6 Notable page roles
+
+- `Dashboard.tsx`
+  The Company Brain / command center surface.
+- `Agents.tsx`
+  Team management plus agent model assignment and memory/reputation access.
+- `Workflows.tsx`
+  Workflow listing and builder surface.
+- `ExecutionPage.tsx`
+  Live and historical execution detail.
+- `Monitoring.tsx`
+  Execution-centric monitoring and routing into execution detail.
+- `ModelsPage.tsx`
+  Model control plane UI.
+- `OnboardingWizard.tsx`
+  Full-screen first-run experience.
+
+---
+
+## 22. UI shell and design system direction
+
+### 22.1 Current design language
+
+The UI uses a dark, premium visual style with:
+
+- obsidian/base backgrounds
+- glow effects
+- glass cards
+- animated accents
+- strong use of purple/cyan/green semantic colors
+
+### 22.2 Sidebar structure
+
+The current sidebar groups navigation into:
+
+- COMPANY
+- AGENTS
+- WORK
+- SETTINGS
+- CONTROL
+
+It includes:
+
+- AETHON mark
+- org switcher
+- active-route highlighting
+- model warning badge support
+- approval count support
+
+### 22.3 Command palette and toasts
+
+Task 9-level UX improvements are now present:
+
+- global command palette via `cmdk`
+- root-level `sonner` toasts
+- cleaner empty states
+- skeleton loaders for key pages
+
+---
+
+## 23. Testing and verification
+
+### 23.1 Backend tests
+
+The backend test suite lives under [backend/tests](backend/tests).
+
+Categories in the tree include:
+
+- security tests
+- tool tests
+- integration tests
+- performance scaffolding
+
+### 23.2 Frontend/browser verification
+
+Browser and E2E checks live under [frontend/e2e](frontend/e2e).
+
+These are used to verify flows such as:
+
+- onboarding
+- command palette
+- billing/model behavior
+- plan enforcement
+- other user journeys added over time
+
+### 23.3 CI
+
+GitHub Actions workflow:
+
+- [.github/workflows/test.yml](.github/workflows/test.yml)
+
+It currently runs:
+
+- backend dependency installation
+- Alembic upgrade
+- backend tests
+- Bandit scan
+- coverage upload
+
+### 23.4 Quality snapshot
+
+The current written quality snapshot is:
+
+- [backend/docs/quality_report.md](backend/docs/quality_report.md)
+
+That file is intentionally more conservative than earlier challenge-era reports and distinguishes recent verification from historical metrics.
+
+---
+
+## 24. Deployment and operations
+
+### 24.1 Compose topology
+
+Primary reference:
+
+- [docker-compose.yml](docker-compose.yml)
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+
+Current local/reference stack includes:
+
+- `frontend`
+- `nginx-lb`
+- `backend-1`
+- `backend-2`
+- `celery_worker`
+- `flower`
+- `redis`
+- optional `postgres` profile
+
+### 24.2 Traffic shape
+
+Typical request path:
+
+- browser → frontend Nginx
+- API/WebSocket traffic → backend load balancer
+- load balancer → backend instances
+
+### 24.3 Runtime implications
+
+Because there are multiple backend instances:
+
+- WebSocket fanout must work across pods
+- connection counts cannot be purely in-memory
+- Redis-backed pub/sub matters
+- org-scoping mistakes become more dangerous, not less
+
+### 24.4 Migration strategy
+
+The codebase uses Alembic now and should continue doing so for schema changes.
+
+Automatic startup migrations exist as an environment-controlled option, but explicit Alembic upgrade remains the clearer operational model.
+
+---
+
+## 25. Current caveats and engineering notes
+
+This section is intentionally candid.
+
+### 25.1 Mixed generations of product code
+
+The codebase contains older and newer product layers simultaneously.
+
+Examples:
+
+- old legacy model-string flows and new model control plane flows
+- legacy visual helpers like `GlowCard` and newer Mission OS primitives like `GlassCard`
+- some older product naming in backend metadata while frontend branding says AETHON
+
+This is normal for an actively evolving product, but important for maintainers to know.
+
+### 25.2 Terminology inconsistencies
+
+The app sometimes uses:
+
+- command center
+- company brain
+- company OS
+- marketplace
+- monitoring vs executions
+
+These are product-surface naming issues, not necessarily architectural problems, but they can confuse future contributors if not documented.
+
+### 25.3 Multi-tenant safety remains the top review lens
+
+Whenever editing:
+
+- dashboard queries
+- notifications
+- websocket events
+- marketplace installs
+- model configs
+- approvals
+- analytics
+
+the first review question should be:
+
+“Is this correctly scoped to the current org?”
+
+### 25.4 Repo cleanliness before public or partner sharing
+
+Before pushing or sharing the repo externally:
+
+- review `.gitignore`
+- confirm local backup folders remain excluded
+- confirm no `.env` files or machine-specific artifacts are tracked
+- review docs for current-state accuracy
+
+Use:
+
+- [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
+
+for that process.
+
+---
+
+## 26. Recommended reading order
+
+If you are new to the codebase, the best order is:
+
+1. [README.md](README.md)
+2. [backend/main.py](backend/main.py)
+3. [backend/config.py](backend/config.py)
+4. [backend/database/models.py](backend/database/models.py)
+5. [backend/api/__init__.py](backend/api/__init__.py)
+6. [backend/runtime/agent_runner.py](backend/runtime/agent_runner.py)
+7. [backend/runtime/workflow_engine.py](backend/runtime/workflow_engine.py)
+8. [backend/runtime/graph_builder.py](backend/runtime/graph_builder.py)
+9. [frontend/src/App.tsx](frontend/src/App.tsx)
+10. [frontend/src/pages/Dashboard.tsx](frontend/src/pages/Dashboard.tsx)
+11. [frontend/src/pages/Agents.tsx](frontend/src/pages/Agents.tsx)
+12. [frontend/src/pages/Workflows.tsx](frontend/src/pages/Workflows.tsx)
+13. [frontend/src/pages/ModelsPage.tsx](frontend/src/pages/ModelsPage.tsx)
+14. [backend/docs/quality_report.md](backend/docs/quality_report.md)
+15. [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+
+That sequence gives the clearest progression from product model to runtime to UI to operations.

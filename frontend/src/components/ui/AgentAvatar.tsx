@@ -31,12 +31,14 @@ function initials(name: string) {
 export function AgentAvatar({
   name,
   color,
+  imageUrl,
   size = 'md',
   running = false,
   className,
 }: {
   name: string
   color?: string
+  imageUrl?: string
   size?: AvatarSize
   running?: boolean
   className?: string
@@ -54,7 +56,7 @@ export function AgentAvatar({
         style={{ background }}
         title={name}
       >
-        {initials(name)}
+        {imageUrl ? <img src={imageUrl} alt="" className="h-full w-full rounded-full object-cover" /> : initials(name)}
       </div>
       {running && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-obsidian-950 bg-accent-400" />}
     </div>

@@ -5,9 +5,18 @@ from contextlib import asynccontextmanager
 import logging
 
 import asyncio
+import os
 import subprocess
 import sys
 import time
+import warnings
+from pathlib import Path
+
+warnings.filterwarnings(
+    "ignore",
+    message="Mixing V1 models and V2 models.*",
+    category=UserWarning,
+)
 
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
@@ -17,10 +26,13 @@ from config import settings, AVAILABLE_MODELS
 from database import init_db
 from api import api_router
 from api.tools_registry import router as public_tools_registry_router
+from api.webhooks.stripe_webhook import router as stripe_webhook_router
 from api.triggers import public_router as public_webhook_router
 from channels.telegram import TelegramChannel
 from middleware.plan_limits import PlanLimitMiddleware
 from middleware.rate_limit import limiter
+from middleware.security import SecurityHeadersMiddleware
+from marketplace.seed import seed_marketplace_templates
 from services.hitl_service import HITLService
 from services.memory_service import MemoryService
 from services.scheduler_service import SchedulerService
@@ -114,6 +126,8 @@ async def approval_expiration_loop(hitl_service: HITLService):
 
 
 async def tool_health_check_loop():
+    print("Tool health checks starting", flush=True)
+    logger.info("Tool health checks starting")
     await tool_registry.run_health_checks()
     while True:
         await asyncio.sleep(300)
@@ -121,13 +135,20 @@ async def tool_health_check_loop():
 
 
 async def ensure_playwright_chromium():
+    if os.getenv("PLAYWRIGHT_INSTALL_ON_STARTUP", "").lower() not in {"1", "true", "yes"}:
+        logger.info("Skipping Playwright Chromium install on startup.")
+        return
     try:
+        cache_dir = Path.home() / "Library" / "Caches" / "ms-playwright"
+        if cache_dir.exists() and any(path.name.startswith("chromium-") for path in cache_dir.iterdir()):
+            logger.info("Playwright Chromium cache detected, skipping browser install.")
+            return
         result = await asyncio.to_thread(
             subprocess.run,
             [sys.executable, "-m", "playwright", "install", "chromium"],
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=60,
         )
         if result.returncode == 0:
             logger.info("Playwright Chromium browser is installed.")
@@ -141,11 +162,27 @@ async def ensure_playwright_chromium():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if len(settings.jwt_secret_key) < 32:
+        raise ValueError(
+            "JWT_SECRET_KEY must be at least 32 characters long.\n"
+            "Generate a secure key with:\n"
+            "  python -c \"import secrets; print(secrets.token_hex(32))\"\n"
+            "Then set it in your .env file."
+        )
     await ensure_playwright_chromium()
-    await asyncio.to_thread(run_migrations)
+    if settings.run_migrations_on_startup:
+        await asyncio.to_thread(run_migrations)
+        print("Database migrations applied successfully", flush=True)
+        logger.info("Database migrations applied successfully")
+    else:
+        logger.info("Skipping automatic database migrations on startup.")
     logger.info("Initializing database...")
     await init_db()
     logger.info("Database initialized.")
+    tool_registry.load_all_tools()
+    logger.info("Loaded %s tools", len(tool_registry.get_all()))
+    async with AsyncSessionLocal() as db:
+        await seed_marketplace_templates(db)
     memory_service = MemoryService()
     app.state.memory_service = memory_service
     hitl_service = HITLService()
@@ -167,6 +204,9 @@ async def lifespan(app: FastAPI):
         await telegram_bot.start(settings.telegram_bot_token)
     else:
         logger.info("Telegram bot token not configured, skipping.")
+
+    print("INFO:     Application startup complete.", flush=True)
+    print("INFO:     Uvicorn running on http://0.0.0.0:8000", flush=True)
 
     yield
 
@@ -198,13 +238,18 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(PlanLimitMiddleware)
 
+allowed_origins = settings.cors_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Api-Key"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining"],
+    max_age=600,
 )
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 @app.middleware("http")
@@ -229,6 +274,7 @@ async def api_request_metrics_middleware(request, call_next):
 
 app.include_router(api_router, prefix="/api")
 app.include_router(public_tools_registry_router, prefix="/tools", tags=["tools-registry"])
+app.include_router(stripe_webhook_router)
 app.include_router(public_webhook_router)
 
 
@@ -248,7 +294,8 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "main:app",
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=8000,
         reload=False,
+        server_header=False,
     )
