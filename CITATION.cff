@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+title: AETHON
+message: "If you use AETHON in research, demos, or articles, please cite the repository."
+type: software
+authors:
+  - family-names: Charan
+    given-names: Charan
+repository-code: "https://github.com/charan047/AETHON.AI"
+license: Apache-2.0
+abstract: "AETHON is an AI Company Operating System for running AI teammates, workflows, approvals, model routing, and company operations from a single platform."
+keywords:
+  - ai company operating system
+  - multi-agent platform
+  - workflow orchestration
+  - model control plane
+  - human in the loop

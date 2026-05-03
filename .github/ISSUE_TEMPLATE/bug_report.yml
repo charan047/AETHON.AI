@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a product, runtime, or developer experience bug
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Share a clear sequence someone else can follow.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Area
+      options:
+        - Frontend
+        - Backend API
+        - Workflow runtime
+        - Marketplace
+        - Model control plane
+        - Billing
+        - Integrations
+        - Docs
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched existing issues first
+          required: true
+        - label: I removed secrets from logs and screenshots
+          required: true

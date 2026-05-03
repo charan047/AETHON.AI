@@ -1,70 +1,107 @@
 # Security Policy
 
-## Scope
+## Overview
 
-This repository contains application code for AETHON, an AI Company Operating System with:
+AETHON is a multi-tenant AI Company Operating System. Security issues in this repository should be treated seriously because the platform includes:
 
-- multi-tenant organization data
 - authentication and authorization
-- billing integrations
-- model provider credentials
-- workflow execution logic
-- audit, approval, and notification surfaces
-
-Security issues in this repository should be treated as sensitive, especially if they affect:
-
-- tenant isolation
-- auth/session handling
-- secret storage
+- organization-scoped data
+- billing and plan enforcement
+- stored integration credentials
 - model provider API keys
-- billing / Stripe behavior
-- arbitrary code execution or tool sandbox escape
+- workflow execution and tool calling
+- approvals, audit logs, and monitoring
 
-## Reporting a vulnerability
+## Supported Security Posture
 
-Please do not open public issues for security vulnerabilities.
+This repository is under active development. Security-sensitive fixes are prioritized for:
 
-Until a dedicated security inbox and disclosure process are established, report vulnerabilities privately to the repository owner(s) through a private GitHub channel or other direct internal communication path.
+- tenant isolation issues
+- auth/session flaws
+- secret exposure risks
+- arbitrary code execution or sandbox escape paths
+- billing or plan enforcement bypasses
+- cross-org websocket, analytics, notification, or tool-log leaks
 
-Include:
+## Reporting A Vulnerability
 
-- summary of the issue
-- affected area or file path
+Please do not open public GitHub issues for security vulnerabilities.
+
+Report vulnerabilities privately to the repository owner or maintainers through a private GitHub channel or another direct confidential channel.
+
+Your report should include:
+
+- a clear summary
+- affected file paths or features
 - reproduction steps
+- expected vs actual behavior
 - impact assessment
-- suggested mitigation if you have one
+- suggested mitigation if available
 
-## Expected response
+## Response Guidelines
 
-Internal target response guidelines:
+Target internal response expectations:
 
 - acknowledge receipt within 2 business days
-- triage severity within 5 business days
-- prepare mitigation or fix plan as quickly as practical based on impact
+- complete initial triage within 5 business days
+- prepare a remediation plan based on severity and exploitability
 
-## Secure development expectations
+## Severity Priorities
 
-- never commit plaintext secrets
-- keep `.env` local and untracked
-- use encrypted storage paths already present in the codebase for saved credentials
-- preserve `org_id` isolation on every new backend surface
-- prefer least-privilege integrations
-- treat any new tool execution capability as high-risk by default
+### Critical
 
-## High-risk areas in this repo
+- cross-tenant data leakage
+- auth bypass
+- arbitrary code execution
+- plaintext credential exposure
+- approval bypass for high-risk actions
+
+### High
+
+- model credential misuse
+- billing privilege escalation
+- websocket subscription leakage
+- workflow execution acting outside org scope
+
+### Medium
+
+- incomplete redaction
+- weak failure-state handling that exposes sensitive metadata
+- insufficient validation on high-impact write APIs
+
+## Secure Development Expectations
+
+- never commit `.env`
+- never store plaintext keys in the database
+- never return encrypted secrets in API responses
+- preserve `org_id` boundaries on every new backend surface
+- assume any new tool execution capability is high-risk
+- prefer least privilege for integrations and background workers
+
+## High-Risk Areas In This Repo
 
 - [backend/auth](backend/auth)
 - [backend/api](backend/api)
-- [backend/services/integration_crypto.py](backend/services/integration_crypto.py)
-- [backend/services/model_service.py](backend/services/model_service.py)
+- [backend/runtime](backend/runtime)
+- [backend/services](backend/services)
 - [backend/tools](backend/tools)
 - [backend/middleware/security.py](backend/middleware/security.py)
+- [backend/services/integration_crypto.py](backend/services/integration_crypto.py)
+- [backend/services/model_service.py](backend/services/model_service.py)
 
-## Security verification already present
+## Existing Verification
 
-The repo includes:
+The repository already includes:
 
-- security-oriented backend tests under [backend/tests/test_security.py](backend/tests/test_security.py)
-- a Bandit scan in CI via [.github/workflows/test.yml](.github/workflows/test.yml)
+- backend security-oriented tests
+- CI-based Bandit scanning
+- org-scoped API protections in key surfaces
+- credential encryption for stored integration and model secrets
 
-These are helpful, but they are not a substitute for code review and targeted security testing on new high-risk features.
+These controls help, but they do not replace code review, architecture review, or targeted testing for new high-risk features.
+
+## Public Disclosure
+
+Please wait for maintainer guidance before publishing a vulnerability publicly.
+
+Coordinated disclosure helps protect downstream users, contributors, and anyone running AETHON in private or public environments.

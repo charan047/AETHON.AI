@@ -1,24 +1,33 @@
 # Contributing to AETHON
 
-## Purpose
+Thanks for contributing to AETHON.
 
-This repository is the product codebase for AETHON. Contributions should optimize for:
+This repository is not a toy demo. It is a multi-tenant product codebase with real runtime, workflow, billing, model-routing, and approval surfaces. We value contributions that make the platform safer, clearer, faster, and more operable.
+
+## What We Optimize For
+
+When making changes, optimize for:
 
 - correctness
-- tenant safety
-- operational clarity
-- maintainability
-- product coherence across backend and frontend
+- tenant isolation
+- product coherence
+- operational resilience
+- clear failure states
+- maintainable code paths
+- excellent developer ergonomics
 
-## Before you start
+## Read Before You Change Anything
 
-Read:
+Start here:
 
 - [README.md](README.md)
 - [DOCUMENTATION.md](DOCUMENTATION.md)
 - [SECURITY.md](SECURITY.md)
+- [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 
-## Local setup
+If your change touches deployment, billing, auth, model routing, tools, or org-scoped data, read the relevant sections in [DOCUMENTATION.md](DOCUMENTATION.md) first.
+
+## Local Development
 
 ### Backend
 
@@ -37,45 +46,94 @@ cd frontend
 npm install
 ```
 
-### Full stack
+### Full Stack
 
 ```bash
 docker compose up -d --build
 ```
 
-## Branch and PR expectations
+## Branching Guidelines
 
-- use short, descriptive branches
-- keep changes focused to one problem or feature area
-- do not mix unrelated cleanup with product changes unless necessary
-- if a migration is required, include it in the same change set
+- keep branches focused
+- avoid mixing unrelated refactors with product fixes
+- include migrations in the same change set as the schema change
+- document behavioral changes when they affect operators or contributors
 
-## Engineering rules for this repo
+Recommended branch naming:
 
-### Multi-tenancy
+- `feat/<short-description>`
+- `fix/<short-description>`
+- `docs/<short-description>`
+- `chore/<short-description>`
 
-Every new backend query or websocket pathway must be reviewed for `org_id` isolation.
+## Pull Request Expectations
 
-If a feature returns or mutates org data, assume org-scoping is required unless proven otherwise.
+Every pull request should answer:
 
-### Secrets and credentials
+- what changed
+- why it changed
+- what risks were considered
+- how it was validated
+- whether docs or migrations were updated
+
+Use the PR template in [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md).
+
+## Engineering Rules
+
+### 1. Protect Tenant Boundaries
+
+This is the most important platform invariant.
+
+If your code touches:
+
+- API queries
+- websocket channels
+- notifications
+- analytics
+- tool logs
+- approvals
+- models
+- executions
+- marketplace installs
+
+assume `org_id` scoping is required unless you can prove otherwise.
+
+### 2. Treat Secrets As Toxic Data
 
 - never commit `.env`
-- never log raw API keys
-- never return encrypted credential fields in API responses
+- never log plaintext API keys
+- never return encrypted secrets in API responses
+- reuse the existing encryption paths for stored credentials
 
-### Migrations
+### 3. Prefer Explicit Failure States
 
-- schema changes go through Alembic
-- do not rely on implicit table creation as the long-term migration strategy
+Avoid silent failure when the product should surface:
 
-### Frontend quality
+- plan limits
+- approval wait states
+- integration misconfiguration
+- model connection failures
+- websocket disconnects
+- tool runtime issues
 
-- prefer shared primitives over one-off UI patterns
-- use the shared toast wrapper in [frontend/src/lib/toast.ts](frontend/src/lib/toast.ts)
-- keep global queries gated on auth/org readiness when they depend on org-scoped APIs
+### 4. Keep Frontend State Honest
 
-## Suggested validation before opening a PR
+The UI should not claim:
+
+- an install succeeded when it did not
+- a run completed when it is still pending
+- a model is configured when the org has no working default
+
+### 5. Ship Schema Changes Properly
+
+Database changes must include:
+
+- model update
+- Alembic migration
+- backfill logic when needed
+- downgrade path where practical
+
+## Validation Checklist Before Opening A PR
 
 ### Backend
 
@@ -91,43 +149,69 @@ cd frontend
 npm run build
 ```
 
-### Browser verification
+### Targeted Runtime Validation
 
-Use the existing Playwright specs in [frontend/e2e](frontend/e2e) for flows touched by your change.
+For flow-heavy changes, validate the affected story end to end:
 
-## Documentation expectations
+- onboarding
+- marketplace install
+- workflow execution
+- approvals
+- billing
+- model assignment
+- multi-org isolation
 
-Update docs when you change:
+### Docs
 
-- core product positioning
-- environment setup
-- route structure
-- deployment assumptions
-- tenant boundaries
-- security posture
-
-At minimum, assess whether the change impacts:
+Check whether your change affects:
 
 - [README.md](README.md)
 - [DOCUMENTATION.md](DOCUMENTATION.md)
+- [SECURITY.md](SECURITY.md)
 - [backend/docs/quality_report.md](backend/docs/quality_report.md)
 - [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 
-## What not to commit
+## Contribution Areas We Especially Value
 
-- local recovery artifacts
-- `backups/`
-- generated Playwright artifacts
-- local DB/cache directories
-- secrets
+- multi-tenant correctness
+- security hardening
+- workflow runtime reliability
+- model provider support
+- approval and audit systems
+- product polish
+- testing and verification
+- docs that reduce ramp-up time
 
-## Code review mindset
+## What Not To Commit
 
-Review for:
+- local secrets
+- `.env` files
+- `node_modules`
+- Python virtualenvs
+- local DB/cache artifacts
+- generated Playwright output
+- backup/recovery artifacts
 
-- tenant isolation
+## Code Review Mindset
+
+Review changes for:
+
+- tenant isolation regressions
 - auth/session correctness
 - migration safety
-- runtime regressions
-- UI state consistency
-- production readiness of failure states
+- websocket correctness
+- user-facing confusion states
+- hidden production assumptions
+- rollback difficulty
+
+## If You’re Unsure
+
+Open an issue first for:
+
+- large architectural changes
+- new provider integrations
+- public API shape changes
+- major workflow/runtime behavior changes
+- broad design system shifts
+
+We would rather align early than unwind a large change later.

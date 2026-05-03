@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security issue
+    url: https://github.com/charan047/AETHON.AI/security
+    about: Please do not report security vulnerabilities publicly.
+  - name: Documentation
+    url: https://github.com/charan047/AETHON.AI/blob/main/DOCUMENTATION.md
+    about: Start here for architecture and product details.
