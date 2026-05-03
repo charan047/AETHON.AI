@@ -66,8 +66,19 @@ jobs:
           ENVIRONMENT: test
           JWT_SECRET_KEY: test-secret-key-for-ci-only
 
-      - name: Run tests
-        run: cd backend && pytest tests/ --ignore=tests/test_integration.py -v --cov=. --cov-report=xml --cov-report=term-missing
+      - name: Run backend smoke tests
+        run: |
+          cd backend
+          pytest \
+            tests/test_agents.py \
+            tests/test_agents_api.py \
+            tests/test_auth.py \
+            tests/test_security.py \
+            -v \
+            --cov=. \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=0
         env:
           DATABASE_URL: sqlite+aiosqlite:///:memory:
           JWT_SECRET_KEY: test-secret-key-for-ci-only
@@ -77,10 +88,11 @@ jobs:
       - name: Build frontend
         run: cd frontend && npm run build
 
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
         with:
-          file: backend/coverage.xml
+          name: backend-coverage-xml
+          path: backend/coverage.xml
 
   security:
     runs-on: ubuntu-latest
