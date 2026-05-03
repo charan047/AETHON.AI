@@ -107,5 +107,5 @@ AVAILABLE_TOOLS = [
     {"id": "slack_read",    "name": "Read Slack",    "description": "Read recent messages from a Slack channel"},
     {"id": "telegram",      "name": "Telegram",      "description": "Send Telegram messages, alerts, and reports"},
     {"id": "notifications", "name": "Notifications", "description": "Notify the founder through the best available channel"},
-    {"id": "agent_communication", "name": "Agent Communication", "description": "Ask, delegate to, and check status of other AI agents"},
+    {"id": "agent_communication", "name": "Agent Communication", "description": "Ask, delegate to, and check status of other Aethon teammates"},
 ]

@@ -20,6 +20,10 @@ import type { Agent, ModelConfigRecord } from '../types'
 const DEFAULTS: Partial<Agent> = {
   name: '',
   role: '',
+  role_slug: 'research_agent',
+  seniority_level: 1,
+  autonomy_level: 'supervised',
+  trust_score: 50,
   description: '',
   system_prompt: '',
   model: 'llama-3.3-70b-versatile',
@@ -37,6 +41,25 @@ const DEFAULTS: Partial<Agent> = {
   retry_on_timeout: true,
   telegram_enabled: false,
 }
+
+const ROLE_OPTIONS = [
+  { value: 'research_agent', label: 'Research Agent' },
+  { value: 'customer_support', label: 'Customer Support' },
+  { value: 'documentation_agent', label: 'Documentation Agent' },
+  { value: 'sde_1', label: 'SDE 1' },
+  { value: 'sde_2', label: 'SDE 2' },
+  { value: 'senior_engineer', label: 'Senior Engineer' },
+  { value: 'tech_lead', label: 'Tech Lead' },
+  { value: 'security_engineer', label: 'Security Engineer' },
+  { value: 'product_manager', label: 'Product Manager' },
+  { value: 'chief_of_staff', label: 'Chief of Staff' },
+]
+
+const AUTONOMY_OPTIONS = [
+  { value: 'supervised', label: 'Supervised' },
+  { value: 'semi_autonomous', label: 'Semi-Autonomous' },
+  { value: 'autonomous', label: 'Autonomous' },
+]
 
 function costLabel(value?: number | null) {
   return value == null ? '—' : `$${value.toFixed(2)}`
@@ -132,6 +155,39 @@ function AgentForm({
           <div className="grid gap-4 md:grid-cols-2">
             <div><label className="label">Name</label><input className="input" placeholder="Agent name" value={form.name} onChange={e => set('name', e.target.value)} /></div>
             <div><label className="label">Role</label><input className="input" placeholder="Agent role" value={form.role} onChange={e => set('role', e.target.value)} /></div>
+          </div>
+
+          <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
+            <div className="mb-4">
+              <h3 className="text-sm font-semibold text-white">Role Profile</h3>
+              <p className="mt-1 text-xs text-obsidian-500">Set the teammate identity that powers org structure, autonomy, and trust-aware interfaces.</p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div>
+                <label className="label">Role slug</label>
+                <select className="input" value={form.role_slug ?? 'research_agent'} onChange={e => set('role_slug', e.target.value)}>
+                  {ROLE_OPTIONS.map(role => (
+                    <option key={role.value} value={role.value}>{role.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Seniority level</label>
+                <select className="input" value={form.seniority_level ?? 1} onChange={e => set('seniority_level', parseInt(e.target.value, 10))}>
+                  {[1, 2, 3, 4, 5].map(level => (
+                    <option key={level} value={level}>Level {level}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Autonomy level</label>
+                <select className="input" value={form.autonomy_level ?? 'supervised'} onChange={e => set('autonomy_level', e.target.value)}>
+                  {AUTONOMY_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </div>
           <div><label className="label">Description</label><input className="input" placeholder="Agent description" value={form.description} onChange={e => set('description', e.target.value)} /></div>
           <div><label className="label">System Prompt</label><textarea className="input min-h-[140px] resize-y" placeholder="System prompt" value={form.system_prompt} onChange={e => set('system_prompt', e.target.value)} /></div>

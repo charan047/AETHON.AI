@@ -161,19 +161,40 @@ const NAV_GROUPS: NavGroup[] = [
 ]
 
 function AethonMark({ collapsed }: { collapsed: boolean }) {
-  return (
-    <div className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3 shadow-card">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-      <div className={clsx('flex items-center gap-3', collapsed && 'justify-center')}>
-        <div className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-accent-purple via-accent-purple to-accent-cyan shadow-glow-purple">
-          <span className="font-mono text-lg font-semibold text-white">A</span>
+  if (collapsed) {
+    return (
+      <div className="flex items-center justify-center px-3 py-5 border-b border-white/[0.05]">
+        <div
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg"
+          style={{
+            background: 'linear-gradient(135deg, #6C63FF, #00D4FF)',
+            boxShadow: '0 0 16px rgba(108,99,255,0.4)',
+          }}
+        >
+          <span className="font-mono text-sm font-bold text-white">A</span>
         </div>
-        {!collapsed && (
-          <div className="min-w-0">
-            <div className="text-sm font-semibold tracking-[0.24em] text-content-primary">AETHON</div>
-            <div className="mt-1 text-xs text-content-secondary">AI Operating System</div>
-          </div>
-        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-3 border-b border-white/[0.05] px-5 py-5">
+      <div
+        className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg"
+        style={{
+          background: 'linear-gradient(135deg, #6C63FF, #00D4FF)',
+          boxShadow: '0 0 16px rgba(108,99,255,0.4)',
+        }}
+      >
+        <span className="font-mono text-sm font-bold text-white">A</span>
+      </div>
+      <div>
+        <div className="text-sm font-bold tracking-widest text-white">
+          AETHON
+        </div>
+        <div className="mt-0.5 text-xs leading-none text-white/25">
+          AI Operating System
+        </div>
       </div>
     </div>
   )
@@ -223,7 +244,7 @@ export function Sidebar() {
       <div className="pointer-events-none absolute inset-x-0 top-0 h-56 bg-gradient-to-b from-accent-purple/[0.10] via-accent-cyan/[0.04] to-transparent" />
 
       <div className="relative z-10 flex h-full flex-col">
-        <div className="px-3 pt-4">
+        <div className="pt-0">
           <AethonMark collapsed={collapsed} />
         </div>
 

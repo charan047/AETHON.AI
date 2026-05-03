@@ -12,7 +12,7 @@ from tools.registry import tool_registry
 @tool_registry.register
 class AgentTool(BaseTool):
     name = "agent_communication"
-    description = "Send messages to and receive responses from other AI agents"
+    description = "Send messages to and receive responses from other Aethon teammates"
     category = ToolCategory.ai
     requires_auth = False
     rate_limit_per_minute = 30

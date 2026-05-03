@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database.db import AsyncSessionLocal
-from database.models import AgentFeedback, AgentReputation, FeedbackType
+from database.models import Agent, AgentFeedback, AgentReputation, FeedbackType
 from services.distributed_lock import DistributedLock
 
 
@@ -63,32 +63,50 @@ class ReputationService:
         redis_client = redis.from_url(settings.redis_url, decode_responses=True)
         try:
             async with DistributedLock(redis_client, f"reputation:{agent_id}", ttl=10):
-                result = await db.execute(select(AgentFeedback).where(AgentFeedback.agent_id == agent_id))
-                feedback_items = result.scalars().all()
-                total_tasks = len(feedback_items)
-                approved_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.approved)
-                rejected_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.rejected)
-                edited_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.edited)
-                approval_rate = approved_count / total_tasks if total_tasks else 0.0
-
-                distances = [
-                    self._normalized_edit_distance(item.original_output, item.edited_output)
-                    for item in feedback_items
-                    if item.edited_output
-                ]
-                avg_edit_distance = sum(distances) / len(distances) if distances else 0.0
-
-                reputation = await self.get_reputation(agent_id, db)
-                reputation.total_tasks = total_tasks
-                reputation.approved_count = approved_count
-                reputation.rejected_count = rejected_count
-                reputation.edited_count = edited_count
-                reputation.approval_rate = approval_rate
-                reputation.avg_edit_distance = avg_edit_distance
-                reputation.last_updated = datetime.utcnow()
-                await db.flush()
+                await self._recompute_reputation(agent_id, db)
+        except Exception:
+            # Reputation updates should continue to work even if Redis is unavailable.
+            await self._recompute_reputation(agent_id, db)
         finally:
             await redis_client.aclose()
+
+    async def _recompute_reputation(self, agent_id: str, db: AsyncSession) -> None:
+        result = await db.execute(select(AgentFeedback).where(AgentFeedback.agent_id == agent_id))
+        feedback_items = result.scalars().all()
+        total_tasks = len(feedback_items)
+        approved_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.approved)
+        rejected_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.rejected)
+        edited_count = sum(1 for item in feedback_items if item.feedback_type == FeedbackType.edited)
+        approval_rate = approved_count / total_tasks if total_tasks else 0.0
+
+        distances = [
+            self._normalized_edit_distance(item.original_output, item.edited_output)
+            for item in feedback_items
+            if item.edited_output
+        ]
+        avg_edit_distance = sum(distances) / len(distances) if distances else 0.0
+
+        reputation = await self.get_reputation(agent_id, db)
+        reputation.total_tasks = total_tasks
+        reputation.approved_count = approved_count
+        reputation.rejected_count = rejected_count
+        reputation.edited_count = edited_count
+        reputation.approval_rate = approval_rate
+        reputation.avg_edit_distance = avg_edit_distance
+        reputation.last_updated = datetime.utcnow()
+
+        agent = await db.scalar(select(Agent).where(Agent.id == agent_id))
+        if agent:
+            agent.trust_score = self._calculate_trust_score(
+                total_tasks=total_tasks,
+                approval_rate=approval_rate,
+                rejected_count=rejected_count,
+                edited_count=edited_count,
+                avg_edit_distance=avg_edit_distance,
+            )
+            agent.updated_at = datetime.utcnow()
+
+        await db.flush()
 
     async def _extract_learning(
         self,
@@ -142,7 +160,7 @@ class ReputationService:
             return fallback
 
         prompt = (
-            "An AI agent produced output A. A human edited it to output B.\n"
+            "An Aethon teammate produced output A. A human edited it to output B.\n"
             "In one sentence, what preference or style can we learn from this edit?\n"
             "Be specific and actionable. Output only the learning, nothing else.\n\n"
             f"A = {feedback.original_output[:500]}\n\n"
@@ -162,6 +180,31 @@ class ReputationService:
             return 0.0
         max_len = max(len(original), len(edited), 1)
         return self._levenshtein(original, edited) / max_len
+
+    def _calculate_trust_score(
+        self,
+        *,
+        total_tasks: int,
+        approval_rate: float,
+        rejected_count: int,
+        edited_count: int,
+        avg_edit_distance: float,
+    ) -> float:
+        if total_tasks <= 0:
+            return 50.0
+
+        rejected_rate = rejected_count / total_tasks
+        edited_rate = edited_count / total_tasks
+
+        score = (
+            45.0
+            + min(total_tasks, 20) * 1.5
+            + approval_rate * 25.0
+            - rejected_rate * 25.0
+            - edited_rate * 10.0
+            - avg_edit_distance * 15.0
+        )
+        return max(0.0, min(100.0, round(score, 1)))
 
     def _levenshtein(self, a: str, b: str) -> int:
         if a == b:

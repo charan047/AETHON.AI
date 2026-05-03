@@ -6,7 +6,7 @@ from fastapi import Depends
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
 from uuid import uuid4
@@ -20,6 +20,7 @@ from utils.sanitize import sanitize_text
 
 router = APIRouter(dependencies=[Depends(get_current_user), Depends(get_org_context)])
 long_running_agent_service = LongRunningAgentService()
+VALID_AUTONOMY_LEVELS = {"restricted", "supervised", "semi_autonomous", "autonomous"}
 
 
 class AgentCreate(BaseModel):
@@ -40,6 +41,17 @@ class AgentCreate(BaseModel):
     retry_backoff_multiplier: float = Field(default=2.0, ge=1.0, le=5.0)
     retry_on_timeout: bool = True
     telegram_enabled: bool = False
+    role_slug: Optional[str] = None
+    seniority_level: int = 1
+    autonomy_level: str = "supervised"
+    trust_score: float = 50.0
+
+    @field_validator("autonomy_level")
+    @classmethod
+    def validate_autonomy(cls, v: str) -> str:
+        if v not in VALID_AUTONOMY_LEVELS:
+            raise ValueError(f"autonomy_level must be one of {VALID_AUTONOMY_LEVELS}")
+        return v
 
 
 class AgentUpdate(BaseModel):
@@ -61,6 +73,16 @@ class AgentUpdate(BaseModel):
     retry_on_timeout: Optional[bool] = None
     telegram_enabled: Optional[bool] = None
     is_active: Optional[bool] = None
+    role_slug: Optional[str] = None
+    seniority_level: Optional[int] = None
+    autonomy_level: Optional[str] = None
+
+    @field_validator("autonomy_level")
+    @classmethod
+    def validate_autonomy(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_AUTONOMY_LEVELS:
+            raise ValueError(f"autonomy_level must be one of {VALID_AUTONOMY_LEVELS}")
+        return v
 
 
 class AgentResponse(BaseModel):
@@ -68,6 +90,10 @@ class AgentResponse(BaseModel):
     org_id: str
     name: str
     role: str
+    role_slug: Optional[str] = None
+    seniority_level: int
+    autonomy_level: str
+    trust_score: float
     description: str
     system_prompt: str
     model: str

@@ -47,7 +47,7 @@ class EvalGenerator:
                 for idx, execution in enumerate(batch)
             )
             prompt = f"""
-Review these AI agent interactions.
+Review these Aethon teammate interactions.
 For each one, create an eval test case.
 Each case should test something specific.
 Vary the scoring methods: use exact_match for factual outputs,

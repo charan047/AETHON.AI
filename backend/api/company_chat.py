@@ -151,7 +151,7 @@ def _system_prompt(context: dict) -> str:
     activity_lines = "\n".join(f"- {execution.status}: {execution.input_message[:120]}" for execution in recent) or "- No recent activity"
     pending_lines = "\n".join(f"- {approval.title}: {approval.description or 'Approval requested'}" for approval in pending) or "- Nothing pending"
 
-    return f"""You are the Chief of Staff for {company_name}. You have access to a team of AI agents:
+    return f"""You are the Chief of Staff for {company_name}. You have access to an Aethon team of AI teammates:
 {agent_lines}
 
 You have access to these workflows:

@@ -697,12 +697,14 @@ class ToolCallLog(Base):
     __tablename__ = "tool_call_logs"
     __table_args__ = (
         Index("ix_tool_call_logs_user_created", "user_id", "created_at"),
+        Index("ix_tool_call_logs_org_created", "org_id", "created_at"),
         Index("ix_tool_call_logs_tool_created", "tool_name", "created_at"),
         Index("ix_tool_call_logs_execution_id", "execution_id"),
     )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
     agent_id = Column(String, ForeignKey("agents.id", ondelete="SET NULL"), nullable=True)
     execution_id = Column(String, ForeignKey("executions.id", ondelete="SET NULL"), nullable=True)
     tool_name = Column(String(100), nullable=False)

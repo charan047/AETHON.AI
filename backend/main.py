@@ -229,9 +229,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="AI Agent Orchestration Platform",
-    description="Build, configure, and orchestrate AI agents with LangGraph",
-    version="1.0.0",
+    title="Aethon API",
+    description=(
+        "Aethon — The operating system for AI companies. "
+        "Run your company with AI teammates that have roles, "
+        "trust scores, and real tools."
+    ),
+    version="2.0.0",
     lifespan=lifespan,
 )
 app.state.limiter = limiter

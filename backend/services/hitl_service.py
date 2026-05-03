@@ -2,6 +2,7 @@ import asyncio
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
+import logging
 
 import redis.asyncio as redis
 from sqlalchemy import select
@@ -15,6 +16,10 @@ from services.websocket_manager import ws_manager
 
 
 HITL_DECISIONS_CHANNEL = "hitl:decisions"
+POSTGRES_FALLBACK_POLL_SECONDS = 5.0
+REDIS_POLL_SECONDS = 1.0
+
+logger = logging.getLogger(__name__)
 
 
 class HITLService:
@@ -67,21 +72,57 @@ class HITLService:
         resume_token: str,
         timeout_seconds: int = 86400,
     ) -> dict:
-        redis_client = redis.from_url(settings.redis_url, decode_responses=True)
-        pubsub = redis_client.pubsub()
+        redis_client = None
+        pubsub = None
+        redis_available = False
+
         try:
+            redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+            pubsub = redis_client.pubsub()
             await pubsub.subscribe(HITL_DECISIONS_CHANNEL)
-            deadline = asyncio.get_running_loop().time() + timeout_seconds
+            redis_available = True
+        except Exception as exc:
+            logger.warning(
+                "HITL Redis subscription unavailable for approval %s; using Postgres polling fallback: %s",
+                approval_id,
+                exc,
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout_seconds
+            next_postgres_poll = loop.time()
 
             while True:
-                remaining = deadline - asyncio.get_running_loop().time()
+                now = loop.time()
+                remaining = deadline - now
                 if remaining <= 0:
                     break
 
-                msg = await pubsub.get_message(
-                    ignore_subscribe_messages=True,
-                    timeout=min(1.0, remaining),
-                )
+                if now >= next_postgres_poll:
+                    db_decision = await self._check_postgres_decision(approval_id)
+                    if db_decision is not None:
+                        return db_decision
+                    next_postgres_poll = now + POSTGRES_FALLBACK_POLL_SECONDS
+
+                if not redis_available or pubsub is None:
+                    await asyncio.sleep(min(POSTGRES_FALLBACK_POLL_SECONDS, remaining))
+                    continue
+
+                try:
+                    msg = await pubsub.get_message(
+                        ignore_subscribe_messages=True,
+                        timeout=min(REDIS_POLL_SECONDS, remaining),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "HITL Redis listener failed for approval %s; continuing with Postgres polling fallback: %s",
+                        approval_id,
+                        exc,
+                    )
+                    redis_available = False
+                    continue
+
                 if not msg or msg.get("type") != "message":
                     continue
 
@@ -98,9 +139,20 @@ class HITLService:
                     "comment": payload.get("comment"),
                 }
         finally:
-            await pubsub.unsubscribe(HITL_DECISIONS_CHANNEL)
-            await pubsub.aclose()
-            await redis_client.aclose()
+            if pubsub is not None:
+                try:
+                    await pubsub.unsubscribe(HITL_DECISIONS_CHANNEL)
+                except Exception:
+                    pass
+                try:
+                    await pubsub.aclose()
+                except Exception:
+                    pass
+            if redis_client is not None:
+                try:
+                    await redis_client.aclose()
+                except Exception:
+                    pass
 
         async with AsyncSessionLocal() as db:
             result = await db.execute(
@@ -118,7 +170,33 @@ class HITLService:
                 "approval_id": approval_id,
             }
         )
-        return {"decision": "timed_out"}
+        return {"decision": "timed_out", "comment": ""}
+
+    async def _check_postgres_decision(self, approval_id: str) -> dict | None:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(HumanApprovalRequest).where(HumanApprovalRequest.id == approval_id)
+            )
+            approval = result.scalar_one_or_none()
+            if not approval:
+                return None
+            status = approval.status.value if hasattr(approval.status, "value") else str(approval.status)
+            if status == ApprovalStatus.approved.value:
+                return {
+                    "decision": ApprovalStatus.approved.value,
+                    "comment": approval.reviewer_comment,
+                }
+            if status == ApprovalStatus.rejected.value:
+                return {
+                    "decision": ApprovalStatus.rejected.value,
+                    "comment": approval.reviewer_comment,
+                }
+            if status == ApprovalStatus.timed_out.value:
+                return {
+                    "decision": ApprovalStatus.timed_out.value,
+                    "comment": approval.reviewer_comment,
+                }
+        return None
 
     async def check_expired_approvals(self) -> int:
         now = datetime.now(timezone.utc)

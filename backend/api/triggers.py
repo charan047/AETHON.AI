@@ -212,7 +212,7 @@ async def test_webhook(
 
     payload = {
         "type": "test",
-        "message": "This is a test webhook trigger from the AI Agent Platform.",
+        "message": "This is a test webhook trigger from Aethon.",
         "webhook_id": webhook_id,
     }
     body = json.dumps(payload).encode("utf-8")

@@ -311,6 +311,7 @@ class BaseTool(ABC):
                     ToolCallLog(
                         id=str(uuid4()),
                         user_id=self.user_id,
+                        org_id=context.get("org_id"),
                         agent_id=context.get("agent_id"),
                         execution_id=context.get("execution_id"),
                         tool_name=self.name,

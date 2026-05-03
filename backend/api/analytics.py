@@ -2,7 +2,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.dependencies import get_current_user
@@ -228,7 +228,10 @@ async def get_tool_analytics(
         .where(
             ToolCallLog.user_id == current_user.id,
             ToolCallLog.created_at >= since,
-            or_(ToolCallLog.execution_id.is_(None), Execution.org_id == ctx.org.id),
+            or_(
+                and_(ToolCallLog.execution_id.is_(None), ToolCallLog.org_id == ctx.org.id),
+                Execution.org_id == ctx.org.id,
+            ),
         )
         .group_by(ToolCallLog.tool_name)
     )
@@ -290,7 +293,10 @@ async def get_analytics_overview(
         .outerjoin(Execution, Execution.id == ToolCallLog.execution_id)
         .where(
             ToolCallLog.user_id == current_user.id,
-            or_(ToolCallLog.execution_id.is_(None), Execution.org_id == ctx.org.id),
+            or_(
+                and_(ToolCallLog.execution_id.is_(None), ToolCallLog.org_id == ctx.org.id),
+                Execution.org_id == ctx.org.id,
+            ),
         )
     ) or 0
 

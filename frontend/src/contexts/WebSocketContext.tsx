@@ -2,8 +2,15 @@ import { createContext, useContext, useEffect, useRef, useState, useCallback, ty
 import type { WsEvent } from '../types'
 import { useAuth } from './AuthContext'
 
-const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws'
-const WS_BASE_URL = `${WS_PROTOCOL}://${window.location.hostname}:8000/api/monitoring/ws`
+function buildWsBaseUrl(): string {
+  const envUrl = import.meta.env.VITE_WS_URL?.trim()
+  if (envUrl) return envUrl
+
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${protocol}://${window.location.host}/api/monitoring/ws`
+}
+
+const WS_BASE_URL = buildWsBaseUrl()
 
 interface WsContextValue {
   events: WsEvent[]

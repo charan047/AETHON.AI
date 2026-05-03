@@ -1,24 +1,11 @@
 import { motion } from 'framer-motion'
+import { TRUST_SCORE_COLOR, TRUST_SCORE_LABEL } from '../../lib/design-tokens'
 
 interface TrustScoreBarProps {
   score: number
   showLabel?: boolean
   showNumber?: boolean
   size?: 'xs' | 'sm' | 'md'
-}
-
-function trustColor(score: number): string {
-  if (score >= 85) return '#00FF9D'
-  if (score >= 65) return '#6C63FF'
-  if (score >= 40) return '#FFB800'
-  return '#FF4D6D'
-}
-
-function trustLabel(score: number): string {
-  if (score >= 85) return 'Autonomous'
-  if (score >= 65) return 'Semi-Auto'
-  if (score >= 40) return 'Supervised'
-  return 'Restricted'
 }
 
 const HEIGHTS = { xs: 'h-px', sm: 'h-0.5', md: 'h-1' }
@@ -30,8 +17,8 @@ export function TrustScoreBar({
   size = 'sm',
 }: TrustScoreBarProps) {
   const safeScore = Math.max(0, Math.min(100, score || 0))
-  const color = trustColor(safeScore)
-  const label = trustLabel(safeScore)
+  const color = TRUST_SCORE_COLOR(safeScore)
+  const label = TRUST_SCORE_LABEL(safeScore)
 
   return (
     <div className="w-full">

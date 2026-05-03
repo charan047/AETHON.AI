@@ -47,7 +47,7 @@ class TelegramChannel:
 
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "Hello! I'm your AI Agent assistant. Send me a message and I'll process it through the configured workflow.\n\n"
+            "Hello! I'm your Aethon assistant. Send me a message and I'll route it through your configured company workflow.\n\n"
             "Use /help for more information."
         )
 
@@ -56,7 +56,7 @@ class TelegramChannel:
             "Available commands:\n"
             "/start - Start the bot\n"
             "/help - Show this help\n\n"
-            "Just send any message to interact with the AI agents!"
+            "Send any message to work with your Aethon team."
         )
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
