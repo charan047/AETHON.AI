@@ -71,7 +71,7 @@ lxml==5.2.1
 cssselect==1.2.0
 apscheduler==3.10.4
 croniter==2.0.5
-svix==1.20.0
+svix==1.92.2
 
 # Phase 5 additions
 rouge-score==0.1.2
