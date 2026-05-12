@@ -1,9 +1,12 @@
+import asyncio
 import time
+import logging
 from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from database.db import AsyncSessionLocal
 from database.models import Agent, AgentMemoryConfig, CustomTool, Execution, ExecutionStatus, Workflow
 from runtime.graph_builder import WorkflowExecutionStopped, WorkflowExecutor
 from runtime.tools import BUILTIN_TOOL_IDS
@@ -11,6 +14,8 @@ from services.hitl_service import HITLService
 from services.memory_service import MemoryService
 from services.telemetry_service import telemetry_service
 from services.websocket_manager import ws_manager
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowEngine:
@@ -37,6 +42,61 @@ class WorkflowEngine:
         return list(agent_ids)
 
     async def run(
+        self,
+        workflow_id: str,
+        input_message: str,
+        user_id: str | None,
+        execution_id: str,
+    ) -> tuple[str, int]:
+        execution = await self.db.scalar(select(Execution).where(Execution.id == execution_id))
+        if not execution:
+            raise RuntimeError("Execution not found")
+
+        max_secs = getattr(execution, "max_runtime_seconds", 3600) or 3600
+
+        try:
+            return await asyncio.wait_for(
+                self._run_internal(workflow_id, input_message, user_id, execution_id),
+                timeout=float(max_secs),
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Execution %s hit max runtime %ss. Marking timed_out.",
+                execution_id,
+                max_secs,
+            )
+            async with AsyncSessionLocal() as fail_db:
+                stale = await fail_db.scalar(
+                    select(Execution).where(Execution.id == execution_id)
+                )
+                if stale and stale.status == ExecutionStatus.running:
+                    stale.status = ExecutionStatus.timed_out
+                    stale.error = f"Exceeded max runtime of {max_secs}s"
+                    stale.completed_at = datetime.utcnow()
+                    await fail_db.commit()
+            org_id = str(execution.org_id) if execution else None
+            if org_id:
+                await ws_manager.broadcast_to_channel(
+                    f"org:{org_id}",
+                    {
+                        "event": "execution_failed",
+                        "execution_id": execution_id,
+                        "status": ExecutionStatus.timed_out.value,
+                        "error": f"Execution timed out after {max_secs}s",
+                    },
+                )
+                await ws_manager.broadcast_to_channel(
+                    f"execution:{execution_id}",
+                    {
+                        "event": "execution_failed",
+                        "execution_id": execution_id,
+                        "status": ExecutionStatus.timed_out.value,
+                        "error": f"Execution timed out after {max_secs}s",
+                    },
+                )
+            raise
+
+    async def _run_internal(
         self,
         workflow_id: str,
         input_message: str,

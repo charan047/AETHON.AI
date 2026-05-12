@@ -2,14 +2,16 @@ import asyncio
 import os
 from datetime import datetime, timezone
 from uuid import uuid4
+import logging
 
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
-from sentence_transformers import SentenceTransformer
 
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryService:
@@ -22,13 +24,26 @@ class MemoryService:
             name=settings.chroma_collection_name,
             metadata={"hnsw:space": "cosine"},
         )
-        # Force CPU embeddings for stability. The default auto-device selection
-        # can pick Apple MPS on macOS, which has been crashing worker processes
-        # during background workflow execution.
-        self._embedding_model = SentenceTransformer(settings.embedding_model, device="cpu")
+        self._embedding_model = None
+
+    async def _get_embedding_model(self):
+        if self._embedding_model is None:
+            from sentence_transformers import SentenceTransformer
+
+            logger.info("Loading embedding model %s", settings.embedding_model)
+            # Force CPU embeddings for stability. The default auto-device
+            # selection can pick Apple MPS on macOS, which has been crashing
+            # worker processes during background workflow execution.
+            self._embedding_model = await asyncio.to_thread(
+                SentenceTransformer,
+                settings.embedding_model,
+                device="cpu",
+            )
+        return self._embedding_model
 
     async def _encode(self, content: str) -> list[float]:
-        embedding = await asyncio.to_thread(self._embedding_model.encode, content)
+        model = await self._get_embedding_model()
+        embedding = await asyncio.to_thread(model.encode, content)
         return embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
 
     @staticmethod

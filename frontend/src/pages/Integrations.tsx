@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Github, Mail, Plus, RefreshCw, Trash2, X } from 'lucide-react'
-import { integrationsApi } from '../api/client'
+import { extractApiError, integrationsApi } from '../api/client'
 import type { UserIntegration } from '../types'
 import { GlowCard } from '../components/ui/GlowCard'
 import { toast } from '../lib/toast'
@@ -51,7 +51,7 @@ export function Integrations() {
       setModal(null)
       refresh()
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Failed to connect GitHub'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const createEmail = useMutation({
@@ -61,7 +61,7 @@ export function Integrations() {
       setModal(null)
       refresh()
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Failed to connect email'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const testIntegration = useMutation({

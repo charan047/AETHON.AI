@@ -39,7 +39,7 @@ import {
 import { format, formatDistanceToNow } from 'date-fns'
 import { clsx } from 'clsx'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { agentsApi, evalsApi } from '../api/client'
+import { agentsApi, evalsApi, extractApiError } from '../api/client'
 import { GlowCard } from '../components/ui/GlowCard'
 import { Skeleton, SkeletonCard } from '../components/ui/Skeleton'
 import { ScoreBadge } from '../components/evals/ScoreBadge'
@@ -229,7 +229,7 @@ export function Evaluations() {
                     setTab('details')
                     refreshSelected()
                   } catch (error: any) {
-                    toast.error(error.response?.data?.detail || 'Failed to run case')
+                    toast.error(extractApiError(error))
                   }
                 }}
               />
@@ -513,9 +513,9 @@ function RunHistoryTab({ suite, runs, trend, onSelectRun }: {
               <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
               <XAxis dataKey="date" tick={{ fill: '#71717f', fontSize: 11 }} tickLine={false} axisLine={false} />
               <YAxis domain={[0, 100]} tick={{ fill: '#71717f', fontSize: 11 }} tickFormatter={value => `${value}%`} tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={{ background: '#111118', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, color: '#fff' }} formatter={value => [`${value}%`, 'Score']} />
+              <Tooltip contentStyle={{ background: 'rgba(8,13,26,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, color: '#fff', backdropFilter: 'blur(16px)' }} formatter={value => [`${value}%`, 'Score']} />
               <ReferenceLine y={suite.pass_threshold * 100} stroke="#f59e0b" strokeDasharray="4 4" />
-              <Line type="monotone" dataKey="score" stroke="#6366f1" strokeWidth={2} dot={{ r: 4, fill: '#6366f1' }} activeDot={{ r: 6 }} />
+              <Line type="monotone" dataKey="score" stroke="#2563EB" strokeWidth={2} dot={{ r: 4, fill: '#2563EB' }} activeDot={{ r: 6 }} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -705,7 +705,7 @@ function SuiteForm({ open, agents, onClose, onCreated }: {
       setAgentId('')
       setThreshold(0.8)
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Failed to create suite'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   useEffect(() => {
@@ -723,7 +723,7 @@ function SuiteForm({ open, agents, onClose, onCreated }: {
           </select>
         </Field>
         <Field label={`Pass threshold (${Math.round(threshold * 100)}%)`}>
-          <input type="range" min={0.1} max={1} step={0.05} value={threshold} onChange={e => setThreshold(Number(e.target.value))} className="w-full accent-indigo-500" />
+          <input type="range" min={0.1} max={1} step={0.05} value={threshold} onChange={e => setThreshold(Number(e.target.value))} className="w-full accent-blue-500" />
         </Field>
         <Field label="Description"><textarea className="input min-h-24 resize-none" value={description} onChange={e => setDescription(e.target.value)} /></Field>
         <button className="btn-primary w-full" disabled={!name || !agentId || mutation.isPending} onClick={() => mutation.mutate()}>
@@ -784,7 +784,7 @@ function CaseForm({ open, suiteId, existing, onClose, onSaved }: {
       toast.success(existing ? 'Eval case updated' : 'Eval case created')
       onSaved()
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to save case')
+      toast.error(extractApiError(error))
     }
   }
 
@@ -850,7 +850,7 @@ function ImportCasesModal({ open, suite, onClose, onImported }: {
       toast.success(`Generated ${result.created} test cases`)
       onImported()
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to generate cases')
+      toast.error(extractApiError(error))
     } finally {
       setGenerating(false)
     }

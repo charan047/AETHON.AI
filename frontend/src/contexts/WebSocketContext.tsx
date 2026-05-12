@@ -3,9 +3,8 @@ import type { WsEvent } from '../types'
 import { useAuth } from './AuthContext'
 
 function buildWsBaseUrl(): string {
-  const envUrl = import.meta.env.VITE_WS_URL?.trim()
+  const envUrl = import.meta.env.VITE_WS_URL as string | undefined
   if (envUrl) return envUrl
-
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
   return `${protocol}://${window.location.host}/api/monitoring/ws`
 }
@@ -58,6 +57,9 @@ export function WsProvider({ children }: { children: ReactNode }) {
     ws.onopen = () => {
       setConnected(true)
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
+      if (activeOrg?.id) {
+        ws.send(JSON.stringify({ action: 'subscribe', channel: `org:${activeOrg.id}` }))
+      }
       for (const [channel, handler] of pendingSubscriptions.current.entries()) {
         channelHandlers.current.set(channel, handler)
       }

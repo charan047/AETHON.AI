@@ -36,12 +36,12 @@ export function AgentPerformanceCard({
   const offset = circumference - approvalRate * circumference
 
   return (
-    <div className="card card-hover p-5">
+    <div className="glass-card rounded-2xl p-5">
       <div className="flex items-start gap-3">
         <AgentAvatar name={agent.name} size="lg" running={false} />
         <div className="min-w-0 flex-1">
           <div className="truncate font-semibold text-white">{agent.name}</div>
-          <div className="mt-0.5 truncate text-xs text-obsidian-500">{agent.role}</div>
+          <div className="mt-0.5 truncate text-xs text-ink-secondary">{agent.role}</div>
           <div className="mt-2"><StatusBadge status={agent.is_active ? 'active' : 'idle'} /></div>
         </div>
         <div className="relative h-20 w-20 shrink-0">
@@ -79,17 +79,18 @@ export function AgentPerformanceCard({
               <Tooltip
                 cursor={{ fill: 'rgba(99,102,241,0.10)' }}
                 contentStyle={{
-                  background: '#111118',
+                  background: 'rgba(8,13,26,0.95)',
                   border: '1px solid rgba(255,255,255,0.1)',
                   borderRadius: 12,
                   color: '#fff',
+                  backdropFilter: 'blur(16px)',
                 }}
               />
-              <Bar dataKey="tokens" fill="#06b6d4" radius={[5, 5, 0, 0]} />
+              <Bar dataKey="tokens" fill="#10B981" radius={[5, 5, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <div className="grid h-full place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-xs text-obsidian-600">
+          <div className="grid h-full place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-xs text-[#4B5A73]">
             Token sparkline appears after tracked runs
           </div>
         )}
@@ -102,7 +103,7 @@ function Stat({ label, value, tone = 'text-white' }: { label: string; value: str
   return (
     <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-2 py-2 text-center">
       <div className={`font-mono text-xs font-semibold ${tone}`}>{value}</div>
-      <div className="mt-1 text-[10px] uppercase tracking-wide text-obsidian-500">{label}</div>
+      <div className="mt-1 text-[10px] uppercase tracking-wide text-ink-muted">{label}</div>
     </div>
   )
 }

@@ -97,13 +97,9 @@ class ReputationService:
 
         agent = await db.scalar(select(Agent).where(Agent.id == agent_id))
         if agent:
-            agent.trust_score = self._calculate_trust_score(
-                total_tasks=total_tasks,
-                approval_rate=approval_rate,
-                rejected_count=rejected_count,
-                edited_count=edited_count,
-                avg_edit_distance=avg_edit_distance,
-            )
+            # Phase 9 trust is sourced from AgentTrustScore and execution outcomes.
+            # Reputation still powers learning context, but should not overwrite the
+            # task-level trust score maintained by TrustScoreService.
             agent.updated_at = datetime.utcnow()
 
         await db.flush()

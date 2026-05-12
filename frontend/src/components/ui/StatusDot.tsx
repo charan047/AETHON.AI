@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion'
+import { motion, useReducedMotion } from 'framer-motion'
 
 const STATUS_CONFIG = {
   working: { color: '#00FF9D', pulse: true, label: 'Working' },
@@ -23,13 +23,14 @@ export function StatusDot({
   showLabel = false,
   size = 'sm',
 }: StatusDotProps) {
+  const prefersReducedMotion = useReducedMotion()
   const config = STATUS_CONFIG[status] ?? STATUS_CONFIG.idle
 
   return (
     <div className="flex items-center gap-1.5">
       <div className="relative flex-shrink-0">
         <div className={`${SIZES[size]} rounded-full`} style={{ backgroundColor: config.color }} />
-        {config.pulse && (
+        {config.pulse && !prefersReducedMotion && (
           <motion.div
             className={`absolute inset-0 ${SIZES[size]} rounded-full`}
             style={{ backgroundColor: config.color }}

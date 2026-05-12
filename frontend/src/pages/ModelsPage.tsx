@@ -1,8 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Cpu, Loader2, Pencil, Plus, ShieldAlert, Trash2 } from 'lucide-react'
+import {
+  ArrowRight,
+  Bot,
+  BrainCircuit,
+  CheckCircle2,
+  Cpu,
+  Loader2,
+  Pencil,
+  Plus,
+  Server,
+  ShieldAlert,
+  Sparkles,
+  Trash2,
+  Wrench,
+} from 'lucide-react'
 
-import { agentsApi, modelsApi } from '../api/client'
+import { agentsApi, extractApiError, modelsApi } from '../api/client'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
 import { GlowCard } from '../components/ui/GlowCard'
 import { SkeletonCard } from '../components/ui/Skeleton'
@@ -27,12 +41,14 @@ interface AddModelDraft {
   cost_per_million_output_tokens?: number | null
 }
 
-const PROVIDER_META: Record<ProviderName, { label: string; icon: string }> = {
-  openai: { label: 'OpenAI', icon: '🟢' },
-  anthropic: { label: 'Anthropic', icon: '🟣' },
-  ollama: { label: 'Local (Ollama)', icon: '🖥️' },
-  custom: { label: 'Custom', icon: '⚙️' },
+const PROVIDER_META: Record<ProviderName, { label: string; icon: typeof Bot; tone: string }> = {
+  openai: { label: 'OpenAI', icon: Sparkles, tone: 'text-blue-300 bg-blue-500/12 border-blue-500/20' },
+  anthropic: { label: 'Anthropic', icon: BrainCircuit, tone: 'text-emerald-300 bg-emerald-500/12 border-emerald-500/20' },
+  ollama: { label: 'Local (Ollama)', icon: Server, tone: 'text-amber-300 bg-amber-500/12 border-amber-500/20' },
+  custom: { label: 'Custom', icon: Wrench, tone: 'text-white/75 bg-white/[0.06] border-white/[0.10]' },
 }
+
+const SIDEBAR_MODEL_QUERY_KEY = ['model-configs', 'sidebar'] as const
 
 function formatCurrency(value?: number | null) {
   if (value == null) return '—'
@@ -53,7 +69,7 @@ function formatRelative(date?: string | null) {
 
 function providerLabel(provider: ProviderName) {
   const meta = PROVIDER_META[provider]
-  return `${meta.icon} ${meta.label}`
+  return meta.label
 }
 
 function recommendedRoleLabel(value: string) {
@@ -65,7 +81,7 @@ function recommendedRoleLabel(value: string) {
 
 function StatusDot({ status }: { status?: ModelConfigRecord['test_status'] | null }) {
   if (status === 'ok') {
-    return <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.55)] animate-pulse" />
+    return <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.55)] animate-pulse motion-reduce:animate-none" />
   }
   if (status === 'failed') {
     return <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-400" />
@@ -75,8 +91,8 @@ function StatusDot({ status }: { status?: ModelConfigRecord['test_status'] | nul
 
 function TierBadge({ tier }: { tier: string }) {
   const color =
-    tier === 'premium' ? 'border-fuchsia-400/30 bg-fuchsia-400/10 text-fuchsia-200'
-    : tier === 'standard' ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-200'
+    tier === 'premium' ? 'border-blue-400/30 bg-blue-400/10 text-blue-200'
+    : tier === 'standard' ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
     : tier === 'economy' ? 'border-amber-400/30 bg-amber-400/10 text-amber-200'
     : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
 
@@ -98,14 +114,22 @@ function ModelCard({
   onDelete: () => void
   testing: boolean
 }) {
+  const providerMeta = PROVIDER_META[config.provider]
+  const ProviderIcon = providerMeta.icon
+
   return (
-    <GlowCard className="space-y-4 p-5">
+    <GlowCard className="overflow-hidden p-0">
+      <div className="h-0.5 w-full bg-gradient-to-r from-blue-500 via-blue-400 to-emerald-400" />
+      <div className="space-y-4 p-5">
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-white/70">{providerLabel(config.provider)}</span>
+            <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${providerMeta.tone}`}>
+              <ProviderIcon size={12} />
+              {providerLabel(config.provider)}
+            </span>
             {config.is_default && (
-              <span className="rounded-full border border-accent-400/30 bg-accent-400/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-100">
+              <span className="rounded-full border border-blue-500/20 bg-blue-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-200">
                 Default
               </span>
             )}
@@ -149,20 +173,27 @@ function ModelCard({
           <Trash2 size={14} /> Delete
         </button>
       </div>
+      </div>
     </GlowCard>
   )
 }
 
 function TemplateCard({ template, onSelect }: { template: ModelTemplate; onSelect: () => void }) {
+  const providerMeta = PROVIDER_META[template.provider]
+  const ProviderIcon = providerMeta.icon
+
   return (
     <button
       type="button"
       onClick={onSelect}
-      className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left transition-all duration-150 hover:border-accent-400/40 hover:bg-white/[0.05]"
+      className="glass-card cursor-pointer rounded-2xl p-4 text-left transition-all duration-150 hover:border-blue-500/30 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
     >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <div className="text-xs text-white/40">{providerLabel(template.provider)}</div>
+          <div className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${providerMeta.tone}`}>
+            <ProviderIcon size={12} />
+            {providerLabel(template.provider)}
+          </div>
           <div className="mt-1 text-base font-semibold text-white">{template.display_name}</div>
         </div>
         <TierBadge tier={template.tier} />
@@ -304,8 +335,8 @@ function AddModelModal({
         toast.error(result.error || 'Connection test failed')
       }
     },
-    onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Connection test failed')
+    onError: error => {
+      toast.error(extractApiError(error))
     },
   })
 
@@ -326,12 +357,13 @@ function AddModelModal({
     }),
     onSuccess: config => {
       queryClient.invalidateQueries({ queryKey: ['model-configs'] })
+      queryClient.invalidateQueries({ queryKey: SIDEBAR_MODEL_QUERY_KEY })
       toast.success(`${config.display_name} added`)
       setStep(3)
       onCreated(config)
     },
-    onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Could not add model')
+    onError: error => {
+      toast.error(extractApiError(error))
     },
   })
 
@@ -340,11 +372,11 @@ function AddModelModal({
   const canSave = testedResult?.success || allowUntestedSave
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm">
-      <div className="flex min-h-screen flex-col">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4 backdrop-blur-sm">
+      <div className="glass-elevated flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden">
         <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
           <div>
-            <div className="text-xs uppercase tracking-[0.24em] text-white/30">Model Control Plane</div>
+            <div className="text-xs uppercase tracking-[0.24em] text-[#4B5A73]">Model Control Plane</div>
             <div className="mt-1 text-xl font-semibold text-white">Add Model</div>
           </div>
           <button className="btn-secondary text-xs" onClick={close}>Close</button>
@@ -367,7 +399,7 @@ function AddModelModal({
               <button
                 type="button"
                 onClick={() => selectTemplate(null)}
-                className="grid w-full place-items-center rounded-2xl border border-dashed border-white/15 bg-white/[0.02] py-12 text-center text-white/65 transition hover:border-accent-400/40 hover:bg-white/[0.04]"
+                className="grid w-full cursor-pointer place-items-center rounded-2xl border border-dashed border-white/15 bg-white/[0.02] py-12 text-center text-white/65 transition duration-150 hover:border-blue-500/30 hover:bg-white/[0.04] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
               >
                 <div className="space-y-2">
                   <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03]">
@@ -422,7 +454,7 @@ function AddModelModal({
                   <input className="input" value={draft.base_url} onChange={e => setDraft(prev => ({ ...prev, base_url: e.target.value }))} />
                   {draft.provider === 'ollama' && (
                     <div className="mt-2 text-xs text-white/40">
-                      Make sure Ollama is running: <code>ollama serve</code>. <a className="text-accent-200 hover:text-accent-100" href="https://ollama.ai" target="_blank" rel="noreferrer">Install Ollama →</a>
+                      Make sure Ollama is running: <code>ollama serve</code>. <a className="text-blue-300 transition hover:text-blue-200" href="https://ollama.ai" target="_blank" rel="noreferrer">Install Ollama →</a>
                     </div>
                   )}
                 </div>
@@ -436,7 +468,7 @@ function AddModelModal({
               <label className="flex items-center gap-3 text-sm text-white/65">
                 <input
                   type="checkbox"
-                  className="accent-accent-500"
+                  className="accent-blue-500"
                   checked={draft.set_as_default}
                   onChange={e => setDraft(prev => ({ ...prev, set_as_default: e.target.checked }))}
                 />
@@ -457,7 +489,7 @@ function AddModelModal({
                   <button
                     type="button"
                     onClick={() => setAllowUntestedSave(true)}
-                    className="mt-3 text-xs text-white/35 hover:text-white/55"
+                    className="mt-3 cursor-pointer text-xs text-white/35 transition hover:text-white/55"
                   >
                     Save without testing
                   </button>
@@ -488,7 +520,7 @@ function AddModelModal({
               </div>
               <div className="flex flex-wrap justify-center gap-3">
                 <button className="btn-primary" onClick={() => { close(); document.getElementById('agent-model-assignment')?.scrollIntoView({ behavior: 'smooth' }) }}>
-                  Assign to agents now →
+                  Assign to agents now <ArrowRight size={16} />
                 </button>
                 <button className="btn-secondary" onClick={reset}>Add another model</button>
                 <button className="btn-secondary" onClick={close}>Done</button>
@@ -525,27 +557,29 @@ function EditModelModal({
     mutationFn: () => modelsApi.update(config!.id, { display_name: displayName, notes, is_active: isActive }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['model-configs'] })
+      queryClient.invalidateQueries({ queryKey: SIDEBAR_MODEL_QUERY_KEY })
       toast.success('Model updated')
       onClose()
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not update model'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const rotateMutation = useMutation({
     mutationFn: () => modelsApi.rotateKey(config!.id, rotateKey),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['model-configs'] })
+      queryClient.invalidateQueries({ queryKey: SIDEBAR_MODEL_QUERY_KEY })
       setRotateKey('')
       toast.success('API key rotated')
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not rotate key'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   if (!config) return null
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
-      <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-obsidian-925 p-5">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4 backdrop-blur-sm">
+      <div className="glass-elevated w-full max-w-xl p-5">
         <div className="mb-5 flex items-center justify-between">
           <div>
             <div className="text-lg font-semibold text-white">Edit {config.display_name}</div>
@@ -564,7 +598,7 @@ function EditModelModal({
             <textarea className="input min-h-[110px] resize-y" value={notes ?? ''} onChange={e => setNotes(e.target.value)} />
           </div>
           <label className="flex items-center gap-3 text-sm text-white/65">
-            <input type="checkbox" className="accent-accent-500" checked={isActive} onChange={e => setIsActive(e.target.checked)} />
+            <input type="checkbox" className="accent-blue-500" checked={isActive} onChange={e => setIsActive(e.target.checked)} />
             Active
           </label>
 
@@ -614,10 +648,11 @@ export function ModelsPage() {
     },
     onSuccess: result => {
       queryClient.invalidateQueries({ queryKey: ['model-configs'] })
+      queryClient.invalidateQueries({ queryKey: SIDEBAR_MODEL_QUERY_KEY })
       if (result.success) toast.success(`Connected in ${result.latency_ms}ms`)
       else toast.error(result.error || 'Test failed')
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Test failed'),
+    onError: error => toast.error(extractApiError(error)),
     onSettled: () => setTestingConfigId(null),
   })
 
@@ -625,20 +660,22 @@ export function ModelsPage() {
     mutationFn: (id: string) => modelsApi.setDefault(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['model-configs'] })
+      queryClient.invalidateQueries({ queryKey: SIDEBAR_MODEL_QUERY_KEY })
       queryClient.invalidateQueries({ queryKey: ['agents', 'model-assignment'] })
       toast.success('Default model updated')
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not set default model'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => modelsApi.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['model-configs'] })
+      queryClient.invalidateQueries({ queryKey: SIDEBAR_MODEL_QUERY_KEY })
       setConfigToDelete(null)
       toast.success('Model removed')
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not delete model'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const assignModelMutation = useMutation({
@@ -651,16 +688,16 @@ export function ModelsPage() {
       toast.success('Agent model updated')
       setEditingAgentId(null)
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not update agent model'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   return (
-    <div className="space-y-8 p-6 animate-fade-in">
+    <div className="space-y-8 p-6 animate-fade-up motion-reduce:animate-none">
       <section className="space-y-5">
         <div className="flex items-end justify-between gap-4">
           <div>
-            <h1 className="text-4xl font-semibold tracking-[-0.05em] text-white">Model Library</h1>
-            <p className="mt-2 text-sm text-obsidian-400">Choose the brains your company hires, tests, and trusts.</p>
+            <h1 className="text-4xl font-semibold tracking-[-0.05em] text-white">AI Models</h1>
+            <p className="mt-2 text-sm text-[#8B9DBE]">Test, assign, and monitor the models your agency relies on across every agent.</p>
           </div>
           <button className="btn-primary h-11" onClick={() => setAddOpen(true)}>
             <Plus size={16} /> Add Model
@@ -690,7 +727,7 @@ export function ModelsPage() {
                   <Cpu size={24} />
                 </div>
                 <div className="text-lg font-medium text-white">No model configs yet</div>
-                <div className="mt-2 text-sm text-white/45">Add your first provider key and assign it across the company.</div>
+                <div className="mt-2 text-sm text-white/45">Add your first provider key and make it available to the whole agency.</div>
               </GlowCard>
             )}
           </div>
@@ -700,13 +737,13 @@ export function ModelsPage() {
       <section id="agent-model-assignment" className="space-y-4">
         <div>
           <h2 className="text-2xl font-semibold text-white">Agent Model Assignment</h2>
-          <p className="mt-1 text-sm text-obsidian-400">Agents without a specific model inherit the org default automatically.</p>
+          <p className="mt-1 text-sm text-[#8B9DBE]">Agents without a specific model inherit the org default automatically.</p>
         </div>
 
         <GlowCard className="overflow-hidden p-0">
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
-              <thead className="border-b border-white/10 bg-white/[0.02] text-white/45">
+              <thead className="sticky top-0 border-b border-white/[0.08] bg-[rgba(8,13,26,0.90)] text-white/45 backdrop-blur-xl">
                 <tr>
                   <th className="px-4 py-3 font-medium">Agent</th>
                   <th className="px-4 py-3 font-medium">Role</th>
@@ -722,7 +759,7 @@ export function ModelsPage() {
                   const hasFailedConfig = currentConfig?.test_status === 'failed'
 
                   return (
-                    <tr key={agent.id} className="border-b border-white/6 last:border-b-0">
+                    <tr key={agent.id} className="border-b border-white/[0.04] transition-colors duration-150 hover:bg-white/[0.025] last:border-b-0">
                       <td className="px-4 py-4 text-white">{agent.name}</td>
                       <td className="px-4 py-4 text-white/50">{agent.role}</td>
                       <td className="px-4 py-4">

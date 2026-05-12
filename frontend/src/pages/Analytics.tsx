@@ -24,7 +24,7 @@ import {
 } from 'lucide-react'
 import { format, subDays } from 'date-fns'
 import { clsx } from 'clsx'
-import { companyApi } from '../api/client'
+import { companyApi, extractApiError } from '../api/client'
 import { CostChart } from '../components/analytics/CostChart'
 import { AgentPerformanceCard } from '../components/analytics/AgentPerformanceCard'
 import { GlowCard } from '../components/ui/GlowCard'
@@ -33,7 +33,7 @@ import { useAnalytics } from '../hooks/useAnalytics'
 import { toast } from '../lib/toast'
 
 const PERIODS = [7, 30, 90]
-const AGENT_COLORS = ['#6366f1', '#06b6d4', '#22c55e', '#f59e0b', '#ec4899', '#8b5cf6']
+const AGENT_COLORS = ['#2563EB', '#10B981', '#60A5FA', '#34D399', '#F59E0B', '#0EA5E9']
 
 function money(value = 0, digits = 2) {
   return `$${value.toFixed(digits)}`
@@ -46,9 +46,9 @@ function successTone(rate: number) {
 }
 
 function toolTone(rate: number) {
-  if (rate >= 90) return '#22c55e'
-  if (rate >= 70) return '#f59e0b'
-  return '#ef4444'
+  if (rate >= 90) return '#10B981'
+  if (rate >= 70) return '#F59E0B'
+  return '#EF4444'
 }
 
 function normalizeDailyData(data: { date: string; cost: number }[] = [], period: number) {
@@ -59,19 +59,25 @@ function normalizeDailyData(data: { date: string; cost: number }[] = [], period:
   })
 }
 
-function Gauge({ label, value, max, icon: Icon, tone }: {
+function Gauge({
+  label,
+  value,
+  max,
+  icon: Icon,
+  tone,
+}: {
   label: string
   value: number
   max: number
   icon: LucideIcon
   tone: string
 }) {
-  const pct = Math.min(100, (value / max) * 100)
+  const pct = Math.min(100, (value / Math.max(max, 1)) * 100)
   return (
-    <GlowCard glowColor="indigo" className="p-5">
+    <GlowCard glowColor="blue" className="p-5">
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-sm text-obsidian-500">{label}</div>
+          <div className="text-sm text-[#8B9DBE]">{label}</div>
           <div className="mt-2 font-mono text-3xl font-semibold text-white">{value}</div>
         </div>
         <Icon size={24} className={tone} />
@@ -79,8 +85,56 @@ function Gauge({ label, value, max, icon: Icon, tone }: {
       <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/[0.06]">
         <div className={clsx('h-full rounded-full transition-all', tone.replace('text-', 'bg-'))} style={{ width: `${pct}%` }} />
       </div>
-      <div className="mt-2 text-xs text-obsidian-600">Scale 0-{max}</div>
+      <div className="mt-2 text-xs text-[#4B5A73]">Scale 0-{max}</div>
     </GlowCard>
+  )
+}
+
+function MetricCard({
+  label,
+  value,
+  icon: Icon,
+  tone,
+}: {
+  label: string
+  value: string
+  icon: LucideIcon
+  tone: string
+}) {
+  return (
+    <GlowCard glowColor="blue" className="p-5">
+      <div className="flex items-start justify-between">
+        <div>
+          <div className="text-sm text-[#8B9DBE]">{label}</div>
+          <div className={`mt-3 font-mono text-3xl font-semibold ${tone}`}>{value}</div>
+        </div>
+        <div className="rounded-xl bg-blue-600/12 p-2.5">
+          <Icon size={18} className="text-blue-400" />
+        </div>
+      </div>
+    </GlowCard>
+  )
+}
+
+function SectionTitle({
+  icon: Icon,
+  title,
+  subtitle,
+}: {
+  icon: LucideIcon
+  title: string
+  subtitle: string
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-blue-400">
+        <Icon size={18} />
+      </div>
+      <div>
+        <h2 className="text-lg font-extrabold tracking-tight text-white">{title}</h2>
+        <p className="text-sm text-[#8B9DBE]">{subtitle}</p>
+      </div>
+    </div>
   )
 }
 
@@ -116,8 +170,8 @@ export function Analytics() {
       await companyApi.updateProfile({ monthly_budget_usd: next })
       toast.success('Monthly budget updated')
       setEditingBudget(false)
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to update budget')
+    } catch (error) {
+      toast.error(extractApiError(error))
     }
   }
 
@@ -128,29 +182,29 @@ export function Analytics() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {[...Array(4)].map((_, i) => <SkeletonCard key={i} className="h-40" />)}
         </div>
-        <Skeleton className="h-80" />
+        <Skeleton className="h-80 rounded-2xl" />
       </div>
     )
   }
 
   return (
-    <div className="space-y-6 p-6 animate-fade-in">
+    <div className="space-y-6 p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <div className="mb-2 inline-flex rounded-full border border-accent-400/20 bg-accent-400/10 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.22em] text-accent-200">
+          <div className="mb-2 inline-flex rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1 font-mono text-[11px] uppercase tracking-[0.22em] text-blue-300">
             Observability
           </div>
-          <h1 className="text-4xl font-semibold tracking-[-0.05em] text-white">Analytics</h1>
-          <p className="mt-2 text-sm text-obsidian-400">Cost, performance, reliability, and live operating signals for your AI company.</p>
+          <h1 className="text-4xl font-extrabold tracking-tight text-white">Analytics</h1>
+          <p className="mt-2 text-sm text-[#8B9DBE]">Cost, performance, reliability, and operating signals for your agency.</p>
         </div>
-        <div className="flex rounded-xl border border-white/[0.08] bg-obsidian-900 p-1">
+        <div className="glass-card flex rounded-2xl p-1">
           {PERIODS.map(days => (
             <button
               key={days}
               onClick={() => setPeriod(days)}
               className={clsx(
-                'rounded-lg px-4 py-2 text-sm transition',
-                period === days ? 'bg-accent-500 text-white shadow-glow-sm' : 'text-obsidian-400 hover:bg-white/[0.04] hover:text-white',
+                'rounded-xl px-4 py-2 text-sm transition',
+                period === days ? 'bg-blue-600 text-white shadow-glow-sm' : 'text-[#8B9DBE] hover:bg-white/[0.04] hover:text-white',
               )}
             >
               Last {days}d
@@ -166,12 +220,12 @@ export function Analytics() {
             label="Projected Month-End"
             value={money(projected, 2)}
             icon={TrendingUp}
-            tone={projected > budget * 0.8 ? 'text-amber-300' : 'text-cyan-300'}
+            tone={projected > budget * 0.8 ? 'text-amber-300' : 'text-blue-300'}
           />
-          <GlowCard glowColor="indigo" className="p-5">
+          <GlowCard glowColor="blue" className="p-5">
             <div className="flex items-start justify-between">
               <div>
-                <div className="text-sm text-obsidian-500">Monthly Budget</div>
+                <div className="text-sm text-[#8B9DBE]">Monthly Budget</div>
                 {editingBudget ? (
                   <div className="mt-3 flex gap-2">
                     <input
@@ -198,13 +252,13 @@ export function Analytics() {
               </button>
             </div>
           </GlowCard>
-          <MetricCard label="Cost per Workflow Run" value={money(costPerRun, 4)} icon={GitBranch} tone="text-indigo-300" />
+          <MetricCard label="Cost per Workflow Run" value={money(costPerRun, 4)} icon={GitBranch} tone="text-blue-300" />
         </div>
 
-        <GlowCard glowColor={budgetPct >= 100 ? 'red' : budgetPct >= 80 ? 'amber' : 'cyan'} className="p-5">
+        <GlowCard glowColor={budgetPct >= 100 ? 'red' : budgetPct >= 80 ? 'amber' : 'emerald'} className="p-5">
           <div className="mb-3 flex items-center justify-between text-sm">
             <span className="font-medium text-white">Budget usage</span>
-            <span className="font-mono text-obsidian-400">
+            <span className="font-mono text-[#8B9DBE]">
               {money(totalCost, 2)} of {money(budget, 2)} used ({budgetPct.toFixed(1)}%)
             </span>
           </div>
@@ -215,20 +269,28 @@ export function Analytics() {
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
-        <GlowCard glowColor="indigo" className="p-5">
+        <GlowCard glowColor="blue" className="p-5">
           <SectionTitle icon={BarChart3} title="Daily Cost" subtitle={`Spend over the last ${period} days`} />
-          <CostChart data={dailyCost} period={period} height={300} />
+          <div className="mt-5">
+            <CostChart data={dailyCost} period={period} height={300} />
+          </div>
         </GlowCard>
-        <GlowCard glowColor="cyan" className="p-5">
-          <SectionTitle icon={Coins} title="Cost by Agent" subtitle="Attribution by AI employee" />
-          <div className="h-[300px]">
+        <GlowCard glowColor="emerald" className="p-5">
+          <SectionTitle icon={Coins} title="Cost by Agent" subtitle="Attribution by AI teammate" />
+          <div className="mt-5 h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={costByAgent} margin={{ left: 0, right: 12, top: 8, bottom: 0 }}>
                 <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                <XAxis dataKey="name" tick={{ fill: '#71717f', fontSize: 11 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fill: '#71717f', fontSize: 11 }} tickLine={false} axisLine={false} />
+                <XAxis dataKey="name" tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} />
+                <YAxis tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} />
                 <Tooltip
-                  contentStyle={{ background: '#111118', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, color: '#fff' }}
+                  contentStyle={{
+                    background: 'rgba(8,13,26,0.95)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 12,
+                    color: '#fff',
+                    backdropFilter: 'blur(16px)',
+                  }}
                   formatter={value => [money(Number(value), 6), 'Total cost']}
                 />
                 <Bar dataKey="cost" radius={[8, 8, 0, 0]}>
@@ -240,13 +302,13 @@ export function Analytics() {
         </GlowCard>
       </section>
 
-      <GlowCard glowColor="indigo" className="overflow-hidden">
+      <GlowCard glowColor="blue" className="overflow-hidden">
         <div className="border-b border-white/[0.08] p-5">
           <SectionTitle icon={GitBranch} title="Workflow Success Rates" subtitle="Reliability and average execution economics" />
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-white/[0.03] text-xs uppercase tracking-wide text-obsidian-500">
+            <thead className="sticky top-0 bg-[rgba(8,13,26,0.9)] text-xs uppercase tracking-wide text-[#4B5A73] backdrop-blur">
               <tr>
                 <th className="px-5 py-3 text-left">Workflow Name</th>
                 <th className="px-5 py-3 text-right">Total Runs</th>
@@ -258,21 +320,21 @@ export function Analytics() {
             </thead>
             <tbody>
               {(analytics.performance?.workflows || []).map(workflow => (
-                <tr key={workflow.workflow_id} className="border-t border-white/[0.06] hover:bg-white/[0.03]">
+                <tr key={workflow.workflow_id} className="border-t border-white/[0.04] hover:bg-white/[0.025]">
                   <td className="px-5 py-4 font-medium text-white">{workflow.workflow_name}</td>
-                  <td className="px-5 py-4 text-right font-mono text-obsidian-300">{workflow.runs}</td>
+                  <td className="px-5 py-4 text-right font-mono text-[#8B9DBE]">{workflow.runs}</td>
                   <td className="px-5 py-4 text-right">
                     <span className={clsx('rounded-full border px-2 py-1 font-mono text-xs', successTone(workflow.success_rate))}>
-                      {workflow.success_rate.toFixed(1)}%
+                      {(workflow.success_rate ?? 0).toFixed(1)}%
                     </span>
                   </td>
                   <td className="px-5 py-4 text-right font-mono text-red-300">{workflow.failed}</td>
-                  <td className="px-5 py-4 text-right font-mono text-obsidian-300">{workflow.avg_duration_seconds.toFixed(1)}s</td>
+                  <td className="px-5 py-4 text-right font-mono text-[#8B9DBE]">{(workflow.avg_duration_seconds ?? 0).toFixed(1)}s</td>
                   <td className="px-5 py-4 text-right font-mono text-emerald-300">{money(workflow.avg_cost, 5)}</td>
                 </tr>
               ))}
               {!analytics.performance?.workflows.length && (
-                <tr><td colSpan={6} className="px-5 py-12 text-center text-obsidian-500">No workflow runs yet.</td></tr>
+                <tr><td colSpan={6} className="px-5 py-12 text-center text-[#4B5A73]">No workflow runs yet.</td></tr>
               )}
             </tbody>
           </table>
@@ -294,14 +356,14 @@ export function Analytics() {
         </div>
       </section>
 
-      <GlowCard glowColor="cyan" className="p-5">
+      <GlowCard glowColor="emerald" className="p-5">
         <SectionTitle icon={Wrench} title="Tool Usage" subtitle="Frequency, latency, and reliability by tool" />
         <div className="mt-5 space-y-3">
           {(analytics.tools?.tools || []).map(tool => (
-            <div key={tool.tool_name} className="grid gap-3 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3 md:grid-cols-[180px_1fr_170px] md:items-center">
+            <div key={tool.tool_name} className="grid gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3 md:grid-cols-[180px_1fr_170px] md:items-center">
               <div>
                 <div className="font-medium text-white">{tool.tool_name}</div>
-                <div className="text-xs text-obsidian-500">{tool.calls} calls</div>
+                <div className="text-xs text-[#4B5A73]">{tool.calls} calls</div>
               </div>
               <div className="h-3 overflow-hidden rounded-full bg-white/[0.06]">
                 <div
@@ -309,13 +371,13 @@ export function Analytics() {
                   style={{ width: `${(tool.calls / maxToolCalls) * 100}%`, background: toolTone(tool.success_rate) }}
                 />
               </div>
-              <div className="text-right font-mono text-xs text-obsidian-400">
-                {tool.avg_duration_ms.toFixed(0)}ms avg · {tool.error_rate.toFixed(1)}% errors
+              <div className="text-right font-mono text-xs text-[#8B9DBE]">
+                {(tool.avg_duration_ms ?? 0).toFixed(0)}ms avg · {(tool.error_rate ?? 0).toFixed(1)}% errors
               </div>
             </div>
           ))}
           {!analytics.tools?.tools.length && (
-            <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-8 text-center text-sm text-obsidian-500">
+            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-8 text-center text-sm text-[#4B5A73]">
               No tool calls tracked yet.
             </div>
           )}
@@ -325,48 +387,11 @@ export function Analytics() {
       <section>
         <SectionTitle icon={RefreshCcw} title="Real-time Metrics" subtitle="Refreshes every 10 seconds" />
         <div className="mt-4 grid gap-4 md:grid-cols-3">
-          <Gauge label="Active Executions" value={analytics.monitoring?.active_executions || 0} max={10} icon={Activity} tone="text-indigo-300" />
+          <Gauge label="Active Executions" value={analytics.monitoring?.active_executions || 0} max={10} icon={Activity} tone="text-blue-300" />
           <Gauge label="Pending Approvals" value={analytics.pendingApprovals.length} max={20} icon={ShieldAlert} tone="text-amber-300" />
-          <Gauge label="API Calls Last Minute" value={analytics.overview?.api_calls_last_minute || 0} max={100} icon={AlertTriangle} tone="text-cyan-300" />
+          <Gauge label="API Calls Last Minute" value={analytics.overview?.api_calls_last_minute || 0} max={100} icon={AlertTriangle} tone="text-emerald-300" />
         </div>
       </section>
-    </div>
-  )
-}
-
-function MetricCard({ label, value, icon: Icon, tone }: {
-  label: string
-  value: string
-  icon: LucideIcon
-  tone: string
-}) {
-  return (
-    <GlowCard glowColor="indigo" className="p-5">
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="text-sm text-obsidian-500">{label}</div>
-          <div className={`mt-3 font-mono text-3xl font-semibold ${tone}`}>{value}</div>
-        </div>
-        <Icon size={24} className="text-obsidian-600" />
-      </div>
-    </GlowCard>
-  )
-}
-
-function SectionTitle({ icon: Icon, title, subtitle }: {
-  icon: LucideIcon
-  title: string
-  subtitle: string
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-accent-300">
-        <Icon size={18} />
-      </div>
-      <div>
-        <h2 className="font-semibold text-white">{title}</h2>
-        <p className="text-sm text-obsidian-500">{subtitle}</p>
-      </div>
     </div>
   )
 }

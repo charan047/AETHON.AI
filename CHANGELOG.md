@@ -6,24 +6,27 @@ All notable changes to this repository should be documented here.
 
 ### Added
 
-- Aethon public-facing rebrand across key product and repo surfaces
-- org-scoped tool call logging migration
-- role-aware agent creation fields for manual setup
-- frontend and backend environment examples
-- shared design token helpers for trust, autonomy, and seniority
-- open-source repo governance files and templates
+- client model, client detail, and client portal surfaces
+- agency dashboard and agency onboarding flows
+- agency-specific marketplace templates
+- request ID middleware
+- org-scoping regression tests
+- public-facing open-source governance docs
 
 ### Changed
 
-- HITL approval waiting now degrades to Postgres polling if Redis is unavailable
-- websocket URL construction now works correctly behind production reverse proxies
-- analytics filters now prevent cross-org direct tool-call leakage
+- product positioning from AI company OS to Agency OS
+- billing and plan enforcement removed from the open-source build
+- model control plane UI aligned with the new design system
+- sidebar and primary product surfaces rebranded around agency workflows
+- tenant isolation hardening across analytics, WebSocket events, and execution cost logging
 
-## 2026 Initial Public Baseline
+## 2026 Public Baseline
 
-- marketplace templates
-- onboarding wizard
-- company command center
-- model control plane
+- multi-tenant auth and org context
+- agent management
 - workflow runtime and monitoring
-- billing, approvals, memory, and evaluation foundations
+- approvals and human-in-the-loop controls
+- model control plane
+- marketplace installs
+- analytics and monitoring

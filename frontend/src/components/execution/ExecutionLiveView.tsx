@@ -1,12 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
-import { executionsApi } from '../../api/client'
+import { executionsApi, workflowsApi } from '../../api/client'
 import { useWebSocket } from '../../contexts/WebSocketContext'
 import { EXECUTION_STATUS_CONFIG, STEP_CONFIG, type StepType } from '../../lib/design-tokens'
 
-type ExecutionStatus = 'queued' | 'running' | 'completed' | 'failed'
+type ExecutionStatus =
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timed_out'
+  | 'rejected'
+
+const TERMINAL_EXECUTION_STATUSES: ExecutionStatus[] = [
+  'completed',
+  'failed',
+  'cancelled',
+  'timed_out',
+  'rejected',
+]
 
 export interface LiveExecutionStep {
+  id?: string
   step_type: StepType
   content: string
   tool_name?: string | null
@@ -17,6 +34,8 @@ export interface LiveExecutionStep {
   duration_ms?: number | null
   timestamp?: string
   created_at?: string
+  agent_id?: string | null
+  agent_name?: string | null
 }
 
 interface ExecutionLiveViewProps {
@@ -31,12 +50,39 @@ interface ExecutionLiveViewProps {
   maxHeight?: string
 }
 
+type StandupParticipant = {
+  agentId: string
+  agentName: string
+}
+
+type StandupEntry = {
+  agentId: string
+  agentName: string
+  content: string
+  status: 'waiting' | 'thinking' | 'done'
+  thoughts: string[]
+  timestamp: string
+}
+
+type CeoThreadMessage = {
+  id: string
+  content: string
+  createdAt: string
+}
+
+const EMPTY_STEPS: LiveExecutionStep[] = []
+
 function normalizeStatus(status: ExecutionLiveViewProps['initialStatus']): ExecutionStatus {
-  if (status === 'completed' || status === 'failed' || status === 'running' || status === 'queued') {
+  if (
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'timed_out' ||
+    status === 'rejected' ||
+    status === 'running' ||
+    status === 'queued'
+  ) {
     return status
-  }
-  if (status === 'rejected' || status === 'timed_out') {
-    return 'failed'
   }
   return 'queued'
 }
@@ -46,6 +92,10 @@ function normalizeStep(step: LiveExecutionStep): LiveExecutionStep {
     ...step,
     timestamp: step.timestamp || step.created_at,
   }
+}
+
+function stepKey(step: LiveExecutionStep, index: number) {
+  return step.id || `${step.step_type}-${step.agent_name || 'agent'}-${step.step_index}-${index}`
 }
 
 function StepCard({ step }: { step: LiveExecutionStep }) {
@@ -63,6 +113,7 @@ function StepCard({ step }: { step: LiveExecutionStep }) {
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
       className="overflow-hidden rounded-lg"
+      data-testid="execution-step"
       style={{
         border: `1px solid ${config.borderColor}`,
         background: config.bgColor,
@@ -80,6 +131,12 @@ function StepCard({ step }: { step: LiveExecutionStep }) {
           >
             {config.label}
           </span>
+          {step.agent_name && (
+            <>
+              <span className="text-xs text-white/20">•</span>
+              <span className="truncate text-xs text-white/55">{step.agent_name}</span>
+            </>
+          )}
           {step.tool_name && (
             <>
               <span className="text-xs text-white/20">—</span>
@@ -158,6 +215,268 @@ function TypingIndicator({ label }: { label: string }) {
   )
 }
 
+function initials(name: string) {
+  return name.trim().charAt(0).toUpperCase() || 'A'
+}
+
+function StandupThread({
+  executionId,
+  steps,
+  isLive,
+}: {
+  executionId: string
+  steps: LiveExecutionStep[]
+  isLive: boolean
+}) {
+  const [ceoMessage, setCeoMessage] = useState('')
+  const [ceoMessages, setCeoMessages] = useState<CeoThreadMessage[]>([])
+  const executionQuery = useQuery({
+    queryKey: ['execution-live-meta', executionId],
+    queryFn: () => executionsApi.get(executionId),
+    staleTime: 15_000,
+  })
+  const workflowQuery = useQuery({
+    queryKey: ['execution-live-workflow', executionQuery.data?.workflow_id],
+    queryFn: () => workflowsApi.get(executionQuery.data!.workflow_id),
+    enabled: Boolean(executionQuery.data?.workflow_id),
+    staleTime: 15_000,
+  })
+
+  const participants = useMemo<StandupParticipant[]>(() => {
+    const ordered = new Map<string, StandupParticipant>()
+    const nodes = workflowQuery.data?.nodes || []
+    for (const node of nodes) {
+      const data = node.data || {}
+      const agentId = typeof data.agent_id === 'string' ? data.agent_id : ''
+      if (!agentId || ordered.has(agentId)) continue
+      const name = typeof data.label === 'string' && data.label.trim()
+        ? data.label.trim()
+        : `Agent ${ordered.size + 1}`
+      ordered.set(agentId, { agentId, agentName: name })
+    }
+
+    for (const step of steps) {
+      const agentId = step.agent_id || step.agent_name || ''
+      const agentName = step.agent_name || 'Agent'
+      if (agentId && !ordered.has(agentId)) {
+        ordered.set(agentId, { agentId, agentName })
+      }
+    }
+
+    return Array.from(ordered.values())
+  }, [steps, workflowQuery.data])
+
+  const agentMessages = useMemo<StandupEntry[]>(() => {
+    const byAgent = new Map<string, StandupEntry>()
+
+    for (const participant of participants) {
+      byAgent.set(participant.agentId || participant.agentName, {
+        agentId: participant.agentId,
+        agentName: participant.agentName,
+        content: '',
+        status: 'waiting',
+        thoughts: [],
+        timestamp: '',
+      })
+    }
+
+    const sortedSteps = [...steps].sort((a, b) => a.step_index - b.step_index)
+    for (const step of sortedSteps) {
+      const key = step.agent_id || step.agent_name
+      if (!key) continue
+      if (!byAgent.has(key)) {
+        byAgent.set(key, {
+          agentId: step.agent_id || '',
+          agentName: step.agent_name || 'Agent',
+          content: '',
+          status: 'waiting',
+          thoughts: [],
+          timestamp: '',
+        })
+      }
+
+      const entry = byAgent.get(key)!
+      if (step.step_type === 'thought') {
+        entry.status = 'thinking'
+        entry.thoughts = [...entry.thoughts, step.content].slice(-4)
+        entry.timestamp = step.timestamp || entry.timestamp
+      }
+      if (step.step_type === 'final_answer') {
+        entry.content = step.content
+        entry.status = 'done'
+        entry.timestamp = step.timestamp || entry.timestamp
+      }
+      if (step.step_type === 'error' && entry.status !== 'done') {
+        entry.content = step.content
+        entry.status = 'done'
+        entry.timestamp = step.timestamp || entry.timestamp
+      }
+    }
+
+    return Array.from(byAgent.values())
+  }, [participants, steps])
+
+  const standupSummary = useMemo(() => {
+    const summaries = steps
+      .filter(step => step.step_type === 'update')
+      .sort((a, b) => a.step_index - b.step_index)
+    return summaries.length ? summaries[summaries.length - 1] : null
+  }, [steps])
+
+  const completedCount = agentMessages.filter(agent => agent.status === 'done').length
+
+  const sendCeoMessage = () => {
+    if (!ceoMessage.trim()) return
+    setCeoMessages(prev => [
+      ...prev,
+      {
+        id: `ceo-${Date.now()}`,
+        content: ceoMessage.trim(),
+        createdAt: new Date().toISOString(),
+      },
+    ])
+    setCeoMessage('')
+  }
+
+  return (
+    <div className="flex flex-col gap-0">
+      <div className="mb-4 flex items-center gap-3 border-b border-white/[0.06] pb-4">
+        <div className="text-sm font-medium text-white/70">
+          Standup Call · {agentMessages.length} agents
+        </div>
+        <div className="text-xs text-white/30">{completedCount} completed</div>
+        {isLive && (
+          <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            Live
+          </span>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-4">
+        {agentMessages.map((agent, index) => (
+          <div key={`${agent.agentId}-${agent.agentName}`} className="flex gap-3">
+            <div
+              className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 text-sm font-semibold text-white"
+              style={{
+                background: `linear-gradient(135deg, rgba(${80 + index * 24}, ${105 + index * 12}, 255, 0.20), rgba(14, 165, 233, 0.12))`,
+              }}
+            >
+              {initials(agent.agentName)}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <div className="mb-1.5 flex items-baseline gap-2">
+                <span className="text-sm font-medium text-white">
+                  {agent.agentName}
+                </span>
+                {agent.status === 'done' && agent.timestamp && (
+                  <span className="text-xs text-white/30">
+                    {new Date(agent.timestamp).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                )}
+                {agent.status === 'thinking' && (
+                  <span className="flex items-center gap-1 text-xs text-cyan-200/70">
+                    <span className="h-1 w-1 rounded-full bg-cyan-300 animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <span className="h-1 w-1 rounded-full bg-cyan-300 animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <span className="h-1 w-1 rounded-full bg-cyan-300 animate-bounce" style={{ animationDelay: '300ms' }} />
+                    Speaking...
+                  </span>
+                )}
+                {agent.status === 'waiting' && (
+                  <span className="text-xs text-white/20">Waiting...</span>
+                )}
+              </div>
+
+              {agent.status === 'done' ? (
+                <div className="rounded-2xl rounded-tl-sm border border-white/[0.08] bg-obsidian-900 px-4 py-3 text-sm leading-relaxed text-white/85 whitespace-pre-wrap">
+                  {agent.content}
+                </div>
+              ) : agent.status === 'thinking' ? (
+                <div className="rounded-2xl rounded-tl-sm border border-cyan-300/10 bg-cyan-300/[0.04] px-4 py-3 text-sm text-white/40 italic">
+                  {agent.thoughts[agent.thoughts.length - 1] || 'Thinking...'}
+                </div>
+              ) : (
+                <div className="rounded-2xl rounded-tl-sm border border-white/[0.03] bg-obsidian-900/30 px-4 py-3 text-sm text-white/15 italic">
+                  Waiting for their turn...
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {ceoMessages.map(message => (
+          <div key={message.id} className="flex justify-end gap-3">
+            <div className="min-w-0 max-w-[78%]">
+              <div className="mb-1.5 flex items-center justify-end gap-2">
+                <span className="text-xs text-white/30">
+                  {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+                <span className="text-sm font-medium text-white">CEO</span>
+              </div>
+              <div className="rounded-2xl rounded-tr-sm border border-accent-purple/20 bg-accent-purple/12 px-4 py-3 text-sm leading-relaxed text-white/90 whitespace-pre-wrap">
+                {message.content}
+              </div>
+            </div>
+            <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-accent-purple/20 bg-accent-purple/12 text-sm font-semibold text-white">
+              C
+            </div>
+          </div>
+        ))}
+
+        {standupSummary && (
+          <div className="mt-2 rounded-2xl border border-indigo-400/20 bg-indigo-500/8 p-4">
+            <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-indigo-200/80">
+              <span>Standup Summary</span>
+              <span className="text-white/20">•</span>
+              <span className="text-white/35 normal-case tracking-normal">
+                {new Date(standupSummary.timestamp || standupSummary.created_at || new Date().toISOString()).toLocaleString()}
+              </span>
+            </div>
+            <div className="whitespace-pre-wrap text-sm leading-relaxed text-white/82">
+              {standupSummary.content}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {isLive && (
+        <div className="mt-5 border-t border-white/[0.06] pt-4">
+          <div className="mb-2 flex items-center gap-2 text-xs text-white/30">
+            <span>You can send a message to redirect the standup</span>
+          </div>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={ceoMessage}
+              onChange={event => setCeoMessage(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  sendCeoMessage()
+                }
+              }}
+              placeholder="Ask a question or redirect..."
+              className="flex-1 rounded-xl border border-white/[0.08] bg-obsidian-900 px-4 py-2.5 text-sm text-white placeholder:text-white/25 outline-none focus:border-accent-400/40"
+            />
+            <button
+              type="button"
+              onClick={sendCeoMessage}
+              disabled={!ceoMessage.trim()}
+              className="rounded-xl border border-accent-purple/20 bg-accent-purple/12 px-4 py-2.5 text-sm text-accent-100 disabled:opacity-40"
+            >
+              Send
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ExecutionLiveView({
   executionId,
   agentName = 'Agent',
@@ -165,11 +484,15 @@ export function ExecutionLiveView({
   initialInput,
   onComplete,
   onError,
-  existingSteps = [],
+  existingSteps,
   initialStatus = 'queued',
   maxHeight = '600px',
 }: ExecutionLiveViewProps) {
-  const [steps, setSteps] = useState<LiveExecutionStep[]>(() => existingSteps.map(normalizeStep))
+  const initialSteps = useMemo(
+    () => (existingSteps ?? EMPTY_STEPS).map(normalizeStep),
+    [existingSteps],
+  )
+  const [steps, setSteps] = useState<LiveExecutionStep[]>(() => initialSteps)
   const [status, setStatus] = useState<ExecutionStatus>(normalizeStatus(initialStatus))
   const [finalResult, setFinalResult] = useState<string | null>(null)
   const [currentToolName, setCurrentToolName] = useState<string | null>(null)
@@ -177,30 +500,77 @@ export function ExecutionLiveView({
   const bottomRef = useRef<HTMLDivElement>(null)
   const completionNotifiedRef = useRef(false)
   const errorNotifiedRef = useRef(false)
+  const subscriptionActiveRef = useRef(false)
   const { subscribe, unsubscribe, connected } = useWebSocket()
+  const executionQuery = useQuery({
+    queryKey: ['execution', executionId],
+    queryFn: () => executionsApi.get(executionId),
+    staleTime: 0,
+    refetchInterval: query => {
+      const nextStatus = normalizeStatus(query.state.data?.status)
+      if (query.state.data && TERMINAL_EXECUTION_STATUSES.includes(nextStatus)) {
+        return false
+      }
+      return 3000
+    },
+    refetchIntervalInBackground: false,
+  })
+  const workflowQuery = useQuery({
+    queryKey: ['execution-live-view-workflow', executionQuery.data?.workflow_id],
+    queryFn: () => workflowsApi.get(executionQuery.data!.workflow_id),
+    enabled: Boolean(executionQuery.data?.workflow_id),
+    staleTime: 15_000,
+  })
 
   useEffect(() => {
-    setSteps(existingSteps.map(normalizeStep))
+    setSteps(initialSteps)
     setStatus(normalizeStatus(initialStatus))
     setFinalResult(null)
     setCurrentToolName(null)
     setChannelError(null)
     completionNotifiedRef.current = false
     errorNotifiedRef.current = false
-  }, [existingSteps, initialStatus])
+  }, [executionId, initialSteps, initialStatus])
+
+  const mergeIncomingSteps = (incoming: LiveExecutionStep[]) => {
+    setSteps(prev => {
+      const merged = new Map<number, LiveExecutionStep>()
+      for (const step of prev) {
+        merged.set(step.step_index, step)
+      }
+      for (const rawStep of incoming) {
+        const step = normalizeStep(rawStep)
+        const existing = merged.get(step.step_index)
+        merged.set(step.step_index, {
+          ...existing,
+          ...step,
+          agent_id: step.agent_id ?? existing?.agent_id ?? null,
+          agent_name: step.agent_name ?? existing?.agent_name ?? null,
+        })
+      }
+      return Array.from(merged.values()).sort((a, b) => a.step_index - b.step_index)
+    })
+  }
+
+  const stopExecutionChannel = () => {
+    const channel = `execution:${executionId}`
+    if (!subscriptionActiveRef.current) {
+      return
+    }
+    unsubscribe(channel)
+    subscriptionActiveRef.current = false
+  }
 
   useEffect(() => {
     const channel = `execution:${executionId}`
+    subscriptionActiveRef.current = true
 
     subscribe(channel, (message: any) => {
       if (message.event === 'execution_step') {
         const step = normalizeStep(message.step as LiveExecutionStep)
         setChannelError(null)
         setStatus(prev => (prev === 'queued' ? 'running' : prev))
-        setSteps(prev => {
-          const next = prev.some(s => s.step_index === step.step_index) ? prev : [...prev, step]
-          return next.sort((a, b) => a.step_index - b.step_index)
-        })
+        mergeIncomingSteps([step])
 
         if (step.step_type === 'action' && step.tool_name) {
           setCurrentToolName(step.tool_name)
@@ -209,18 +579,14 @@ export function ExecutionLiveView({
           setCurrentToolName(null)
         }
         if (step.step_type === 'final_answer') {
-          setStatus('completed')
           setCurrentToolName(null)
           setFinalResult(step.content)
-          if (!completionNotifiedRef.current) {
-            completionNotifiedRef.current = true
-            onComplete?.(step.content)
-          }
         }
         if (step.step_type === 'error') {
           setStatus('failed')
           setCurrentToolName(null)
           setChannelError(step.content)
+          stopExecutionChannel()
           if (!errorNotifiedRef.current) {
             errorNotifiedRef.current = true
             onError?.(step.content)
@@ -228,16 +594,56 @@ export function ExecutionLiveView({
         }
       }
 
+      if (message.event === 'agent_spoke') {
+        const syntheticStep: LiveExecutionStep = {
+          id: `spoke-${message.agent_id}-${Date.now()}`,
+          step_type: 'final_answer',
+          content: String(message.message || ''),
+          agent_name: message.agent_name ? String(message.agent_name) : null,
+          agent_id: message.agent_id ? String(message.agent_id) : null,
+          step_index: typeof message.step_index === 'number'
+            ? message.step_index
+            : Date.now(),
+          timestamp: typeof message.timestamp === 'string' ? message.timestamp : new Date().toISOString(),
+        }
+        setSteps(prev => {
+          const exists = prev.some(step =>
+            step.agent_name === syntheticStep.agent_name && step.step_type === 'final_answer',
+          )
+          const next = exists
+            ? prev.map(step =>
+                step.agent_name === syntheticStep.agent_name && step.step_type === 'final_answer'
+                  ? { ...step, ...syntheticStep }
+                  : step,
+              )
+            : [...prev, syntheticStep]
+          return next.sort((a, b) => a.step_index - b.step_index)
+        })
+      }
+
       if (message.event === 'execution_complete') {
         const nextStatus = normalizeStatus(message.status)
         setStatus(nextStatus)
         setCurrentToolName(null)
+        if (TERMINAL_EXECUTION_STATUSES.includes(nextStatus)) {
+          stopExecutionChannel()
+        }
       }
 
       if (message.event === 'execution_failed') {
-        setStatus('failed')
+        const nextStatus = normalizeStatus(message.status ?? 'failed')
+        setStatus(nextStatus)
         setCurrentToolName(null)
-        const error = message.error ?? 'Execution failed'
+        stopExecutionChannel()
+        const error = message.error ?? (
+          nextStatus === 'cancelled'
+            ? 'Execution cancelled'
+            : nextStatus === 'timed_out'
+              ? 'Execution timed out'
+              : nextStatus === 'rejected'
+                ? 'Execution rejected'
+                : 'Execution failed'
+        )
         setChannelError(error)
         if (!errorNotifiedRef.current) {
           errorNotifiedRef.current = true
@@ -246,90 +652,122 @@ export function ExecutionLiveView({
       }
     })
 
-    return () => unsubscribe(channel)
+    return () => {
+      unsubscribe(channel)
+      subscriptionActiveRef.current = false
+    }
   }, [executionId, subscribe, unsubscribe, onComplete, onError])
 
   useEffect(() => {
-    let cancelled = false
-    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    const execution = executionQuery.data
+    if (!execution) {
+      return
+    }
 
-    const mergeSteps = (incoming: LiveExecutionStep[]) => {
+    mergeIncomingSteps(execution.steps || [])
+
+    const nextStatus = normalizeStatus(execution.status)
+    setStatus(nextStatus)
+
+    if (execution.output_message) {
+      setFinalResult(execution.output_message)
+    }
+
+    if (execution.output_message) {
       setSteps(prev => {
-        const merged = new Map<number, LiveExecutionStep>()
-        for (const step of prev) merged.set(step.step_index, step)
-        for (const step of incoming.map(normalizeStep)) merged.set(step.step_index, step)
-        return Array.from(merged.values()).sort((a, b) => a.step_index - b.step_index)
+        const hasFinalAnswer = prev.some(step => step.step_type === 'final_answer')
+        if (hasFinalAnswer) {
+          return prev
+        }
+        return [
+          ...prev,
+          {
+            id: `synthetic-final-${execution.id}`,
+            step_type: 'final_answer',
+            content: execution.output_message,
+            step_index: prev.length ? Math.max(...prev.map(step => step.step_index)) + 1 : 0,
+            timestamp: execution.completed_at || execution.started_at,
+            created_at: execution.completed_at || execution.started_at,
+          },
+        ]
       })
     }
 
-    const syncExecution = async () => {
-      try {
-        const execution = await executionsApi.get(executionId)
-        if (cancelled) return
-
-        mergeSteps(execution.steps || [])
-
-        const nextStatus = normalizeStatus(execution.status)
-        setStatus(nextStatus)
-
-        if (execution.output_message) {
-          setFinalResult(execution.output_message)
-        }
-
-        if (nextStatus === 'completed') {
-          setCurrentToolName(null)
-          const finalText =
-            execution.output_message ||
-            execution.steps?.find(step => step.step_type === 'final_answer')?.content ||
-            ''
-          if (finalText && !completionNotifiedRef.current) {
-            completionNotifiedRef.current = true
-            onComplete?.(finalText)
-          }
-          return
-        }
-
-        if (nextStatus === 'failed') {
-          setCurrentToolName(null)
-          const error =
-            execution.error ||
-            execution.steps?.find(step => step.step_type === 'error')?.content ||
-            'Execution failed'
-          setChannelError(error)
-          if (!errorNotifiedRef.current) {
-            errorNotifiedRef.current = true
-            onError?.(error)
-          }
-          return
-        }
-      } catch {
-        if (cancelled) return
-      }
-
-      if (!cancelled) {
-        timeoutId = setTimeout(syncExecution, 2000)
-      }
+    if (TERMINAL_EXECUTION_STATUSES.includes(nextStatus)) {
+      stopExecutionChannel()
     }
 
-    void syncExecution()
-
-    return () => {
-      cancelled = true
-      if (timeoutId) clearTimeout(timeoutId)
+    if (nextStatus === 'completed') {
+      setCurrentToolName(null)
+      const finalText =
+        execution.output_message ||
+        execution.steps?.find(step => step.step_type === 'final_answer')?.content ||
+        ''
+      if (finalText && !completionNotifiedRef.current) {
+        completionNotifiedRef.current = true
+        setStatus('completed')
+        onComplete?.(finalText)
+      }
+      return
     }
-  }, [executionId, onComplete, onError])
+
+    if (nextStatus === 'failed' || nextStatus === 'cancelled' || nextStatus === 'timed_out' || nextStatus === 'rejected') {
+      setCurrentToolName(null)
+      const error =
+        execution.error ||
+        execution.steps?.find(step => step.step_type === 'error')?.content ||
+        (nextStatus === 'cancelled'
+          ? 'Execution cancelled'
+          : nextStatus === 'timed_out'
+            ? 'Execution timed out'
+            : nextStatus === 'rejected'
+              ? 'Execution rejected'
+              : 'Execution failed')
+      setChannelError(error)
+      if (!errorNotifiedRef.current) {
+        errorNotifiedRef.current = true
+        onError?.(error)
+      }
+    }
+  }, [executionQuery.data, onComplete, onError])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [steps.length, currentToolName, status])
 
-  const statusConfig = EXECUTION_STATUS_CONFIG[status]
+  const statusConfig = EXECUTION_STATUS_CONFIG[status] ?? EXECUTION_STATUS_CONFIG.failed
   const stepCount = steps.length
   const isLive = status === 'running' || status === 'queued'
   const latestStep = useMemo(() => (steps.length ? steps[steps.length - 1] : null), [steps])
+  const loadingState = executionQuery.isLoading && !steps.length
+  const errorState = executionQuery.isError && !steps.length
+  const workflowParticipants = useMemo<StandupParticipant[]>(() => {
+    const ordered = new Map<string, StandupParticipant>()
+    for (const node of workflowQuery.data?.nodes || []) {
+      const data = node.data || {}
+      const agentId = typeof data.agent_id === 'string' ? data.agent_id : ''
+      if (!agentId || ordered.has(agentId)) continue
+      const agentLabel = typeof data.label === 'string' && data.label.trim()
+        ? data.label.trim()
+        : `Agent ${ordered.size + 1}`
+      ordered.set(agentId, { agentId, agentName: agentLabel })
+    }
+    return Array.from(ordered.values())
+  }, [workflowQuery.data])
+  const isStandupMode = useMemo(() => {
+    const speakingAgents = new Set(
+      steps
+        .filter(step => step.agent_name)
+        .map(step => step.agent_name as string),
+    )
+    return workflowParticipants.length >= 2 && speakingAgents.size >= 1
+  }, [steps, workflowParticipants])
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-xl border border-white/5 bg-[#080C14]">
+    <div
+      className="flex flex-col overflow-hidden rounded-xl border border-white/5 bg-[#080C14]"
+      data-status={status}
+    >
       <div className="flex items-center justify-between border-b border-white/5 bg-[#0C1018] px-4 py-3">
         <div className="flex items-center gap-2.5">
           <div className="relative flex-shrink-0">
@@ -342,15 +780,17 @@ export function ExecutionLiveView({
             )}
           </div>
 
-          <span className="text-sm font-medium text-white/80">{agentName}</span>
-          {modelName && (
+          <span className="text-sm font-medium text-white/80">
+            {isStandupMode ? 'Standup Room' : agentName}
+          </span>
+          {modelName && !isStandupMode && (
             <span className="font-mono text-xs text-white/25">· {modelName}</span>
           )}
           <span className="text-xs text-white/30">{statusConfig.label}</span>
         </div>
 
         <div className="flex items-center gap-3">
-          {currentToolName && isLive && (
+          {currentToolName && isLive && !isStandupMode && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-1.5 text-xs text-cyan-400">
               <div className="h-1 w-1 rounded-full bg-cyan-400 animate-pulse" />
               {currentToolName}
@@ -375,28 +815,44 @@ export function ExecutionLiveView({
         </div>
       )}
 
-      <div className="flex-1 space-y-2 overflow-y-auto p-3 font-mono" style={{ maxHeight }}>
-        <AnimatePresence initial={false}>
-          {steps.map(step => (
-            <StepCard key={step.step_index} step={step} />
-          ))}
-        </AnimatePresence>
-
-        {isLive && (
-          <TypingIndicator label={currentToolName ? `Running ${currentToolName}…` : 'Agent is thinking…'} />
-        )}
-
-        {!isLive && !steps.length && (
+      <div className="flex-1 overflow-y-auto p-3 font-mono" style={{ maxHeight }}>
+        {loadingState ? (
           <div className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-4 text-sm text-white/35">
-            No execution steps were recorded for this run yet.
+            Loading execution details…
           </div>
+        ) : errorState ? (
+          <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-4 text-sm text-red-300/80">
+            Could not load execution details.
+          </div>
+        ) : isStandupMode ? (
+          <StandupThread executionId={executionId} steps={steps} isLive={isLive} />
+        ) : (
+          <>
+            <div className="space-y-2">
+              <AnimatePresence initial={false}>
+                {steps.map((step, index) => (
+                  <StepCard key={stepKey(step, index)} step={step} />
+                ))}
+              </AnimatePresence>
+            </div>
+
+            {isLive && (
+              <TypingIndicator label={currentToolName ? `Running ${currentToolName}…` : 'Agent is thinking…'} />
+            )}
+
+            {!isLive && !steps.length && (
+              <div className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-4 text-sm text-white/35">
+                No execution steps were recorded for this run yet.
+              </div>
+            )}
+          </>
         )}
 
         <div ref={bottomRef} />
       </div>
 
       <AnimatePresence>
-        {status === 'completed' && (
+        {status === 'completed' && !isStandupMode && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
@@ -409,6 +865,7 @@ export function ExecutionLiveView({
               </div>
               {finalResult && (
                 <button
+                  type="button"
                   onClick={() => navigator.clipboard.writeText(finalResult)}
                   className="text-xs text-white/30 transition-colors hover:text-white/60"
                 >

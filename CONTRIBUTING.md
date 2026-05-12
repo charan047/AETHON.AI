@@ -1,31 +1,28 @@
-# Contributing to AETHON
+# Contributing to Aethon Agency OS
 
-Thanks for contributing to AETHON.
+Thanks for contributing.
 
-This repository is not a toy demo. It is a multi-tenant product codebase with real runtime, workflow, billing, model-routing, and approval surfaces. We value contributions that make the platform safer, clearer, faster, and more operable.
+Aethon is a real multi-tenant product codebase with a live runtime, workflow engine, model control plane, approvals, and client-facing surfaces. Good contributions improve safety, clarity, reliability, and operator confidence.
 
-## What We Optimize For
+## Before You Start
 
-When making changes, optimize for:
-
-- correctness
-- tenant isolation
-- product coherence
-- operational resilience
-- clear failure states
-- maintainable code paths
-- excellent developer ergonomics
-
-## Read Before You Change Anything
-
-Start here:
+Read:
 
 - [README.md](README.md)
 - [DOCUMENTATION.md](DOCUMENTATION.md)
 - [SECURITY.md](SECURITY.md)
 - [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 
-If your change touches deployment, billing, auth, model routing, tools, or org-scoped data, read the relevant sections in [DOCUMENTATION.md](DOCUMENTATION.md) first.
+If your change touches auth, org scoping, workflows, model configs, portals, or tools, read the relevant code paths first.
+
+## What We Optimize For
+
+- correctness
+- tenant isolation
+- predictable failure states
+- maintainable code
+- explicit runtime behavior
+- strong verification
 
 ## Local Development
 
@@ -52,88 +49,82 @@ npm install
 docker compose up -d --build
 ```
 
-## Branching Guidelines
+## Branching
 
-- keep branches focused
-- avoid mixing unrelated refactors with product fixes
-- include migrations in the same change set as the schema change
-- document behavioral changes when they affect operators or contributors
+Keep branches focused.
 
-Recommended branch naming:
+Recommended names:
 
 - `feat/<short-description>`
 - `fix/<short-description>`
 - `docs/<short-description>`
 - `chore/<short-description>`
 
+Avoid mixing unrelated refactors, schema changes, and product fixes in one PR unless they are tightly coupled.
+
 ## Pull Request Expectations
 
-Every pull request should answer:
+Every PR should explain:
 
 - what changed
 - why it changed
-- what risks were considered
 - how it was validated
-- whether docs or migrations were updated
-
-Use the PR template in [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md).
+- what risks were considered
+- whether docs or migrations changed
 
 ## Engineering Rules
 
 ### 1. Protect Tenant Boundaries
 
-This is the most important platform invariant.
+If a surface is org-owned, assume `org_id` scoping is required unless you can prove otherwise.
 
-If your code touches:
+High-risk examples:
 
-- API queries
-- websocket channels
-- notifications
 - analytics
-- tool logs
-- approvals
-- models
 - executions
+- WebSocket events
+- approvals
+- model configs
 - marketplace installs
-
-assume `org_id` scoping is required unless you can prove otherwise.
+- client portal data
 
 ### 2. Treat Secrets As Toxic Data
 
 - never commit `.env`
 - never log plaintext API keys
 - never return encrypted secrets in API responses
-- reuse the existing encryption paths for stored credentials
+- preserve existing encryption or masking behavior
 
 ### 3. Prefer Explicit Failure States
 
-Avoid silent failure when the product should surface:
+Avoid silent failure when the product should visibly surface:
 
-- plan limits
-- approval wait states
-- integration misconfiguration
-- model connection failures
-- websocket disconnects
-- tool runtime issues
+- approval pauses
+- provider misconfiguration
+- model test failures
+- auth/session drift
+- workflow runtime failures
+- portal disable/404 states
 
 ### 4. Keep Frontend State Honest
 
 The UI should not claim:
 
-- an install succeeded when it did not
-- a run completed when it is still pending
-- a model is configured when the org has no working default
+- a run completed when it is still running
+- a model is healthy when the last test failed
+- an install succeeded when the backend failed
+- a client portal is active if the token is disabled
 
 ### 5. Ship Schema Changes Properly
 
-Database changes must include:
+Database changes should include:
 
-- model update
+- model updates
 - Alembic migration
 - backfill logic when needed
-- downgrade path where practical
+- verification of upgrade behavior
 
-## Validation Checklist Before Opening A PR
+## Validation Before Opening A PR
 
 ### Backend
 
@@ -149,69 +140,53 @@ cd frontend
 npm run build
 ```
 
-### Targeted Runtime Validation
+### Story Validation
 
-For flow-heavy changes, validate the affected story end to end:
+For flow-heavy changes, validate the affected journey end to end:
 
 - onboarding
 - marketplace install
 - workflow execution
 - approvals
-- billing
 - model assignment
+- client portal
 - multi-org isolation
 
-### Docs
+## Docs To Update When Needed
 
 Check whether your change affects:
 
 - [README.md](README.md)
 - [DOCUMENTATION.md](DOCUMENTATION.md)
 - [SECURITY.md](SECURITY.md)
-- [backend/docs/quality_report.md](backend/docs/quality_report.md)
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 
 ## Contribution Areas We Especially Value
 
-- multi-tenant correctness
-- security hardening
+- tenant isolation hardening
 - workflow runtime reliability
 - model provider support
-- approval and audit systems
-- product polish
-- testing and verification
-- docs that reduce ramp-up time
+- approval and audit improvements
+- portal safety
+- docs that help new maintainers ramp up faster
+- tests that catch real regressions
 
-## What Not To Commit
+## Do Not Commit
 
-- local secrets
+- secrets
 - `.env` files
-- `node_modules`
-- Python virtualenvs
-- local DB/cache artifacts
-- generated Playwright output
-- backup/recovery artifacts
-
-## Code Review Mindset
-
-Review changes for:
-
-- tenant isolation regressions
-- auth/session correctness
-- migration safety
-- websocket correctness
-- user-facing confusion states
-- hidden production assumptions
-- rollback difficulty
+- local database or cache artifacts
+- generated browser test output
+- archives, backup zips, or machine-specific files
+- editor worktree artifacts
 
 ## If You’re Unsure
 
 Open an issue first for:
 
 - large architectural changes
-- new provider integrations
 - public API shape changes
-- major workflow/runtime behavior changes
-- broad design system shifts
-
-We would rather align early than unwind a large change later.
+- new provider integrations
+- security-sensitive behavior changes
+- major design system rewrites

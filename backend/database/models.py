@@ -11,10 +11,14 @@ from database.db import Base
 
 class Agent(Base):
     __tablename__ = "agents"
+    __table_args__ = (
+        Index("ix_agents_client_id", "client_id"),
+    )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid4()))
     org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     name = Column(String, nullable=False)
+    persona_name = Column(String(100), nullable=True)
     role = Column(String, nullable=False)
     description = Column(Text, default="")
     system_prompt = Column(Text, nullable=False)
@@ -24,6 +28,11 @@ class Agent(Base):
     seniority_level = Column(Integer, default=1)
     autonomy_level = Column(String(50), default="supervised")
     trust_score = Column(Float, default=50.0)
+    current_status = Column(String(50), default="idle")
+    current_task_summary = Column(String(500), nullable=True)
+    department_id = Column(String, ForeignKey("departments.id"), nullable=True)
+    reports_to_agent_id = Column(String, ForeignKey("agents.id"), nullable=True)
+    total_tasks_completed = Column(Integer, default=0)
     tools = Column(JSON, default=list)
     memory_enabled = Column(Boolean, default=True)
     memory_window = Column(Integer, default=10)
@@ -37,6 +46,7 @@ class Agent(Base):
     retry_on_timeout = Column(Boolean, default=True, nullable=False)
     telegram_enabled = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
+    client_id = Column(String, ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
     installed_from_listing_id = Column(String, ForeignKey("marketplace_listings.id"), nullable=True)
     created_by_user_id = Column(String, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -76,6 +86,7 @@ class ExecutionStatus(str, enum.Enum):
     running = "running"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
     waiting_approval = "waiting_approval"
     rejected = "rejected"
     timed_out = "timed_out"
@@ -127,14 +138,6 @@ class ScoringMethod(str, enum.Enum):
     custom_function = "custom_function"
 
 
-class OrgPlan(str, enum.Enum):
-    free = "free"
-    solo = "solo"
-    team = "team"
-    business = "business"
-    enterprise = "enterprise"
-
-
 class OrgMemberRole(str, enum.Enum):
     owner = "owner"
     admin = "admin"
@@ -155,11 +158,11 @@ class AuditAction(str, enum.Enum):
     hitl_approved = "hitl_approved"
     hitl_rejected = "hitl_rejected"
     marketplace_published = "marketplace_published"
-    billing_payment_failed = "billing_payment_failed"
     data_exported = "data_exported"
     model_added = "model_added"
     model_set_default = "model_set_default"
     agent_model_changed = "agent_model_changed"
+    approval_requested = "approval_requested"
 
 
 class MarketplaceCategory(str, enum.Enum):
@@ -303,10 +306,14 @@ class ModelConfig(Base):
 
 class Execution(Base):
     __tablename__ = "executions"
+    __table_args__ = (
+        Index("ix_executions_client_id", "client_id"),
+    )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid4()))
     org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     workflow_id = Column(String, ForeignKey("workflows.id"), nullable=False)
+    client_id = Column(String, ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
     trigger = Column(String, default="manual")
     status = Column(
         SAEnum(
@@ -323,6 +330,7 @@ class Execution(Base):
     token_count = Column(Integer, default=0)
     cost = Column(Float, default=0.0)
     error = Column(Text, nullable=True)
+    max_runtime_seconds = Column(Integer, default=3600, nullable=False)
     is_demo = Column(Boolean, default=False, nullable=False)
 
     workflow = relationship("Workflow", back_populates="executions")
@@ -396,16 +404,34 @@ class AgentMessage(Base):
     __table_args__ = (
         Index("ix_agent_messages_to_created", "to_agent_id", "created_at"),
         Index("ix_agent_messages_execution", "execution_id"),
+        Index("ix_agent_messages_org_requires_human", "org_id", "requires_human"),
+        Index("ix_agent_messages_thread", "thread_id"),
+        Index("ix_agent_messages_org_sender", "org_id", "sender_type"),
+        Index("ix_agent_messages_org_ceo_inbox", "org_id", "requires_human", "is_resolved"),
     )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid4()))
-    from_agent_id = Column(String, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
-    to_agent_id = Column(String, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=True)
+    from_agent_id = Column(String, ForeignKey("agents.id", ondelete="CASCADE"), nullable=True)
+    to_agent_id = Column(String, ForeignKey("agents.id", ondelete="CASCADE"), nullable=True)
     execution_id = Column(String, nullable=True)
     message = Column(Text, nullable=False)
+    # "agent" | "ceo"
+    sender_type = Column(String(10), default="agent")
+    message_type = Column(String(50), default="general")
+    thread_id = Column(String, nullable=True)
+    parent_message_id = Column(String, nullable=True)
+    is_resolved = Column(Boolean, default=False)
+    resolved_at = Column(DateTime, nullable=True)
+    requires_human = Column(Boolean, default=False)
+    priority = Column(String(20), default="normal")
+    read_at = Column(DateTime, nullable=True)
     response = Column(Text, nullable=True)
     delivered_at = Column(DateTime, nullable=True)
     responded_at = Column(DateTime, nullable=True)
+    # Scheduled follow-up reply fields
+    scheduled_reply_at = Column(DateTime, nullable=True)
+    scheduled_reply_job_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -428,27 +454,12 @@ class Organization(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
     slug = Column(String(100), unique=True, nullable=False)
-    plan = Column(
-        SAEnum(
-            OrgPlan,
-            values_callable=lambda values: [item.value for item in values],
-            name="orgplan",
-        ),
-        default=OrgPlan.free,
-    )
+    plan = Column(String(20), default="open_source", nullable=False)
     owner_user_id = Column(String, ForeignKey("users.id"), nullable=False)
     max_members = Column(Integer, default=1)
     max_agents = Column(Integer, default=3)
     max_workflows = Column(Integer, default=5)
     max_monthly_executions = Column(Integer, default=100)
-    stripe_customer_id = Column(String(100), nullable=True)
-    stripe_subscription_id = Column(String(100), nullable=True)
-    stripe_subscription_status = Column(String(50), nullable=True)
-    stripe_metered_subscription_item_id = Column(String(100), nullable=True)
-    stripe_current_period_end = Column(DateTime(timezone=True), nullable=True)
-    stripe_trial_end = Column(DateTime(timezone=True), nullable=True)
-    cancellation_date = Column(DateTime(timezone=True), nullable=True)
-    billing_email = Column(String(255), nullable=True)
     monthly_budget_usd = Column(Float, default=10.0)
     current_period_executions = Column(Integer, default=0)
     onboarding_completed = Column(Boolean, default=False, nullable=False)
@@ -458,10 +469,48 @@ class Organization(Base):
     competitors = Column(JSON, default=list)
     timezone = Column(String(50), default="UTC")
     logo_url = Column(String(500), nullable=True)
+    agent_message_retention_days = Column(Integer, nullable=True, default=30)
     custom_domain = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class ClientStatus(str, enum.Enum):
+    active = "active"
+    paused = "paused"
+    completed = "completed"
+
+
+class Client(Base):
+    __tablename__ = "clients"
+    __table_args__ = (
+        Index("ix_clients_org_id", "org_id"),
+        Index("ix_clients_org_status", "org_id", "status"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    company_name = Column(String(255), nullable=True)
+    contact_email = Column(String(255), nullable=True)
+    description = Column(Text, nullable=True)
+    service_type = Column(String(100), nullable=True)
+    status = Column(
+        SAEnum(
+            ClientStatus,
+            values_callable=lambda v: [i.value for i in v],
+            name="clientstatus",
+        ),
+        default=ClientStatus.active,
+        nullable=False,
+    )
+    portal_token = Column(String(64), nullable=True, unique=True)
+    portal_enabled = Column(Boolean, default=False, nullable=False)
+    notes = Column(Text, nullable=True)
+    color = Column(String(7), nullable=True, default="#6366F1")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class OrgMember(Base):
@@ -721,12 +770,18 @@ class ExecutionCostLog(Base):
     __tablename__ = "execution_cost_logs"
     __table_args__ = (
         Index("ix_execution_cost_logs_user_created", "user_id", "created_at"),
+        Index("ix_execution_cost_logs_org_created", "org_id", "created_at"),
     )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     execution_id = Column(String, ForeignKey("executions.id", ondelete="CASCADE"), nullable=False)
     agent_id = Column(String, ForeignKey("agents.id", ondelete="SET NULL"), nullable=True)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    org_id = Column(
+        String,
+        ForeignKey("organizations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     model = Column(String(100), nullable=False)
     input_tokens = Column(Integer, nullable=False)
     output_tokens = Column(Integer, nullable=False)
@@ -831,6 +886,43 @@ class CompanyProfile(Base):
     onboarding_complete = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class CompanyConversation(Base):
+    __tablename__ = "company_conversations"
+    __table_args__ = (
+        Index("ix_company_conversations_org_user", "org_id", "user_id"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(200), nullable=True)
+    pinned = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_message_at = Column(DateTime, default=datetime.utcnow)
+    message_count = Column(Integer, default=0)
+
+
+class CompanyChatMessage(Base):
+    __tablename__ = "company_chat_messages"
+    __table_args__ = (
+        Index("ix_chat_messages_conversation", "conversation_id"),
+        Index("ix_chat_messages_org_created", "org_id", "created_at"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    conversation_id = Column(
+        String,
+        ForeignKey("company_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(20), nullable=False)
+    content = Column(Text, nullable=False)
+    actions_json = Column(JSON, default=list)
+    attachments_json = Column(JSON, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class HumanApprovalRequest(Base):
@@ -954,3 +1046,136 @@ class MarketplaceReview(Base):
     body = Column(Text, nullable=True)
     helpful_count = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Department(Base):
+    __tablename__ = "departments"
+    __table_args__ = (Index("ix_departments_org_id", "org_id"),)
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(100), nullable=False)
+    department_type = Column(String(50), nullable=False)
+    description = Column(Text, nullable=True)
+    color = Column(String(7), nullable=True)
+    icon = Column(String(10), nullable=True)
+    head_agent_id = Column(String, ForeignKey("agents.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AgentRole(Base):
+    __tablename__ = "agent_roles"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    name = Column(String(100), nullable=False)
+    slug = Column(String(100), nullable=False, unique=True)
+    seniority_level = Column(Integer, nullable=False)
+    department_type = Column(String(50), nullable=False)
+    description = Column(Text, nullable=True)
+    color = Column(String(7), nullable=False, default="#6C63FF")
+    icon = Column(String(10), nullable=False, default="🤖")
+    is_system_role = Column(Boolean, default=True)
+    default_tools = Column(JSON, default=list)
+    default_max_iterations = Column(Integer, default=15)
+    default_autonomy_level = Column(String(20), default="supervised")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AgentContract(Base):
+    __tablename__ = "agent_contracts"
+    __table_args__ = (Index("ix_agent_contracts_agent_id", "agent_id"),)
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    agent_id = Column(String, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, unique=True)
+    responsibilities = Column(JSON, default=list)
+    allowed_tools = Column(JSON, default=list)
+    forbidden_tools = Column(JSON, default=list)
+    forbidden_actions = Column(JSON, default=list)
+    requires_approval_for = Column(JSON, default=list)
+    escalates_to_role = Column(String(100), nullable=True)
+    escalation_triggers = Column(JSON, default=list)
+    max_tokens_per_task = Column(Integer, default=50000)
+    max_cost_per_task_cents = Column(Integer, default=100)
+    requires_review_from = Column(JSON, default=list)
+    autonomy_level = Column(String(20), default="supervised")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AgentTrustScore(Base):
+    __tablename__ = "agent_trust_scores"
+    __table_args__ = (Index("ix_agent_trust_scores_agent_id", "agent_id"),)
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    agent_id = Column(String, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, unique=True)
+    task_success_rate = Column(Float, default=0.0)
+    review_pass_rate = Column(Float, default=0.0)
+    cost_efficiency = Column(Float, default=100.0)
+    on_time_rate = Column(Float, default=100.0)
+    risky_action_rate = Column(Float, default=100.0)
+    overall_score = Column(Float, default=50.0)
+    skill_scores = Column(JSON, default=dict)
+    trajectory = Column(String(20), default="stable")
+    trajectory_delta = Column(Float, default=0.0)
+    total_tasks = Column(Integer, default=0)
+    successful_tasks = Column(Integer, default=0)
+    failed_tasks = Column(Integer, default=0)
+    total_reviews = Column(Integer, default=0)
+    passed_reviews = Column(Integer, default=0)
+    risky_actions_attempted = Column(Integer, default=0)
+    risky_actions_blocked = Column(Integer, default=0)
+    human_overrides = Column(Integer, default=0)
+    autonomy_history = Column(JSON, default=list)
+    last_calculated = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AgentApprovalRequest(Base):
+    __tablename__ = "agent_approval_requests"
+    __table_args__ = (
+        Index("ix_approval_requests_org_status", "org_id", "status"),
+        Index("ix_approval_requests_agent", "requesting_agent_id"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    requesting_agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
+    execution_id = Column(String, ForeignKey("executions.id"), nullable=True)
+    approval_type = Column(String(50), nullable=False)
+    title = Column(String(500), nullable=False)
+    description = Column(Text, nullable=False)
+    risk_level = Column(String(20), nullable=False, default="medium")
+    affected_files = Column(JSON, default=list)
+    affected_systems = Column(JSON, default=list)
+    reason = Column(Text, nullable=True)
+    expected_impact = Column(Text, nullable=True)
+    rollback_plan = Column(Text, nullable=True)
+    estimated_cost_cents = Column(Integer, nullable=True)
+    ai_recommendation = Column(String(20), nullable=True)
+    ai_analysis = Column(Text, nullable=True)
+    ai_risk_factors = Column(JSON, default=list)
+    ai_analyzed_at = Column(DateTime, nullable=True)
+    status = Column(String(20), default="pending")
+    decided_by = Column(String, ForeignKey("users.id"), nullable=True)
+    decided_at = Column(DateTime, nullable=True)
+    decision_note = Column(Text, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AgentMemoryEntry(Base):
+    __tablename__ = "agent_memory_entries"
+    __table_args__ = (
+        Index("ix_agent_memory_entries_agent_id", "agent_id"),
+        Index("ix_agent_memory_entries_org_id", "org_id"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    agent_id = Column(String, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    mem0_memory_id = Column(String(255), nullable=False)
+    content_preview = Column(String(500), nullable=True)
+    memory_type = Column(String(50), default="general")
+    tags = Column(JSON, default=list)
+    importance_score = Column(Float, default=0.5)
+    created_at = Column(DateTime, default=datetime.utcnow)

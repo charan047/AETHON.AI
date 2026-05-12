@@ -2,10 +2,13 @@ import json
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from auth.security import create_access_token, hash_password
 from database.models import (
     Agent,
+    AgentContract,
+    AgentTrustScore,
     ListingStatus,
     ListingType,
     MarketplaceCategory,
@@ -13,7 +16,6 @@ from database.models import (
     MarketplaceListing,
     OrgMember,
     OrgMemberRole,
-    OrgPlan,
     Organization,
     User,
     UserRole,
@@ -53,9 +55,8 @@ async def create_user_with_org(db, email: str, org_name: str, org_slug: str):
     org = Organization(
         name=org_name,
         slug=org_slug,
-        plan=OrgPlan.solo,
+        plan="open_source",
         owner_user_id=user.id,
-        billing_email=user.email,
     )
     db.add(org)
     await db.commit()
@@ -99,6 +100,16 @@ async def test_install_listing_creates_agent_in_org(authed_client, db, test_agen
     created_agent = await db.get(Agent, payload["resource_id"])
     assert created_agent is not None
     assert created_agent.org_id == test_org.id
+
+    contract = await db.scalar(
+        select(AgentContract).where(AgentContract.agent_id == created_agent.id)
+    )
+    trust = await db.scalar(
+        select(AgentTrustScore).where(AgentTrustScore.agent_id == created_agent.id)
+    )
+    assert contract is not None
+    assert trust is not None
+    assert trust.overall_score == 50.0
 
 
 @pytest.mark.asyncio

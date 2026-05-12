@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Play, X } from 'lucide-react'
 import { clsx } from 'clsx'
-import { evalsApi } from '../../api/client'
+import { evalsApi, extractApiError } from '../../api/client'
 import { useWebSocket } from '../../contexts/WebSocketContext'
 import type { EvalSuite } from '../../types'
 import { ScoreBadge } from './ScoreBadge'
@@ -77,7 +77,7 @@ export function RunSuiteModal({
       }
     } catch (error: any) {
       setRunning(false)
-      toast.error(error.response?.data?.detail || 'Failed to start eval run')
+      toast.error(extractApiError(error))
     }
   }
 

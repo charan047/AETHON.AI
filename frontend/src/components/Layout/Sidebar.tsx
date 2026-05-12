@@ -1,30 +1,25 @@
-import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
-  Activity,
   BarChart3,
   Bot,
   Brain,
+  Briefcase,
+  Building2,
   CheckCircle2,
-  ChevronsLeft,
-  ChevronsRight,
-  CreditCard,
   FlaskConical,
-  GitBranch,
   LayoutDashboard,
   Link2,
   LogOut,
   MessageCircle,
-  Network,
   Settings,
   ShoppingBag,
-  Users,
   Wrench,
+  Workflow,
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { clsx } from 'clsx'
 import { useAuth } from '../../contexts/AuthContext'
-import { approvalsApi, modelsApi } from '../../api/client'
+import { approvalsApi, messagesApi, modelsApi } from '../../api/client'
 import { AgentAvatar } from '../ui/AgentAvatar'
 import { OrgSwitcher } from '../org/OrgSwitcher'
 
@@ -32,9 +27,8 @@ type NavItem = {
   to: string
   icon: typeof LayoutDashboard
   label: string
-  badge?: string
-  comingSoon?: boolean
   activePrefixes?: string[]
+  badge?: 'approvals' | 'models' | 'messages'
 }
 
 type NavGroup = {
@@ -44,171 +38,95 @@ type NavGroup = {
 
 const NAV_GROUPS: NavGroup[] = [
   {
-    title: 'COMPANY',
+    title: 'AGENCY',
     items: [
-      {
-        to: '/',
-        icon: LayoutDashboard,
-        label: 'Command Center',
-        activePrefixes: ['/', '/dashboard'],
-      },
-      {
-        to: '/org-chart',
-        icon: Network,
-        label: 'Org Chart',
-        comingSoon: true,
-      },
+      { to: '/clients', icon: Briefcase, label: 'Clients', activePrefixes: ['/clients'] },
+      { to: '/', icon: LayoutDashboard, label: 'Dashboard', activePrefixes: ['/', '/dashboard'] },
+      { to: '/company-chat', icon: Building2, label: 'Agency Chat', activePrefixes: ['/company-chat'] },
     ],
   },
   {
-    title: 'AGENTS',
+    title: 'AI TEAM',
     items: [
-      {
-        to: '/agents',
-        icon: Users,
-        label: 'All Agents',
-      },
-      {
-        to: '/messages',
-        icon: MessageCircle,
-        label: 'Messages',
-        activePrefixes: ['/messages', '/company-chat'],
-      },
+      { to: '/agents', icon: Bot, label: 'Agents', activePrefixes: ['/agents'] },
+      { to: '/messages', icon: MessageCircle, label: 'Agent Messages', activePrefixes: ['/messages'], badge: 'messages' },
+      { to: '/workflows', icon: Workflow, label: 'Workflows', activePrefixes: ['/workflows'] },
+      { to: '/monitoring', icon: BarChart3, label: 'Executions', activePrefixes: ['/monitoring', '/executions'] },
+      { to: '/approvals', icon: CheckCircle2, label: 'Approvals', activePrefixes: ['/approvals'], badge: 'approvals' },
     ],
   },
   {
-    title: 'WORK',
+    title: 'TOOLS',
     items: [
-      {
-        to: '/workflows',
-        icon: GitBranch,
-        label: 'Workflows',
-      },
-      {
-        to: '/executions',
-        icon: Activity,
-        label: 'Executions',
-        activePrefixes: ['/executions', '/monitoring'],
-      },
-      {
-        to: '/marketplace',
-        icon: ShoppingBag,
-        label: 'Marketplace',
-      },
+      { to: '/integrations', icon: Link2, label: 'Integrations', activePrefixes: ['/integrations'] },
+      { to: '/marketplace', icon: ShoppingBag, label: 'Marketplace', activePrefixes: ['/marketplace'] },
+      { to: '/tools', icon: Wrench, label: 'Custom Tools', activePrefixes: ['/tools'] },
+      { to: '/memory', icon: Brain, label: 'Memory', activePrefixes: ['/memory'] },
     ],
   },
   {
     title: 'SETTINGS',
     items: [
-      {
-        to: '/integrations',
-        icon: Link2,
-        label: 'Integrations',
-      },
-      {
-        to: '/company',
-        icon: Settings,
-        label: 'Company Profile',
-        activePrefixes: ['/company', '/settings/org'],
-      },
-    ],
-  },
-  {
-    title: 'CONTROL',
-    items: [
-      {
-        to: '/approvals',
-        icon: CheckCircle2,
-        label: 'Approvals',
-      },
-      {
-        to: '/analytics',
-        icon: BarChart3,
-        label: 'Analytics',
-      },
-      {
-        to: '/evals',
-        icon: FlaskConical,
-        label: 'Eval Lab',
-      },
-      {
-        to: '/tools',
-        icon: Wrench,
-        label: 'Tools',
-      },
-      {
-        to: '/memory',
-        icon: Brain,
-        label: 'Memory',
-      },
-      {
-        to: '/settings/models',
-        icon: Bot,
-        label: 'Models',
-      },
-      {
-        to: '/settings/billing',
-        icon: CreditCard,
-        label: 'Billing',
-      },
-      {
-        to: '/settings/team',
-        icon: Users,
-        label: 'Team Settings',
-      },
+      { to: '/settings/org', icon: Settings, label: 'Settings', activePrefixes: ['/settings/org', '/company'] },
+      { to: '/settings/models', icon: Bot, label: 'AI Models', activePrefixes: ['/settings/models'], badge: 'models' },
+      { to: '/analytics', icon: BarChart3, label: 'Analytics', activePrefixes: ['/analytics'] },
+      { to: '/evals', icon: FlaskConical, label: 'Evals', activePrefixes: ['/evals'] },
+      { to: '/settings/team', icon: Briefcase, label: 'Team Structure', activePrefixes: ['/settings/team', '/org-chart'] },
     ],
   },
 ]
 
-function AethonMark({ collapsed }: { collapsed: boolean }) {
-  if (collapsed) {
-    return (
-      <div className="flex items-center justify-center px-3 py-5 border-b border-white/[0.05]">
-        <div
-          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg"
-          style={{
-            background: 'linear-gradient(135deg, #6C63FF, #00D4FF)',
-            boxShadow: '0 0 16px rgba(108,99,255,0.4)',
-          }}
-        >
-          <span className="font-mono text-sm font-bold text-white">A</span>
-        </div>
-      </div>
-    )
+function Badge({
+  count,
+  tone = 'red',
+  compact = false,
+}: {
+  count?: number
+  tone?: 'red' | 'blue' | 'amber'
+  compact?: boolean
+}) {
+  if (!count) return null
+
+  const tones = {
+    red: 'bg-red-500/15 text-red-300 border-red-500/20',
+    blue: 'bg-blue-500/15 text-blue-300 border-blue-500/20',
+    amber: 'bg-amber-500/15 text-amber-300 border-amber-500/20',
   }
 
   return (
-    <div className="flex items-center gap-3 border-b border-white/[0.05] px-5 py-5">
-      <div
-        className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg"
-        style={{
-          background: 'linear-gradient(135deg, #6C63FF, #00D4FF)',
-          boxShadow: '0 0 16px rgba(108,99,255,0.4)',
-        }}
-      >
-        <span className="font-mono text-sm font-bold text-white">A</span>
-      </div>
-      <div>
-        <div className="text-sm font-bold tracking-widest text-white">
-          AETHON
-        </div>
-        <div className="mt-0.5 text-xs leading-none text-white/25">
-          AI Operating System
-        </div>
-      </div>
-    </div>
+    <span
+      className={clsx(
+        'inline-flex items-center justify-center rounded-full border text-[10px] font-semibold',
+        tones[tone],
+        compact ? 'h-5 min-w-5 px-1.5' : 'min-w-5 px-1.5 py-0.5',
+      )}
+    >
+      {count}
+    </span>
   )
 }
 
-export function Sidebar() {
+export function Sidebar({
+  mobileOpen = false,
+  onCloseMobile,
+}: {
+  mobileOpen?: boolean
+  onCloseMobile?: () => void
+}) {
   const auth = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const [collapsed, setCollapsed] = useState(false)
   const canLoadOrgScopedSidebarData = auth.isAuthenticated && !auth.isLoading && Boolean(auth.activeOrg?.id)
+
   const { data: pendingApprovals = [] } = useQuery({
     queryKey: ['approvals', 'pending-count'],
     queryFn: approvalsApi.pending,
+    enabled: canLoadOrgScopedSidebarData,
+    refetchInterval: 30_000,
+  })
+  const agentRequestsQuery = useQuery({
+    queryKey: ['approvals', 'agent-requests-sidebar'],
+    queryFn: approvalsApi.agentRequests,
     enabled: canLoadOrgScopedSidebarData,
     refetchInterval: 30_000,
   })
@@ -218,7 +136,15 @@ export function Sidebar() {
     enabled: canLoadOrgScopedSidebarData,
     refetchInterval: 60_000,
   })
+  const { data: unreadData } = useQuery({
+    queryKey: ['messages-unread-count'],
+    queryFn: () => messagesApi.unreadCount(),
+    enabled: canLoadOrgScopedSidebarData,
+    refetchInterval: 30_000,
+  })
 
+  const unreadMessages = unreadData?.count || 0
+  const combinedApprovals = pendingApprovals.length + (agentRequestsQuery.data?.pending_count || 0)
   const hasFailedModels = modelConfigs.some(config => config.test_status === 'failed')
 
   const signOut = () => {
@@ -229,136 +155,113 @@ export function Sidebar() {
   const isActive = (item: NavItem) => {
     const prefixes = item.activePrefixes || [item.to]
     if (item.to === '/') {
-      return location.pathname === '/' || location.pathname === '/dashboard'
+      return location.pathname === '/' || location.pathname === '/dashboard' || location.pathname === '/company-os'
     }
     return prefixes.some(prefix => location.pathname === prefix || location.pathname.startsWith(`${prefix}/`))
   }
 
+  const handleNavClick = () => {
+    onCloseMobile?.()
+  }
+
+  const displayName = auth.activeOrg?.name || auth.email?.split('@')[0] || 'Agency Owner'
+
   return (
     <aside
       className={clsx(
-        'relative flex shrink-0 flex-col overflow-hidden border-r border-white/[0.06] bg-base-200/90 backdrop-blur-xl transition-[width] duration-300 ease-out',
-        collapsed ? 'w-[84px]' : 'w-[260px]',
+        'fixed inset-y-0 left-0 z-30 flex h-full w-[240px] shrink-0 flex-col overflow-hidden',
+        'bg-[rgba(8,13,26,0.85)] shadow-[1px_0_0_rgba(255,255,255,0.06),0_18px_48px_rgba(0,0,0,0.35)] backdrop-blur-xl',
+        'transition-transform duration-300 ease-out lg:static',
+        mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
       )}
     >
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-56 bg-gradient-to-b from-accent-purple/[0.10] via-accent-cyan/[0.04] to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-56 bg-[radial-gradient(ellipse_at_top,rgba(37,99,235,0.18),transparent_60%)]" />
 
       <div className="relative z-10 flex h-full flex-col">
-        <div className="pt-0">
-          <AethonMark collapsed={collapsed} />
+        <div className="flex h-14 items-center gap-3 px-5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 shadow-[0_0_12px_rgba(37,99,235,0.4)]">
+            <Briefcase size={16} className="text-white" />
+          </div>
+          <div className="min-w-0">
+            <span className="text-sm font-extrabold tracking-tight text-white">Aethon</span>
+            <span className="ml-1.5 rounded bg-blue-600/15 px-1.5 py-0.5 text-[10px] font-semibold text-blue-400">
+              Agency OS
+            </span>
+          </div>
         </div>
 
-        <div className="px-3 pt-3">
-          <OrgSwitcher collapsed={collapsed} />
+        <div className="px-4 pt-2">
+          <OrgSwitcher collapsed={false} />
         </div>
 
-        <nav className="relative min-h-0 flex-1 overflow-y-auto px-3 py-4">
-          <div className="space-y-5">
-            {NAV_GROUPS.map(group => (
-              <div key={group.title} className="space-y-1.5">
-                {!collapsed && (
-                  <div className="px-2 text-[10px] font-semibold tracking-[0.28em] text-content-muted">
-                    {group.title}
-                  </div>
-                )}
+        <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+          {NAV_GROUPS.map(group => (
+            <div key={group.title} className="pb-3">
+              <p className="px-5 pb-1.5 pt-4 text-[10px] font-bold uppercase tracking-[0.20em] text-[#2D3748]">
+                {group.title}
+              </p>
+              <div className="space-y-1">
                 {group.items.map(item => {
-                  const Icon = item.icon
                   const active = isActive(item)
-                  const showApprovalCount = item.to === '/approvals' && pendingApprovals.length > 0
-                  const showModelAlert = item.to === '/settings/models' && hasFailedModels
+                  const Icon = item.icon
 
                   return (
                     <Link
                       key={item.to}
                       to={item.to}
-                      title={collapsed ? item.label : undefined}
+                      onClick={handleNavClick}
                       className={clsx(
-                        'group relative flex h-11 items-center gap-3 overflow-hidden rounded-xl border border-transparent px-3 text-sm transition-all duration-150',
-                        collapsed && 'justify-center px-0',
+                        'group relative flex cursor-pointer items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-150',
+                        'focus:outline-none focus:ring-2 focus:ring-blue-500/30',
                         active
-                          ? 'bg-accent-purple/[0.10] text-accent-200 shadow-[inset_3px_0_0_#6C63FF]'
-                          : 'text-content-secondary hover:border-white/[0.06] hover:bg-white/[0.03] hover:text-content-primary',
+                          ? 'bg-blue-600/12 text-blue-300'
+                          : 'text-[#4B5A73] hover:bg-white/[0.04] hover:text-[#8B9DBE]',
                       )}
                     >
-                      <div className={clsx('absolute inset-y-1 left-0 w-[2px] rounded-full bg-accent-purple transition-opacity', active ? 'opacity-100' : 'opacity-0')} />
-                      <Icon size={18} className="shrink-0" />
-                      {!collapsed && <span className="truncate">{item.label}</span>}
-
-                      {!collapsed && item.comingSoon && (
-                        <span className="ml-auto rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content-muted">
-                          Coming soon
-                        </span>
-                      )}
-
-                      {!collapsed && showModelAlert && (
-                        <span className="ml-auto rounded-full border border-amber-400/20 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
-                          ⚠
-                        </span>
-                      )}
-
-                      {collapsed && showModelAlert && (
-                        <span className="absolute right-1.5 top-1.5 min-w-4 rounded-full bg-amber-400 px-1 py-0.5 text-center text-[10px] font-bold text-base-100">
+                      {active && <div className="absolute left-0 h-5 w-0.5 rounded-r-full bg-blue-500" />}
+                      <Icon size={16} className={active ? 'text-blue-400' : 'text-[#4B5A73] transition-colors group-hover:text-[#8B9DBE]'} />
+                      <span className="truncate">{item.label}</span>
+                      {item.badge === 'approvals' && <span className="ml-auto"><Badge count={combinedApprovals} tone="red" compact /></span>}
+                      {item.badge === 'messages' && <span className="ml-auto"><Badge count={unreadMessages} tone="blue" compact /></span>}
+                      {item.badge === 'models' && hasFailedModels && (
+                        <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-amber-500/20 bg-amber-500/15 px-1.5 text-[10px] font-semibold text-amber-300">
                           !
-                        </span>
-                      )}
-
-                      {showApprovalCount && (
-                        <span
-                          className={clsx(
-                            'rounded-full bg-accent-red px-1.5 py-0.5 text-center text-[10px] font-bold text-white shadow-glow-red',
-                            collapsed ? 'absolute right-1.5 top-1.5 min-w-4' : 'ml-auto min-w-5',
-                          )}
-                        >
-                          {pendingApprovals.length}
                         </span>
                       )}
                     </Link>
                   )
                 })}
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </nav>
 
-        <div className="relative shrink-0 border-t border-white/[0.06] p-3">
-          <div
-            className={clsx(
-              'mb-3 flex items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5',
-              collapsed && 'justify-center',
-            )}
-          >
-            <AgentAvatar name={auth.email || auth.userId || 'Founder'} size="sm" />
-            {!collapsed && (
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-medium text-content-primary">{auth.email || auth.userId}</div>
-                <div className="mt-1 inline-flex rounded-full bg-accent-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-cyan">
-                  {auth.role || 'ceo'}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className={clsx('flex gap-2', collapsed && 'flex-col')}>
-            <button className="btn-ghost h-9 flex-1 px-2 text-xs" onClick={() => setCollapsed(value => !value)}>
-              {collapsed ? (
-                <ChevronsRight size={14} />
-              ) : (
-                <>
-                  <ChevronsLeft size={14} />
-                  Collapse
-                </>
-              )}
-            </button>
-            <button
-              className={clsx(
-                'btn-ghost h-9 px-2 text-xs text-red-200 hover:bg-red-500/10 hover:text-red-100',
-                !collapsed && 'flex-1',
-              )}
-              onClick={signOut}
-              title="Sign out"
+        <div className="border-t border-white/[0.06] p-3">
+          <div className="flex items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.03] px-3 py-3">
+            <AgentAvatar name={displayName} color="linear-gradient(135deg, #2563EB, #10B981)" size="md" />
+            <Link
+              to="/settings/org"
+              onClick={handleNavClick}
+              className="min-w-0 flex-1 cursor-pointer focus:outline-none"
             >
-              <LogOut size={14} />
-              {!collapsed && 'Sign out'}
+              <div className="truncate text-sm font-semibold text-white">{displayName}</div>
+              <div className="truncate text-xs text-[#4B5A73]">{auth.email || 'Open settings'}</div>
+            </Link>
+            <Link
+              to="/settings/org"
+              aria-label="Open settings"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-[#8B9DBE] transition duration-150 hover:bg-white/[0.05] hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+              onClick={handleNavClick}
+            >
+              <Settings size={16} />
+            </Link>
+            <button
+              type="button"
+              aria-label="Sign out"
+              onClick={signOut}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-[#8B9DBE] transition duration-150 hover:bg-white/[0.05] hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+            >
+              <LogOut size={16} />
             </button>
           </div>
         </div>

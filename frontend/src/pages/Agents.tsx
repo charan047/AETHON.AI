@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Brain, Check, MessageSquare, Plus, Trash2, Wrench, X } from 'lucide-react'
+import { Brain, Briefcase, Check, Loader2, MessageSquare, Plus, Trash2, Wrench, X } from 'lucide-react'
 import { clsx } from 'clsx'
 
-import { agentsApi, modelsApi } from '../api/client'
+import { agentsApi, extractApiError, modelsApi } from '../api/client'
 import { AgentMemoryPanel } from '../components/agents/AgentMemoryPanel'
 import { ReputationCard } from '../components/agents/ReputationCard'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
@@ -12,7 +12,9 @@ import { AgentAvatar } from '../components/ui/AgentAvatar'
 import { EmptyState } from '../components/ui/EmptyState'
 import { GlowCard } from '../components/ui/GlowCard'
 import { AgentCardSkeleton } from '../components/ui/Skeleton'
-import { StatusBadge } from '../components/ui/StatusBadge'
+import { StatusDot } from '../components/ui/StatusDot'
+import { TrustScoreBar } from '../components/ui/TrustScoreBar'
+import { useAuth } from '../contexts/AuthContext'
 import { toast } from '../lib/toast'
 import type { Agent, ModelConfigRecord } from '../types'
 
@@ -104,6 +106,8 @@ function AgentForm({
   models,
   savedModels,
   tools,
+  isSaving,
+  memoryAvailable,
 }: {
   initial: Partial<Agent>
   onSave: (data: { agent: Partial<Agent>; modelConfigId: string | null; useOrgDefault: boolean }) => void
@@ -111,10 +115,13 @@ function AgentForm({
   models: {id: string; name: string; provider: string}[]
   savedModels: ModelConfigRecord[]
   tools: {id: string; name: string; description: string}[]
+  isSaving?: boolean
+  memoryAvailable: boolean
 }) {
   const [form, setForm] = useState<Partial<Agent>>({ ...DEFAULTS, ...initial })
   const [useOrgDefault, setUseOrgDefault] = useState(initial.model_config_id == null)
   const [selectedModelConfigId, setSelectedModelConfigId] = useState<string | null>(initial.model_config_id ?? null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const set = (key: keyof Agent, value: unknown) => setForm(prev => ({ ...prev, [key]: value }))
   const toggleTool = (id: string) => {
     const current = form.tools || []
@@ -124,27 +131,55 @@ function AgentForm({
   const defaultModel = savedModels.find(model => model.is_default) || null
   const selectedSavedModel = selectedModelConfigId ? savedModels.find(model => model.id === selectedModelConfigId) || null : null
   const hasModelLibrary = savedModels.length > 0
+  const busy = Boolean(isSaving || isSubmitting)
 
-  const submit = () => {
-    const selectedConfig = savedModels.find(model => model.id === selectedModelConfigId) || null
+  useEffect(() => {
+    if (!isSaving) {
+      setIsSubmitting(false)
+    }
+  }, [isSaving])
+
+  const submit = async () => {
+    if (busy) {
+      return
+    }
+    if (!form.name?.trim()) {
+      toast.error('Agent name is required')
+      return
+    }
+    if (!form.role?.trim()) {
+      toast.error('Role is required — e.g. "Market Researcher"')
+      return
+    }
+    if (!form.system_prompt?.trim()) {
+      toast.error('System prompt is required — tell this agent what it does')
+      return
+    }
+
+    const selectedConfig = savedModels.find(m => m.id === selectedModelConfigId) || null
     const fallbackModel = useOrgDefault
       ? (defaultModel?.model_id || form.model)
       : (selectedConfig?.model_id || form.model)
 
-    onSave({
-      agent: { ...form, model: fallbackModel },
-      modelConfigId: useOrgDefault ? null : selectedModelConfigId,
-      useOrgDefault,
-    })
+    setIsSubmitting(true)
+    try {
+      await Promise.resolve(onSave({
+        agent: { ...form, model: fallbackModel },
+        modelConfigId: useOrgDefault ? null : selectedModelConfigId,
+        useOrgDefault,
+      }))
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xl">
-      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-white/[0.08] bg-obsidian-900">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
+      <div data-testid="agent-form" className="glass-elevated max-h-[90vh] w-full max-w-3xl overflow-y-auto">
         <div className="flex items-center justify-between border-b border-white/[0.08] p-5">
           <div>
             <h2 className="text-lg font-semibold text-white">{initial.id ? 'Configure teammate' : 'Add teammate'}</h2>
-            <p className="text-xs text-obsidian-500">Define the role, tools, model, and operating constraints.</p>
+            <p className="text-xs text-ink-secondary">Define the role, tools, model, and operating constraints.</p>
           </div>
           <button onClick={onCancel} className="btn-ghost p-1.5"><X size={18} /></button>
         </div>
@@ -153,14 +188,14 @@ function AgentForm({
           {initial.id && <ReputationCard agent={initial as Agent} />}
 
           <div className="grid gap-4 md:grid-cols-2">
-            <div><label className="label">Name</label><input className="input" placeholder="Agent name" value={form.name} onChange={e => set('name', e.target.value)} /></div>
-            <div><label className="label">Role</label><input className="input" placeholder="Agent role" value={form.role} onChange={e => set('role', e.target.value)} /></div>
+            <div><label className="label">Name</label><input className="input" placeholder="Name" value={form.name} onChange={e => set('name', e.target.value)} /></div>
+            <div><label className="label">Role</label><input className="input" placeholder="Role" value={form.role} onChange={e => set('role', e.target.value)} /></div>
           </div>
 
           <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
             <div className="mb-4">
               <h3 className="text-sm font-semibold text-white">Role Profile</h3>
-              <p className="mt-1 text-xs text-obsidian-500">Set the teammate identity that powers org structure, autonomy, and trust-aware interfaces.</p>
+              <p className="mt-1 text-xs text-ink-secondary">Set the teammate identity that powers org structure, autonomy, and trust-aware interfaces.</p>
             </div>
             <div className="grid gap-4 md:grid-cols-3">
               <div>
@@ -190,12 +225,12 @@ function AgentForm({
             </div>
           </div>
           <div><label className="label">Description</label><input className="input" placeholder="Agent description" value={form.description} onChange={e => set('description', e.target.value)} /></div>
-          <div><label className="label">System Prompt</label><textarea className="input min-h-[140px] resize-y" placeholder="System prompt" value={form.system_prompt} onChange={e => set('system_prompt', e.target.value)} /></div>
+          <div><label className="label">System Prompt</label><textarea className="input min-h-[140px] resize-y" placeholder="System prompt — tell this agent what it does" value={form.system_prompt} onChange={e => set('system_prompt', e.target.value)} /></div>
 
           <div className="grid gap-4 md:grid-cols-2">
             <div>
               <label className="label">Temperature ({form.temperature})</label>
-              <input type="range" min="0" max="1" step="0.1" className="w-full accent-accent-500" value={form.temperature} onChange={e => set('temperature', parseFloat(e.target.value))} />
+              <input type="range" min="0" max="1" step="0.1" className="w-full accent-blue-500" value={form.temperature} onChange={e => set('temperature', parseFloat(e.target.value))} />
             </div>
             <div>
               <label className="label">Legacy model string</label>
@@ -223,8 +258,8 @@ function AgentForm({
                   className={clsx(
                     'rounded-xl border p-3 text-left text-sm transition-all duration-150',
                     (form.tools || []).includes(tool.id)
-                      ? 'border-accent-400/40 bg-accent-400/10 text-accent-100 shadow-glow-sm'
-                      : 'border-white/[0.08] bg-white/[0.03] text-obsidian-300 hover:bg-white/[0.05]',
+                      ? 'border-blue-500/30 bg-blue-500/10 text-blue-100 shadow-glow-sm'
+                      : 'border-white/[0.08] bg-white/[0.03] text-white/75 hover:bg-white/[0.05]',
                   )}
                 >
                   <div className="flex items-center gap-2 font-medium"><Wrench size={14} /> {tool.name}</div>
@@ -237,18 +272,18 @@ function AgentForm({
           <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
             <div className="mb-4">
               <h3 className="text-sm font-semibold text-white">Model</h3>
-              <p className="mt-1 text-xs text-obsidian-500">Choose whether this teammate inherits the org default or uses a dedicated model config.</p>
+              <p className="mt-1 text-xs text-ink-secondary">Choose whether this teammate inherits the org default or uses a dedicated model config.</p>
             </div>
 
             {hasModelLibrary ? (
               <div className="space-y-4">
-                <div className="flex flex-wrap gap-5 text-sm text-obsidian-200">
+                <div className="flex flex-wrap gap-5 text-sm text-white/75">
                   <label className="flex items-center gap-2">
-                    <input type="radio" className="accent-accent-500" checked={useOrgDefault} onChange={() => setUseOrgDefault(true)} />
+                    <input type="radio" className="accent-blue-500" checked={useOrgDefault} onChange={() => setUseOrgDefault(true)} />
                     Use org default
                   </label>
                   <label className="flex items-center gap-2">
-                    <input type="radio" className="accent-accent-500" checked={!useOrgDefault} onChange={() => setUseOrgDefault(false)} />
+                    <input type="radio" className="accent-blue-500" checked={!useOrgDefault} onChange={() => setUseOrgDefault(false)} />
                     Use specific model
                   </label>
                 </div>
@@ -266,7 +301,7 @@ function AgentForm({
 
                 <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3">
                   {useOrgDefault ? <ModelSummary model={defaultModel} fallbackModelId={form.model} /> : <ModelSummary model={selectedSavedModel} fallbackModelId={form.model} />}
-                  <Link to="/settings/models" className="mt-3 inline-flex text-xs text-accent-200 transition hover:text-accent-100">
+                  <Link to="/settings/models" className="mt-3 inline-flex text-xs text-blue-300 transition hover:text-white">
                     Manage models →
                   </Link>
                 </div>
@@ -274,7 +309,7 @@ function AgentForm({
             ) : (
               <div className="space-y-3 text-sm text-white/55">
                 <p>No saved model configs yet. This agent will use {humanizeModelId(form.model)} until you add configs in the Model Library.</p>
-                <Link to="/settings/models" className="inline-flex text-xs text-accent-200 transition hover:text-accent-100">
+                <Link to="/settings/models" className="inline-flex text-xs text-blue-300 transition hover:text-white">
                   Manage models →
                 </Link>
               </div>
@@ -283,17 +318,42 @@ function AgentForm({
 
           <div className="flex flex-wrap gap-5">
             {(['memory_enabled', 'telegram_enabled', 'retry_on_timeout'] as const).map(key => (
-              <label key={key} className="flex cursor-pointer items-center gap-2 text-sm text-obsidian-200">
-                <input type="checkbox" className="accent-accent-500" checked={Boolean(form[key])} onChange={e => set(key, e.target.checked)} />
+              <label key={key} className="flex cursor-pointer items-center gap-2 text-sm text-white/75">
+                <input
+                  type="checkbox"
+                  className="accent-blue-500"
+                  checked={Boolean(form[key])}
+                  disabled={key === 'memory_enabled' && !memoryAvailable}
+                  onChange={e => set(key, e.target.checked)}
+                />
                 {key.replace(/_/g, ' ')}
               </label>
             ))}
           </div>
+          {!memoryAvailable && (
+            <p className="text-xs text-amber-300/80">
+              Persistent memory is available on Solo and above. New teammates on Free start with memory disabled.
+            </p>
+          )}
         </div>
 
         <div className="flex gap-3 border-t border-white/[0.08] p-5">
-          <button className="btn-primary flex-1" onClick={submit}>
-            <Check size={16} /> {initial.id ? 'Save configuration' : 'Add teammate'}
+          <button
+            className="btn-primary flex-1"
+            onClick={submit}
+            disabled={busy}
+          >
+            {busy ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Saving…
+              </>
+            ) : (
+              <>
+                <Check size={16} />
+                {initial.id ? 'Save configuration' : 'Add teammate'}
+              </>
+            )}
           </button>
           <button className="btn-secondary" onClick={onCancel}>Cancel</button>
         </div>
@@ -303,15 +363,21 @@ function AgentForm({
 }
 
 export function Agents() {
+  const auth = useAuth()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [editing, setEditing] = useState<Partial<Agent> | null>(null)
   const [memoryAgent, setMemoryAgent] = useState<Agent | null>(null)
   const [agentToDelete, setAgentToDelete] = useState<Agent | null>(null)
-  const { data: agents = [], isLoading } = useQuery({ queryKey: ['agents'], queryFn: agentsApi.list })
-  const { data: models = [] } = useQuery({ queryKey: ['models'], queryFn: agentsApi.getModels })
-  const { data: savedModels = [] } = useQuery({ queryKey: ['model-configs'], queryFn: modelsApi.list })
-  const { data: tools = [] } = useQuery({ queryKey: ['tools'], queryFn: agentsApi.getTools })
+  const { data: agents = [], isLoading, isError } = useQuery({
+    queryKey: ['agents'],
+    queryFn: agentsApi.list,
+    refetchOnMount: 'always',
+  })
+  const { data: models = [], isError: modelsError } = useQuery({ queryKey: ['models'], queryFn: agentsApi.getModels })
+  const { data: savedModels = [], isError: savedModelsError } = useQuery({ queryKey: ['model-configs'], queryFn: modelsApi.list })
+  const { data: tools = [], isError: toolsError } = useQuery({ queryKey: ['tools'], queryFn: agentsApi.getTools })
+  const memoryAvailable = auth.activeOrg?.plan !== 'free'
 
   const createMut = useMutation({
     mutationFn: agentsApi.create,
@@ -319,7 +385,7 @@ export function Agents() {
       qc.invalidateQueries({ queryKey: ['agents'] })
       toast.success('Agent created')
     },
-    onError: (e: any) => toast.error(e.response?.data?.detail || 'Failed to create agent'),
+    onError: error => toast.error(extractApiError(error)),
   })
   const updateMut = useMutation({
     mutationFn: ({ id, ...data }: Partial<Agent>) => agentsApi.update(id!, data),
@@ -327,7 +393,7 @@ export function Agents() {
       qc.invalidateQueries({ queryKey: ['agents'] })
       toast.success('Agent updated')
     },
-    onError: (e: any) => toast.error(e.response?.data?.detail || 'Failed to update agent'),
+    onError: error => toast.error(extractApiError(error)),
   })
   const deleteMut = useMutation({
     mutationFn: agentsApi.delete,
@@ -344,26 +410,48 @@ export function Agents() {
         ? await updateMut.mutateAsync({ ...data.agent, id: editing.id })
         : await createMut.mutateAsync(data.agent)
 
+      // Model assignment is optional — never let it block modal close.
       if (savedModels.length > 0) {
-        await agentsApi.assignModel(saved.id, data.useOrgDefault ? null : data.modelConfigId)
-        await qc.invalidateQueries({ queryKey: ['agents'] })
-        await qc.invalidateQueries({ queryKey: ['model-configs'] })
+        try {
+          await agentsApi.assignModel(saved.id, data.useOrgDefault ? null : data.modelConfigId)
+        } catch (modelErr) {
+          toast.warning(
+            extractApiError(modelErr) ||
+            'Agent saved. Model assignment failed — set it in agent settings.',
+          )
+        }
       }
 
+      await qc.invalidateQueries({ queryKey: ['agents'] })
+      await qc.invalidateQueries({ queryKey: ['model-configs'] })
       setEditing(null)
-    } catch {
-      // mutations already surface errors
+    } catch (createErr) {
+      // Mutation onError already surfaces the toast.
+      console.error('Agent save failed:', createErr)
     }
+  }
+
+  if (isError || modelsError || savedModelsError || toolsError) {
+    return (
+      <div className="p-6 text-center text-white/40">
+        <p>Could not load agents.</p>
+        <button className="mt-3 text-sm text-blue-300" onClick={() => window.location.reload()}>
+          Try again
+        </button>
+      </div>
+    )
   }
 
   return (
     <div className="space-y-6 p-6 animate-fade-in">
-      <div className="flex items-end justify-between">
+      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-4xl font-semibold tracking-[-0.05em] text-white">Your Team</h1>
-          <p className="mt-2 text-sm text-obsidian-400">AI employees working for you 24/7.</p>
+          <h1 className="text-3xl font-extrabold tracking-tight text-white md:text-4xl">AI Team</h1>
+          <p className="mt-2 text-sm text-ink-secondary">
+            {agents.filter(agent => agent.is_active).length} active · {agents.length} total
+          </p>
         </div>
-        <button className="btn-primary h-11" onClick={() => setEditing({})}><Plus size={16} /> Add Agent</button>
+        <button className="btn-primary h-11" onClick={() => setEditing({ memory_enabled: memoryAvailable })}><Plus size={16} /> Add Agent</button>
       </div>
 
       {isLoading ? (
@@ -373,46 +461,92 @@ export function Agents() {
       ) : !agents.length ? (
         <GlowCard className="py-8">
           <EmptyState
-            icon="🤖"
+            icon={<Briefcase size={28} />}
             title="Your first agent is waiting"
             description="Most founders start with a Market Researcher. It monitors your competitors while you work on everything else."
             action={{ label: 'Browse marketplace →', onClick: () => navigate('/marketplace') }}
-            secondaryAction={{ label: 'Create from scratch', onClick: () => setEditing({}) }}
+            secondaryAction={{ label: 'Create from scratch', onClick: () => setEditing({ memory_enabled: memoryAvailable }) }}
           />
         </GlowCard>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {agents.map((agent, index) => {
-            const assignedModel = agent.model_config_id ? savedModels.find(model => model.id === agent.model_config_id) || null : savedModels.find(model => model.is_default) || null
             return (
-              <GlowCard key={agent.id} glowColor={index % 2 ? 'cyan' : 'indigo'} className={clsx('agent-card p-5 text-center', agent.is_active && 'animate-border-glow')}>
-                <div className="flex justify-center"><AgentAvatar name={agent.name} size="xl" running={false} /></div>
-                <h3 className="mt-4 text-xl font-semibold tracking-[-0.03em] text-white">{agent.name}</h3>
-                <p className="mt-1 text-sm text-obsidian-400">{agent.role}</p>
-                {agent.description && <p className="mx-auto mt-2 line-clamp-2 max-w-xs text-xs leading-5 text-obsidian-500">{agent.description}</p>}
-
-                <div className="mt-4 flex justify-center"><StatusBadge className="status-badge" status={agent.is_active ? 'active' : 'idle'} /></div>
-
-                <div className="mt-5 grid grid-cols-3 gap-2">
-                  <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-2 py-2">
-                    <div className="truncate font-mono text-[11px] text-cyan-300">{(assignedModel?.display_name || agent.model).slice(0, 14)}</div>
-                    <div className="mt-1 text-[10px] uppercase tracking-wide text-obsidian-500">Model</div>
+              <GlowCard
+                key={agent.id}
+                glowColor={index % 2 ? 'emerald' : 'blue'}
+                className={clsx('agent-card cursor-pointer overflow-hidden rounded-2xl', agent.is_active && 'border-blue-500/20')}
+              >
+                <div
+                  className="h-0.5 w-full"
+                  style={{
+                    background: `linear-gradient(90deg, ${agent.client_color || '#2563EB'}, ${(agent.client_color || '#2563EB')}40)`,
+                  }}
+                />
+                <div className="p-5">
+                  <div className="flex items-start gap-3">
+                    <AgentAvatar
+                      name={agent.persona_name || agent.name}
+                      size="md"
+                      running={agent.current_status === 'working'}
+                      color={agent.client_color ? `linear-gradient(135deg, ${agent.client_color}22, ${agent.client_color})` : undefined}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="truncate text-sm font-bold text-white">{agent.persona_name || agent.name}</p>
+                        <StatusDot
+                          status={agent.current_status === 'working' ? 'working' : agent.current_status === 'waiting_approval' ? 'waiting_approval' : 'idle'}
+                          size="sm"
+                        />
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-[#4B5A73]">{agent.role_slug || agent.role}</p>
+                    </div>
                   </div>
-                  <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-2 py-2">
-                    <div className="font-mono text-[11px] text-accent-300">{agent.tools?.length ?? 0}</div>
-                    <div className="mt-1 text-[10px] uppercase tracking-wide text-obsidian-500">Tools</div>
-                  </div>
-                  <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-2 py-2">
-                    <div className="font-mono text-[11px] text-emerald-300">{agent.memory_enabled ? 'On' : 'Off'}</div>
-                    <div className="mt-1 text-[10px] uppercase tracking-wide text-obsidian-500">Memory</div>
-                  </div>
-                </div>
 
-                <div className="mt-5 flex gap-2">
-                  <button className="btn-secondary flex-1 text-xs" onClick={() => setEditing(agent)}>Configure</button>
-                  <Link to="/workflows" className="btn-secondary flex-1 text-xs"><MessageSquare size={13} /> Workflows</Link>
-                  <button className="btn-secondary px-3 text-xs" onClick={() => setMemoryAgent(agent)}><Brain size={13} /></button>
-                  <button className="btn-danger px-3 text-xs" onClick={() => setAgentToDelete(agent)}><Trash2 size={13} /></button>
+                  {agent.current_status === 'working' && agent.current_task_summary && (
+                    <p className="mt-3 truncate rounded-lg bg-white/[0.03] px-3 py-2 text-xs text-[#8B9DBE]">
+                      {agent.current_task_summary}
+                    </p>
+                  )}
+
+                  <div className="mt-4">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-[11px] font-medium text-[#4B5A73]">Trust</span>
+                      <span className="font-mono text-[11px] font-semibold text-white">
+                        {Math.round(agent.trust_score ?? 50)}%
+                      </span>
+                    </div>
+                    <TrustScoreBar score={agent.trust_score ?? 50} size="xs" showLabel={false} />
+                  </div>
+
+                  {agent.client_name && (
+                    <div className="mt-3 flex items-center gap-1.5 text-[11px] text-[#4B5A73]">
+                      <Briefcase size={11} />
+                      <span className="truncate">{agent.client_name}</span>
+                    </div>
+                  )}
+
+                  <div className="mt-5 grid grid-cols-3 gap-2">
+                    <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-2 py-2 text-center">
+                      <div className="font-mono text-xs font-semibold text-blue-300">{agent.tools?.length ?? 0}</div>
+                      <div className="mt-1 text-[10px] uppercase tracking-wide text-[#4B5A73]">Tools</div>
+                    </div>
+                    <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-2 py-2 text-center">
+                      <div className="font-mono text-xs font-semibold text-emerald-300">{agent.memory_enabled ? 'On' : 'Off'}</div>
+                      <div className="mt-1 text-[10px] uppercase tracking-wide text-[#4B5A73]">Memory</div>
+                    </div>
+                    <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-2 py-2 text-center">
+                      <div className="font-mono text-xs font-semibold text-white">{agent.is_active ? 'Live' : 'Paused'}</div>
+                      <div className="mt-1 text-[10px] uppercase tracking-wide text-[#4B5A73]">Status</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 flex gap-2">
+                    <button className="btn-secondary flex-1 text-xs" onClick={() => setEditing(agent)}>Configure</button>
+                    <Link to="/workflows" className="btn-secondary flex-1 text-xs"><MessageSquare size={13} /> Workflows</Link>
+                    <button className="btn-secondary px-3 text-xs" onClick={() => setMemoryAgent(agent)}><Brain size={13} /></button>
+                    <button className="btn-danger px-3 text-xs" onClick={() => setAgentToDelete(agent)}><Trash2 size={13} /></button>
+                  </div>
                 </div>
               </GlowCard>
             )
@@ -428,6 +562,8 @@ export function Agents() {
           models={models}
           savedModels={savedModels}
           tools={tools}
+          isSaving={createMut.isPending || updateMut.isPending}
+          memoryAvailable={memoryAvailable}
         />
       )}
       {memoryAgent && <AgentMemoryPanel agent={memoryAgent} onClose={() => setMemoryAgent(null)} />}

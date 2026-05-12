@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 
 from auth.security import create_access_token, hash_password
-from database.models import Agent, OrgMember, OrgMemberRole, OrgPlan, Organization, User, UserRole
+from database.models import Agent, OrgMember, OrgMemberRole, Organization, User, UserRole
 from tests.factories import AgentFactory
 
 
@@ -29,9 +29,8 @@ async def create_user_with_org(
     org = Organization(
         name=org_name,
         slug=org_slug,
-        plan=OrgPlan.solo,
+        plan="open_source",
         owner_user_id=user.id,
-        billing_email=user.email,
     )
     db.add(org)
     await db.commit()
@@ -73,24 +72,11 @@ async def test_create_agent_returns_201(authed_client, test_org):
 
 
 @pytest.mark.asyncio
-async def test_create_agent_enforces_plan_limits(authed_client, db, test_org):
-    test_org.plan = OrgPlan.free
-    await db.commit()
-
-    for index in range(3):
-        payload = AgentFactory.build(name=f"Free Agent {index}", memory_enabled=False)
+async def test_create_agent_has_no_plan_limits(authed_client):
+    for index in range(4):
+        payload = AgentFactory.build(name=f"Open Agent {index}", memory_enabled=True)
         response = await authed_client.post("/api/agents", json=payload)
         assert response.status_code == 201
-
-    fourth_response = await authed_client.post(
-        "/api/agents",
-        json=AgentFactory.build(name="Free Agent 4", memory_enabled=False),
-    )
-
-    assert fourth_response.status_code == 429
-    payload = fourth_response.json()
-    detail = payload["detail"]["detail"] if isinstance(payload.get("detail"), dict) else payload.get("detail", "")
-    assert "upgrade" in detail.lower()
 
 
 @pytest.mark.asyncio

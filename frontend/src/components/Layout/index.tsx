@@ -4,8 +4,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { Sidebar } from './Sidebar'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { executionsApi } from '../../api/client'
-import { Sparkles, X, Bot } from 'lucide-react'
-import { PlanLimitBanner } from '../billing/PlanLimitBanner'
+import { Sparkles, X, Bot, PanelLeft } from 'lucide-react'
 
 function GlobalResultModal({ executionId, onClose }: { executionId: string; onClose: () => void }) {
   const { data: execution, isLoading } = useQuery({
@@ -19,42 +18,42 @@ function GlobalResultModal({ executionId, onClose }: { executionId: string; onCl
   }, [onClose])
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[80vh] flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b border-slate-800 flex-shrink-0">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="glass-elevated flex max-h-[80vh] w-full max-w-3xl flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-white/[0.08] p-5">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-emerald-900/40 flex items-center justify-center">
-              <Sparkles size={16} className="text-emerald-400" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600/12">
+              <Sparkles size={16} className="text-blue-400" />
             </div>
             <div>
-              <div className="font-semibold text-slate-100">Workflow Result</div>
+              <div className="font-semibold text-white">Workflow Result</div>
               {execution && (
-                <div className="text-xs text-slate-500 mt-0.5">
-                  {execution.token_count} tokens · ${execution.cost.toFixed(5)} · {execution.status}
+                <div className="mt-0.5 text-xs text-ink-secondary">
+                  {(execution.token_count ?? 0)} tokens · ${(execution.cost ?? 0).toFixed(5)} · {execution.status}
                 </div>
               )}
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 text-slate-500 hover:text-slate-300 rounded-lg hover:bg-slate-800 transition-colors">
+          <button onClick={onClose} className="rounded-lg p-1.5 text-ink-muted transition-colors hover:bg-white/[0.04] hover:text-white">
             <X size={18} />
           </button>
         </div>
         {execution?.input_message && (
-          <div className="px-5 pt-4 flex-shrink-0">
-            <div className="text-xs text-slate-500 font-medium mb-1.5 uppercase tracking-wide">Your Query</div>
-            <div className="bg-slate-800 rounded-lg px-4 py-3 text-sm text-slate-300 border border-slate-700">{execution.input_message}</div>
+          <div className="flex-shrink-0 px-5 pt-4">
+            <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-ink-muted">Your Query</div>
+            <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 text-sm text-ink-secondary">{execution.input_message}</div>
           </div>
         )}
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          <div className="text-xs text-slate-500 font-medium mb-1.5 uppercase tracking-wide flex items-center gap-1.5">
+          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
             <Bot size={12} /> Agent Response
           </div>
           {isLoading ? (
-            <div className="flex items-center gap-2 text-slate-500 text-sm py-8 justify-center">
-              <div className="w-4 h-4 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" /> Loading result...
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-ink-secondary">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" /> Loading result...
             </div>
           ) : (
-            <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-4 text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
+            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 text-sm leading-relaxed text-ink-primary whitespace-pre-wrap">
               {execution?.output_message || 'No output yet — the workflow may still be running.'}
             </div>
           )}
@@ -69,6 +68,7 @@ export function Layout() {
   const { events } = useWebSocket()
   const location = useLocation()
   const [resultId, setResultId] = useState<string | null>(null)
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   // Track the last execution ID we already handled so navigating between pages
   // doesn't re-trigger the popup for a stale event still sitting in the buffer.
   const lastHandledId = useRef<string | null>(null)
@@ -88,19 +88,40 @@ export function Layout() {
     }
   }, [events, qc, location.pathname])
 
+  useEffect(() => {
+    setMobileSidebarOpen(false)
+  }, [location.pathname])
+
   return (
     <div className="relative flex h-screen overflow-hidden bg-base-100 text-content-primary">
       <div
         className="pointer-events-none fixed inset-x-0 top-0 z-0 h-[280px]"
         style={{
           background:
-            'radial-gradient(ellipse 70% 60% at 50% 0%, rgba(108,99,255,0.14) 0%, rgba(0,212,255,0.08) 35%, transparent 75%)',
+            'radial-gradient(ellipse 70% 60% at 50% 0%, rgba(37,99,235,0.14) 0%, rgba(16,185,129,0.08) 35%, transparent 75%)',
         }}
       />
       <div className="relative z-10 flex h-full w-full overflow-hidden">
-        <Sidebar />
+        {mobileSidebarOpen && (
+          <button
+            type="button"
+            aria-label="Close navigation"
+            className="fixed inset-0 z-20 bg-black/45 lg:hidden"
+            onClick={() => setMobileSidebarOpen(false)}
+          />
+        )}
+        <Sidebar mobileOpen={mobileSidebarOpen} onCloseMobile={() => setMobileSidebarOpen(false)} />
         <main className="app-shell relative flex flex-1 flex-col overflow-hidden bg-transparent">
-          <PlanLimitBanner />
+          <div className="flex h-14 items-center px-4 shadow-[0_1px_0_rgba(255,255,255,0.06)] lg:hidden">
+            <button
+              type="button"
+              aria-label="Open navigation"
+              onClick={() => setMobileSidebarOpen(true)}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-white/80 transition duration-150 hover:bg-white/[0.05] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+            >
+              <PanelLeft size={18} />
+            </button>
+          </div>
           <div className="flex-1 overflow-y-auto">
             <Outlet />
           </div>

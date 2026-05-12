@@ -1,7 +1,6 @@
 import hashlib
 import hmac
 import json
-import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -225,11 +224,6 @@ def _signed_test_headers(source: str, body: bytes, secret: str) -> dict[str, str
     if source == "github":
         signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
         return {"x-github-event": "ping", "x-hub-signature-256": signature}
-    if source == "stripe":
-        timestamp = str(int(time.time()))
-        signed_payload = f"{timestamp}.{body.decode('utf-8')}".encode("utf-8")
-        signature = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
-        return {"stripe-signature": f"t={timestamp},v1={signature}"}
     signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return {"x-webhook-signature": signature}
 

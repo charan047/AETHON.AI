@@ -1,14 +1,12 @@
-# Deployment and Operations Guide
+# Deployment And Operations Guide
 
 ## Overview
 
-This document describes the current operational shape of AETHON for private environments and staging-style deployments.
+This document describes the current deployment shape of the open-source Aethon Agency OS stack.
 
-It is intentionally practical and based on the codebase as it exists today.
+## Reference Topology
 
-## Current service topology
-
-The local/reference topology from [docker-compose.yml](../docker-compose.yml) includes:
+The local Docker Compose topology includes:
 
 - `frontend`
 - `nginx-lb`
@@ -21,110 +19,119 @@ The local/reference topology from [docker-compose.yml](../docker-compose.yml) in
 
 ## Ports
 
-- `80` frontend
-- `8000` backend load balancer
+- `80` app entrypoint
+- `8000` API/load balancer
 - `8001` backend instance 1
 - `8002` backend instance 2
 - `5555` Flower
 - `6379` Redis
 
-## Required environment categories
+## Required Environment Categories
 
-The backend configuration is defined in [backend/config.py](../backend/config.py).
-
-At minimum, plan for:
+At minimum:
 
 - `DATABASE_URL`
 - `REDIS_URL`
 - `JWT_SECRET_KEY`
-- model provider keys and URLs
-- Stripe keys if billing is enabled
-- integration credentials if those features are used
+- at least one model provider key:
+  - `OPENAI_API_KEY`, or
+  - `ANTHROPIC_API_KEY`
 
-## Local boot sequence
+Optional:
+
+- `MEM0_API_KEY`
+- Gmail / Google / Slack / Telegram integration credentials
+- provider-specific base URLs for Ollama or custom OpenAI-compatible backends
+
+## Local Boot Sequence
 
 ```bash
 docker compose up -d --build
 ```
 
-Check health:
+Health check:
 
 ```bash
 curl -s http://localhost:8000/health
 ```
 
-## Database migrations
+## Database Migrations
 
-Preferred migration flow:
+Preferred:
 
 ```bash
 cd backend
 ./venv/bin/alembic upgrade head
 ```
 
-In Dockerized/local flows, avoid relying on implicit startup migration unless you explicitly want that behavior and have reviewed the environment toggles.
+## Rebuild Commands
 
-## Rebuild procedure
-
-If frontend-only changes were made:
+Frontend only:
 
 ```bash
 docker compose up -d --build frontend
 ```
 
-If backend changes were made:
+Backend only:
 
 ```bash
 docker compose up -d --build backend-1 backend-2 celery_worker
 ```
 
-If routing/proxy behavior changed:
+Proxy or routing changes:
 
 ```bash
 docker compose up -d --build nginx-lb frontend
 ```
 
-## Post-deploy checks
+## Post-Deploy Checks
 
-At minimum:
+Minimum checks:
 
-1. health endpoint returns success
-2. login works
-3. org switching works
+1. `/health` returns success
+2. login/register works
+3. onboarding works for a new org
 4. dashboard loads
-5. agent list loads
-6. workflow list loads
-7. marketplace loads
-8. a websocket-backed page loads without console/network errors
+5. `/clients` loads
+6. `/agents` loads
+7. `/settings/models` loads
+8. `/marketplace` loads
+9. a workflow can execute through the worker
+10. a WebSocket-backed page loads without console or auth errors
 
-## Operational cautions
+## Operational Cautions
 
-### Multi-tenant correctness
+### Tenant Safety
 
-Any deployment is only as safe as its org-scoping guarantees. New deployments should include a focused check of:
+New deployments should include focused checks for:
 
-- dashboard data
-- notifications
-- websocket events
-- marketplace installs
-- model configs
+- analytics isolation
+- execution visibility
+- WebSocket event scoping
+- client portal safety
+- model config scoping
 
-### Billing
+### Background Work
 
-Stripe-enabled behavior depends on environment configuration. If Stripe keys are absent, the UI should degrade safely rather than appear half-functional.
-
-### Background work
-
-If workflows or long-running tasks are part of the environment, verify:
+If workflows are part of the environment, verify:
 
 - Redis connectivity
 - Celery worker availability
 - task completion path
-- Flower visibility if used operationally
+- Flower visibility if you operate with it
 
-## What should stay out of deployment artifacts
+### Public Portal
 
-- local backup directories
-- `.env` files from developer machines
-- Playwright test output
-- ad hoc local recovery data
+If you share client portal links externally:
+
+- deploy behind a reachable domain
+- verify portal tokens only expose public client data
+- verify disabled tokens return `404`
+
+## Keep These Out Of Deployment Artifacts
+
+- developer `.env` files
+- local DB/cache artifacts
+- Playwright output
+- archive zip files
+- editor-specific worktree directories

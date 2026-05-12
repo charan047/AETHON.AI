@@ -141,6 +141,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refresh()
   }, [])
 
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (!localStorage.getItem(SESSION_HINT_STORAGE_KEY)) {
+        return
+      }
+      try {
+        const { data } = await api.post<TokenResponse>('/auth/refresh', {})
+        setTokens(data)
+      } catch {
+        // Refresh failed — the 401 interceptor will handle individual request failures
+      }
+    }, 20 * 60 * 1000)
+
+    return () => clearInterval(interval)
+  }, [])
+
   return (
     <AuthContext.Provider value={{
       ...auth,

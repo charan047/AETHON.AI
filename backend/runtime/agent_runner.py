@@ -13,14 +13,19 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import AsyncSessionLocal
-from database.models import ExecutionStep, IntegrationType, UserIntegration
+from database.models import Agent, AgentContract, AgentRole, CompanyProfile, ExecutionStep, IntegrationType, Organization, UserIntegration
 from runtime.tools import make_custom_tool
+from services.agent_memory_service import agent_memory_service
+from services.agent_messenger import agent_messenger
+from services.agent_naming_service import agent_naming_service
 from services.business_context_service import BusinessContextService
 from services.cost_tracker import cost_tracker
 from services.integration_crypto import decrypt_config
 from services.model_service import model_service
+from services.permission_engine import PermissionResult, permission_engine
 from services.reputation_service import ReputationService
 from services.telemetry_service import telemetry_service
+from services.trust_score_service import trust_score_service
 from services.websocket_manager import ws_manager
 from tools.base import BaseTool
 from tools.registry import tool_registry
@@ -28,6 +33,16 @@ from tools.registry import tool_registry
 logger = logging.getLogger(__name__)
 FINAL_ANSWER_INSTRUCTION = (
     "When you have gathered enough information, stop using tools and write your final answer directly."
+)
+BLOCKER_SIGNALS = (
+    "tool error: 🚫 blocked",
+    "tool error: ⏸ approval required",
+    "max iterations",
+    "recursion",
+    "blocked",
+    "stuck",
+    "need help",
+    "low confidence",
 )
 
 
@@ -41,6 +56,27 @@ def _extract_text(content) -> str:
             for part in content
         )
     return str(content)
+
+
+def _is_recoverable_stream_tool_error(error_text: str) -> bool:
+    lowered = error_text.lower()
+    return (
+        ("attempted to call tool" in lowered and "not in request.tools" in lowered)
+        or "failed to call a function" in lowered
+        or "failed_generation" in lowered
+    )
+
+
+def _looks_like_tool_call_stub(text: str) -> bool:
+    lowered = text.lower()
+    return (
+        "<action>" in lowered
+        or ("using the " in lowered and " tool" in lowered)
+        or "i will search" in lowered
+        or "i'll search" in lowered
+        or "failed_generation" in lowered
+        or "tool call" in lowered
+    )
 
 
 def build_llm(model: str, temperature: float = 0.7, max_tokens: int = 2000):
@@ -389,7 +425,177 @@ class AgentRunner:
         await self._broadcast_execution_step(execution_id, payload)
         return step_id, payload
 
-    async def _build_runtime_tools(self, user_id: str | None, execution_id: str | None = None):
+    async def _run_permission_guarded_tool(
+        self,
+        *,
+        tool,
+        tool_name: str,
+        kwargs: dict[str, Any],
+        execution_id: str | None,
+        org_id: str | None,
+        db: AsyncSession | None,
+        step_index_ref: dict[str, int] | None,
+    ) -> str:
+        owns_session = db is None
+        session = db or AsyncSessionLocal()
+
+        try:
+            perm = await permission_engine.check(
+                agent_id=str(self.config.id),
+                action=f"tool:{tool_name}",
+                context={"execution_id": execution_id},
+                db=session,
+            )
+
+            if perm.result == PermissionResult.FORBIDDEN:
+                message = f"🚫 Blocked: {perm.reason}"
+                await self._record_execution_step(
+                    execution_id=execution_id,
+                    org_id=org_id,
+                    step_type="error",
+                    content=message,
+                    step_index_ref=step_index_ref,
+                    db=session,
+                    tool_name=tool_name,
+                    tool_input=kwargs,
+                    tool_success=False,
+                )
+                # TODO Task 6: await audit_service.log_permission_denied(...)
+                return f"Tool error: {message}"
+
+            if perm.result == PermissionResult.REQUIRES_APPROVAL:
+                from services import audit_log_service
+                from services.approval_service import approval_service
+
+                agent_display = (
+                    getattr(self.config, "persona_name", None) or self.config.name
+                )
+
+                approval = await approval_service.create(
+                    org_id=org_id or str(self.config.org_id),
+                    requesting_agent_id=str(self.config.id),
+                    execution_id=execution_id,
+                    approval_type=perm.approval_type or "tool_use",
+                    title=f"{agent_display} wants to use: {tool_name}",
+                    description=(
+                        f"Tool: {tool_name}\n"
+                        f"Reason: {perm.reason}\n"
+                        f"Risk level: {perm.risk_level}\n"
+                        f"Blast radius: {perm.blast_radius or 'Unknown'}\n"
+                        f"Input preview: {str(list(kwargs.values()))[:300]}"
+                    ),
+                    risk_level=perm.risk_level,
+                    db=session,
+                )
+
+                await self._record_execution_step(
+                    execution_id=execution_id,
+                    org_id=org_id,
+                    step_type="human_input_required",
+                    content=(
+                        f"⏳ {agent_display} is waiting for CEO approval\n"
+                        f"Tool: {tool_name}\n"
+                        f"Reason: {perm.reason}\n"
+                        f"Approval ID: {approval.id}"
+                    ),
+                    step_index_ref=step_index_ref,
+                    db=session,
+                    tool_name=tool_name,
+                )
+
+                try:
+                    await session.execute(
+                        update(Agent)
+                        .where(Agent.id == str(self.config.id))
+                        .values(
+                            current_status="waiting_approval",
+                            current_task_summary=f"Waiting CEO approval: {tool_name}",
+                        )
+                    )
+                    await session.commit()
+                except Exception:
+                    pass
+
+                await audit_log_service.log(
+                    action="approval_requested",
+                    org_id=org_id,
+                    user_id=str(self.config.id),
+                    resource_type="tool",
+                    resource_id=tool_name,
+                    details={
+                        "agent_name": agent_display,
+                        "approval_id": approval.id,
+                        "risk_level": perm.risk_level,
+                    },
+                    db=session,
+                )
+
+                approved = await approval_service.wait_for_decision(
+                    str(approval.id), timeout_seconds=1800
+                )
+
+                try:
+                    await session.execute(
+                        update(Agent)
+                        .where(Agent.id == str(self.config.id))
+                        .values(current_status="working")
+                    )
+                    await session.commit()
+                except Exception:
+                    pass
+
+                if not approved:
+                    return f"Skipped: CEO did not approve use of '{tool_name}'"
+
+            if getattr(tool, "coroutine", None):
+                return await tool.coroutine(**kwargs)
+            if getattr(tool, "func", None):
+                return tool.func(**kwargs)
+            return "Tool error: Tool is not executable."
+        finally:
+            if owns_session:
+                await session.close()
+
+    def _wrap_tool_with_permissions(
+        self,
+        tool,
+        *,
+        execution_id: str | None,
+        org_id: str | None,
+        db: AsyncSession | None,
+        step_index_ref: dict[str, int] | None,
+    ):
+        from langchain_core.tools import StructuredTool
+
+        tool_name = getattr(tool, "name", "unknown")
+        description = getattr(tool, "description", "") or ""
+        args_schema = getattr(tool, "args_schema", None)
+
+        async def guarded_runner(**kwargs):
+            return await self._run_permission_guarded_tool(
+                tool=tool,
+                tool_name=tool_name,
+                kwargs=kwargs,
+                execution_id=execution_id,
+                org_id=org_id,
+                db=db,
+                step_index_ref=step_index_ref,
+            )
+
+        return StructuredTool.from_function(
+            coroutine=guarded_runner,
+            name=tool_name,
+            description=description,
+            args_schema=args_schema,
+        )
+
+    async def _build_runtime_tools(
+        self,
+        user_id: str | None,
+        execution_id: str | None = None,
+        db: AsyncSession | None = None,
+        step_index_ref: dict[str, int] | None = None,
+    ):
         tool_ids = list(self.tool_ids or [])
         if "notifications" not in tool_ids:
             tool_ids.append("notifications")
@@ -469,7 +675,17 @@ class AgentRunner:
             tools = [tool for tool in tools if tool.name not in duplicate_names]
             tools.extend(new_pattern_tools)
 
-        return tools
+        guarded_tools = [
+            self._wrap_tool_with_permissions(
+                tool,
+                execution_id=execution_id,
+                org_id=self._context.get("org_id"),
+                db=db,
+                step_index_ref=step_index_ref,
+            )
+            for tool in tools
+        ]
+        return guarded_tools
 
     def _memory_enabled(self) -> bool:
         if not self.memory_service:
@@ -534,37 +750,178 @@ class AgentRunner:
             logger.warning("Learning context retrieval failed for agent %s: %s", self.config.id, exc)
             return ""
 
+    async def _get_company_name(self, user_id: str | None = None) -> str:
+        try:
+            async with AsyncSessionLocal() as db:
+                profile = await db.execute(
+                    select(CompanyProfile).where(CompanyProfile.org_id == str(self.config.org_id))
+                )
+                company_profile = profile.scalar_one_or_none()
+                if company_profile and company_profile.company_name:
+                    return company_profile.company_name
+
+                org = await db.execute(
+                    select(Organization).where(Organization.id == str(self.config.org_id))
+                )
+                organization = org.scalar_one_or_none()
+                if organization and organization.name:
+                    return organization.name
+        except Exception as exc:
+            logger.warning("Company name lookup failed for org %s: %s", getattr(self.config, "org_id", None), exc)
+        return "our company"
+
+    async def _get_department_type(self) -> str:
+        configured = getattr(self.config, "department_type", None)
+        if configured:
+            return configured
+        role_slug = getattr(self.config, "role_slug", None)
+        if not role_slug:
+            return "operations"
+        try:
+            async with AsyncSessionLocal() as db:
+                role = await db.scalar(select(AgentRole).where(AgentRole.slug == role_slug))
+                if role and role.department_type:
+                    return role.department_type
+        except Exception as exc:
+            logger.warning("Department lookup failed for role %s: %s", role_slug, exc)
+        return "operations"
+
+    async def _finalize_trust_and_status(
+        self,
+        *,
+        success: bool,
+        tools_called: list[str],
+        db: AsyncSession | None,
+        reset_status: bool = True,
+    ) -> None:
+        owns_session = db is None
+        session = db or AsyncSessionLocal()
+
+        try:
+            contract = await session.scalar(select(AgentContract).where(AgentContract.agent_id == str(self.config.id)))
+            budget_cents = (
+                contract.max_cost_per_task_cents
+                if contract and contract.max_cost_per_task_cents is not None
+                else 100
+            )
+
+            await trust_score_service.record_task_completed(
+                agent_id=str(self.config.id),
+                success=success,
+                on_time=True,
+                cost_cents=0,
+                budget_cents=budget_cents,
+                tools_used=tools_called,
+                db=session,
+            )
+
+            values = {}
+            if success:
+                values["total_tasks_completed"] = Agent.total_tasks_completed + 1
+            if reset_status:
+                values["current_status"] = "idle"
+                values["current_task_summary"] = None
+            await session.execute(
+                update(Agent)
+                .where(Agent.id == str(self.config.id))
+                .values(**values)
+            )
+            await session.commit()
+        except Exception as exc:
+            logger.warning("Trust/status finalization failed for agent %s: %s", self.config.id, exc)
+        finally:
+            if owns_session:
+                await session.close()
+
+    async def _handle_blocker_escalation(
+        self,
+        *,
+        blocker_text: str,
+        org_id: str | None,
+        execution_id: str | None,
+        db: AsyncSession | None,
+    ) -> bool:
+        if not blocker_text or not org_id:
+            return False
+        normalized = blocker_text.lower()
+        if not any(signal in normalized for signal in BLOCKER_SIGNALS):
+            return False
+
+        owns_session = db is None
+        session = db or AsyncSessionLocal()
+        try:
+            await agent_messenger.send_escalation(
+                from_agent_id=str(self.config.id),
+                blocker=blocker_text[:500],
+                org_id=str(org_id),
+                execution_id=execution_id,
+                db=session,
+                redis=None,
+            )
+            await session.execute(
+                update(Agent)
+                .where(Agent.id == str(self.config.id))
+                .values(
+                    current_status="blocked",
+                    current_task_summary=f"Blocked: {blocker_text[:100]}",
+                )
+            )
+            await session.commit()
+            return True
+        except Exception as exc:
+            logger.warning("Blocker escalation failed for agent %s: %s", self.config.id, exc)
+            return False
+        finally:
+            if owns_session:
+                await session.close()
+
     async def _build_enhanced_system_prompt(self, message: str, user_id: str | None = None) -> str:
         original_system_prompt = self.config.system_prompt or ""
         business_context = await self._build_business_context(user_id)
         learning_context = await self._build_learning_context()
-        memory_context = ""
+        identity_block = ""
+        living_memory_context = ""
 
-        if self._memory_enabled():
-            try:
-                memories = await self.memory_service.retrieve_relevant_memory(
-                    agent_id=self.config.id,
-                    query=message,
-                    top_k=self._max_memories_per_query(),
-                )
-                memories = self._filter_memories_by_window(memories)
-            except Exception as exc:
-                logger.warning("Memory retrieval failed for agent %s: %s", self.config.id, exc)
-                memories = []
+        if getattr(self.config, "persona_name", None):
+            company_name = await self._get_company_name(user_id)
+            role_display = self.config.role or (
+                self.config.role_slug.replace("_", " ").title() if getattr(self.config, "role_slug", None) else "AI Agent"
+            )
+            department_type = await self._get_department_type()
+            identity_block = agent_naming_service.build_identity_block(
+                persona_name=self.config.persona_name,
+                role_display=role_display,
+                company_name=company_name,
+                department_type=department_type,
+                seniority_level=getattr(self.config, "seniority_level", 1),
+            )
 
-            if memories:
-                memory_context = (
-                    "RELEVANT MEMORY FROM PAST INTERACTIONS:\n"
-                    + "\n---\n".join(memory["content"] for memory in memories if memory.get("content"))
-                )
+        try:
+            living_memory_context = await agent_memory_service.build_memory_context(
+                agent_id=str(self.config.id),
+                org_id=str(self.config.org_id),
+                task=message,
+                max_memories=5,
+            )
+        except Exception as exc:
+            logger.warning("Living memory retrieval failed for agent %s: %s", self.config.id, exc)
+            living_memory_context = ""
 
         parts = [
             part
             for part in (
+                identity_block,
                 business_context,
-                memory_context,
+                living_memory_context,
                 learning_context,
                 original_system_prompt,
+                (
+                    "TOOL CALLING RULES:\n"
+                    "- When using a tool, the tool name must exactly match one of the provided tool names.\n"
+                    "- Put arguments only in the tool input object.\n"
+                    "- Never include JSON, parentheses, or extra prose in the tool name.\n"
+                    "- If you are unsure which tool to use, do not invent a tool name."
+                ),
                 FINAL_ANSWER_INSTRUCTION,
             )
             if part
@@ -627,13 +984,18 @@ class AgentRunner:
         org_id: str | None = None,
         db: AsyncSession | None = None,
         step_index_ref: dict[str, int] | None = None,
-    ) -> tuple[str, int]:
+    ) -> tuple[str, int, list[str]]:
         total_tokens = 0
         input_tokens = 0
         output_tokens = 0
         pending_action_step_id: str | None = None
         pending_tool_started_at: datetime | None = None
+        tools_called: list[str] = []
+        consecutive_tool_errors = 0
+        max_consecutive_tool_errors = 5
+        last_tool_error: str | None = None
 
+        recoverable_stream_error: str | None = None
         try:
             async for event in graph.astream_events(
                 {"messages": [HumanMessage(content=message)]},
@@ -662,6 +1024,8 @@ class AgentRunner:
                         })
                     tool_name = event.get("name", "unknown")
                     tool_input = event.get("data", {}).get("input", {})
+                    if tool_name not in tools_called:
+                        tools_called.append(tool_name)
                     pending_tool_started_at = datetime.utcnow()
                     pending_action_step_id, _payload = await self._record_execution_step(
                         execution_id=execution_id,
@@ -716,19 +1080,33 @@ class AgentRunner:
                         )
                     pending_action_step_id = None
                     pending_tool_started_at = None
+                    if success:
+                        consecutive_tool_errors = 0
+                        last_tool_error = None
+                    else:
+                        consecutive_tool_errors += 1
+                        last_tool_error = output_text
+                        if consecutive_tool_errors >= max_consecutive_tool_errors:
+                            raise RuntimeError(
+                                f"Execution stopped: {max_consecutive_tool_errors} consecutive "
+                                f"tool errors. Last error: {last_tool_error}"
+                            )
 
         except Exception as e:
-            # Malformed tool-call names (model appends args to the name) produce a
-            # validation error mid-stream. Recover by reading whatever state was saved.
+            error_text = str(e)
+            malformed_tool_call = _is_recoverable_stream_tool_error(error_text)
             logger.warning(f"Agent stream error (recovering): {e}")
-            await self._record_execution_step(
-                execution_id=execution_id,
-                org_id=org_id,
-                step_type="error",
-                content=f"Agent stream error, attempting recovery: {e}",
-                step_index_ref=step_index_ref,
-                db=db,
-            )
+            if malformed_tool_call:
+                recoverable_stream_error = error_text
+            else:
+                await self._record_execution_step(
+                    execution_id=execution_id,
+                    org_id=org_id,
+                    step_type="error",
+                    content=f"Agent stream error, attempting recovery: {e}",
+                    step_index_ref=step_index_ref,
+                    db=db,
+                )
 
         # Read the latest graph state regardless of whether streaming finished cleanly
         try:
@@ -756,6 +1134,14 @@ class AgentRunner:
                 ]
                 if tool_outputs:
                     final_response = "\n\n".join(tool_outputs)
+
+        if recoverable_stream_error and (
+            not final_response.strip() or _looks_like_tool_call_stub(final_response)
+        ):
+            final_response = (
+                "I started the task, but the model produced an invalid tool call before "
+                "the live work could complete. Please retry the request and I will try again."
+            )
 
         # Last resort: call the LLM directly without tools if we still have nothing
         fallback_error = None
@@ -819,7 +1205,7 @@ class AgentRunner:
             except Exception as exc:
                 logger.warning("Cost tracking failed for agent %s: %s", self.config.id, exc)
 
-        return final_response, total_tokens
+        return final_response, total_tokens, tools_called
 
     async def _execute_with_retry(
         self,
@@ -834,7 +1220,7 @@ class AgentRunner:
         org_id: str | None = None,
         db: AsyncSession | None = None,
         step_index_ref: dict[str, int] | None = None,
-    ) -> tuple[str, int]:
+    ) -> tuple[str, int, list[str]]:
         max_retries = max(0, int(getattr(self.config, "max_retries", 3) or 0))
         retry_delay_seconds = max(1, int(getattr(self.config, "retry_delay_seconds", 5) or 5))
         retry_backoff_multiplier = max(1.0, float(getattr(self.config, "retry_backoff_multiplier", 2.0) or 2.0))
@@ -974,8 +1360,27 @@ class AgentRunner:
     ) -> tuple[str, int]:
         resolved_org_id = org_id or getattr(self.config, "org_id", None)
         step_index_ref = {"value": 0}
+        tools_called: list[str] = []
         self.llm = await self._resolve_llm(db=db)
-        self.tools = await self._build_runtime_tools(user_id, execution_id=execution_id)
+        if db is not None:
+            try:
+                await db.execute(
+                    update(Agent)
+                    .where(Agent.id == str(self.config.id))
+                    .values(
+                        current_status="working",
+                        current_task_summary=message[:100],
+                    )
+                )
+                await db.commit()
+            except Exception as exc:
+                logger.warning("Agent working status update failed for %s: %s", self.config.id, exc)
+        self.tools = await self._build_runtime_tools(
+            user_id,
+            execution_id=execution_id,
+            db=db,
+            step_index_ref=step_index_ref,
+        )
         enhanced_system_prompt = await self._build_enhanced_system_prompt(message, user_id=user_id)
         config = {
             "configurable": {"thread_id": thread_id},
@@ -986,13 +1391,16 @@ class AgentRunner:
             execution_id=execution_id,
             org_id=resolved_org_id,
             step_type="thought",
-            content="Analyzing the task and deciding how to proceed.",
+            content=(
+                f"{getattr(self.config, 'name', 'Agent')} is reading the task: "
+                f"\"{message[:120]}{'…' if len(message) > 120 else ''}\""
+            ),
             step_index_ref=step_index_ref,
             db=db,
         )
 
         try:
-            final_response, total_tokens = await self._execute_with_retry(
+            final_response, total_tokens, tools_called = await self._execute_with_retry(
                 message=message,
                 config=config,
                 enhanced_system_prompt=enhanced_system_prompt,
@@ -1014,6 +1422,30 @@ class AgentRunner:
                 step_index_ref=step_index_ref,
                 db=db,
             )
+            try:
+                await agent_memory_service.store_task_outcome(
+                    agent_id=str(self.config.id),
+                    org_id=str(resolved_org_id),
+                    task_input=message[:500],
+                    task_result=str(exc)[:500],
+                    success=False,
+                    tools_used=tools_called,
+                    db=db,
+                )
+            except Exception as memory_exc:
+                logger.warning("Task outcome failure memory store failed for agent %s: %s", self.config.id, memory_exc)
+            was_blocked = await self._handle_blocker_escalation(
+                blocker_text=str(exc),
+                org_id=resolved_org_id,
+                execution_id=execution_id,
+                db=db,
+            )
+            await self._finalize_trust_and_status(
+                success=False,
+                tools_called=tools_called,
+                db=db,
+                reset_status=not was_blocked,
+            )
             raise
 
         await self._record_execution_step(
@@ -1025,4 +1457,115 @@ class AgentRunner:
             db=db,
             tokens_used=total_tokens,
         )
+        try:
+            await agent_memory_service.store_task_outcome(
+                agent_id=str(self.config.id),
+                org_id=str(resolved_org_id),
+                task_input=message[:500],
+                task_result=final_response[:500],
+                success=True,
+                tools_used=tools_called,
+                db=db,
+            )
+        except Exception as exc:
+            logger.warning("Task outcome memory store failed for agent %s: %s", self.config.id, exc)
+        was_blocked = await self._handle_blocker_escalation(
+            blocker_text=final_response,
+            org_id=resolved_org_id,
+            execution_id=execution_id,
+            db=db,
+        )
+        await self._finalize_trust_and_status(
+            success=True,
+            tools_called=tools_called,
+            db=db,
+            reset_status=not was_blocked,
+        )
         return final_response, total_tokens
+
+    async def generate_reply(
+        self,
+        agent: "Agent",
+        prompt: str,
+        org_id: str,
+        db,
+        max_tokens: int = 300,
+    ) -> str:
+        """
+        Generate a short conversational reply from an agent.
+        Single LLM call — no tools, no ReAct loop.
+        Used exclusively for direct-message replies.
+        """
+        display_name = agent.persona_name or agent.name
+        role_name = agent.role or agent.role_slug or "AI agent"
+        system = (
+            f"You are {display_name}, "
+            f"a {role_name} at this company. "
+            f"You are replying in a direct-message thread with the CEO. "
+            f"Reply conversationally, naturally, and concisely. "
+            f"Never use markdown formatting in your reply. "
+            f"Write like you're sending a quick DM, not a report. "
+            f"Only reference facts that are explicitly present in the prompt. "
+            f"Do not invent files, meetings, reports, investors, deadlines, email threads, or past work. "
+            f"Do not claim you sent an email, file, or any external message unless the prompt explicitly says it already happened. "
+            f"If the CEO asks for something that has not happened yet, say that clearly and suggest the next step. "
+            f"If they ask a direct question, answer it directly first."
+        )
+
+        async def _invoke_with_llm(llm):
+            response = await llm.ainvoke([
+                SystemMessage(content=system),
+                HumanMessage(content=prompt),
+            ])
+            text = _extract_text(response.content) if not isinstance(response.content, str) else response.content
+            return text.strip()
+
+        try:
+            model_config = await model_service.get_for_agent(
+                agent_id=str(agent.id),
+                org_id=org_id,
+                db=db,
+            )
+            try:
+                llm = model_service.build_llm(
+                    config=model_config,
+                    temperature=0.25,
+                    max_tokens=max_tokens,
+                )
+                text = await _invoke_with_llm(llm)
+                if text:
+                    return text
+            except Exception as exc:
+                logger.warning(
+                    "generate_reply primary model failed for agent %s (config=%s): %s",
+                    agent.id,
+                    getattr(model_config, "id", None),
+                    exc,
+                )
+
+            llm = model_service.build_legacy_llm(
+                getattr(settings, "default_model", "gpt-4o-mini"),
+                temperature=0.25,
+                max_tokens=max_tokens,
+            )
+            text = await _invoke_with_llm(llm)
+            if text:
+                return text
+        except Exception as exc:
+            logger.warning("generate_reply failed for agent %s: %s", agent.id, exc)
+
+        lowered = prompt.lower()
+        if "?" in prompt:
+            return (
+                f"I saw your question and I'm looking into it now. "
+                f"I'll send you a concrete update as soon as I have it. — {display_name}"
+            )
+        if any(token in lowered for token in ("please", "can you", "do this", "work on", "research", "check", "review")):
+            return (
+                f"On it. I've picked this up and I'll follow up with a concrete update shortly. "
+                f"— {display_name}"
+            )
+        return (
+            f"Message received. I'm on it and I'll get back to you with something useful shortly. "
+            f"— {display_name}"
+        )

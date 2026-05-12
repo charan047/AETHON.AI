@@ -7,7 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from database.models import ListingStatus, ListingType, MarketplaceCategory, MarketplaceListing, Organization, User
-from marketplace.templates import ALL_TEMPLATES
+from marketplace.templates.client_reporter import TEMPLATE as CLIENT_REPORTER
+from marketplace.templates.competitor_monitor import TEMPLATE as COMPETITOR_MONITOR
+from marketplace.templates.content_writer import TEMPLATE as CONTENT_WRITER
+from marketplace.templates.lead_qualifier import TEMPLATE as LEAD_QUALIFIER
+from marketplace.templates.market_researcher import TEMPLATE as MARKET_RESEARCHER
+from marketplace.templates.outreach_agent import TEMPLATE as OUTREACH_AGENT
+from marketplace.templates.research_analyst import TEMPLATE as RESEARCH_ANALYST
+from marketplace.templates.support_analyst import TEMPLATE as SUPPORT_ANALYST
+from marketplace.templates.support_triage import TEMPLATE as SUPPORT_TRIAGE
 
 
 logger = logging.getLogger(__name__)
@@ -22,6 +30,18 @@ _TOOL_MAP = {
     "google_docs_create": "google_docs",
     "google_sheets_create": "google_sheets",
 }
+
+TEMPLATES = [
+    MARKET_RESEARCHER,
+    CONTENT_WRITER,
+    LEAD_QUALIFIER,
+    SUPPORT_TRIAGE,
+    COMPETITOR_MONITOR,
+    CLIENT_REPORTER,
+    OUTREACH_AGENT,
+    RESEARCH_ANALYST,
+    SUPPORT_ANALYST,
+]
 
 
 def _normalize_category(raw: str) -> MarketplaceCategory:
@@ -52,8 +72,8 @@ async def seed_marketplace_templates(db: AsyncSession) -> None:
         .limit(1)
     )
 
-    logger.info("Seeding %s marketplace templates...", len(ALL_TEMPLATES))
-    for template in ALL_TEMPLATES:
+    logger.info("Seeding %s marketplace templates...", len(TEMPLATES))
+    for template in TEMPLATES:
         listing_cfg = template["listing"]
         agent_cfg = dict(template["agent"])
         workflow_cfg = dict(template["workflow"])
@@ -62,6 +82,12 @@ async def seed_marketplace_templates(db: AsyncSession) -> None:
             **listing_cfg,
             "required_tools": _normalize_tools(listing_cfg.get("required_tools", [])),
             "optional_tools": _normalize_tools(listing_cfg.get("optional_tools", [])),
+        }
+        persisted_template = {
+            **template,
+            "listing": normalized_listing,
+            "agent": agent_cfg,
+            "workflow": workflow_cfg,
         }
         values = {
             "id": str(uuid4()),
@@ -77,11 +103,7 @@ async def seed_marketplace_templates(db: AsyncSession) -> None:
             "description": listing_cfg["description"],
             "readme": None,
             "template_data": json.dumps(
-                {
-                    "listing": normalized_listing,
-                    "agent": agent_cfg,
-                    "workflow": workflow_cfg,
-                }
+                persisted_template
             ),
             "tags": ",".join(listing_cfg.get("tags", [])),
             "icon": listing_cfg.get("icon", "🤖"),
@@ -136,4 +158,4 @@ async def seed_marketplace_templates(db: AsyncSession) -> None:
         )
 
     await db.commit()
-    logger.info("Seeded %s marketplace templates ✓", len(ALL_TEMPLATES))
+    logger.info("Seeded %s marketplace templates ✓", len(TEMPLATES))

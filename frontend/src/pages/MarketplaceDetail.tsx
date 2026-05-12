@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Bot, Download, ExternalLink, Flag, LogOut, ShieldCheck, Star, Store, UserCircle, Workflow, Wrench } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { clsx } from 'clsx'
-import { marketplaceApi } from '../api/client'
+import { extractApiError, marketplaceApi } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { InstallModal } from '../components/marketplace/InstallModal'
 import { Skeleton } from '../components/ui/Skeleton'
@@ -87,7 +87,7 @@ function ReviewForm({ listingId }: { listingId: string }) {
       qc.invalidateQueries({ queryKey: ['marketplace', 'detail'] })
       setOpen(false)
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not submit review'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   if (!open) {
@@ -285,7 +285,7 @@ export function MarketplaceDetail() {
             </div>
             <div className="grid gap-5 md:grid-cols-[200px_1fr]">
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-center">
-                <div className="text-5xl font-semibold text-white">{listing.rating_avg.toFixed(1)}</div>
+                <div className="text-5xl font-semibold text-white">{(listing.rating_avg ?? 0).toFixed(1)}</div>
                 <div className="mt-2 flex justify-center gap-0.5 text-amber-300">
                   {[...Array(5)].map((_, index) => <Star key={index} size={16} fill={index < Math.round(listing.rating_avg) ? 'currentColor' : 'none'} />)}
                 </div>
@@ -342,7 +342,7 @@ export function MarketplaceDetail() {
             )}
             <div className="mt-5 grid grid-cols-3 gap-2 text-center">
               <div className="rounded-xl bg-white/[0.03] p-3"><div className="font-mono text-sm text-white">{formatCount(listing.install_count)}</div><div className="mt-1 text-[11px] text-obsidian-500">installs</div></div>
-              <div className="rounded-xl bg-white/[0.03] p-3"><div className="font-mono text-sm text-white">{listing.rating_avg.toFixed(1)}</div><div className="mt-1 text-[11px] text-obsidian-500">rating</div></div>
+              <div className="rounded-xl bg-white/[0.03] p-3"><div className="font-mono text-sm text-white">{(listing.rating_avg ?? 0).toFixed(1)}</div><div className="mt-1 text-[11px] text-obsidian-500">rating</div></div>
               <div className="rounded-xl bg-white/[0.03] p-3"><div className="font-mono text-sm text-white">{formatCount(listing.view_count)}</div><div className="mt-1 text-[11px] text-obsidian-500">views</div></div>
             </div>
           </div>

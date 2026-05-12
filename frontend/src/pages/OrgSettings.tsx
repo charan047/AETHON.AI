@@ -1,8 +1,8 @@
 import { DragEvent, useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Building2, CreditCard, ImageUp, Trash2 } from 'lucide-react'
-import { organizationsApi } from '../api/client'
+import { AlertTriangle, Building2, ImageUp, Trash2 } from 'lucide-react'
+import { extractApiError, organizationsApi } from '../api/client'
 import { AgentAvatar } from '../components/ui/AgentAvatar'
 import { useAuth } from '../contexts/AuthContext'
 import { toast } from '../lib/toast'
@@ -49,7 +49,7 @@ export function OrgSettings() {
       await auth.refreshOrganizations(updated.id)
       void queryClient.invalidateQueries()
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || error.message || 'Could not update organization'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const deleteOrg = useMutation({
@@ -63,7 +63,7 @@ export function OrgSettings() {
       void queryClient.invalidateQueries()
       navigate(orgs.length ? '/' : '/onboarding')
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || error.message || 'Could not delete organization'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const handleLogoDrop = (event: DragEvent<HTMLLabelElement>) => {
@@ -101,7 +101,7 @@ export function OrgSettings() {
       <div>
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-cyan-300">Workspace settings</p>
         <h1 className="mt-2 text-4xl font-semibold tracking-[-0.05em] text-white">Organization Settings</h1>
-        <p className="mt-2 text-sm text-obsidian-400">Tune the identity, timezone, billing path, and deletion controls for {org.name}.</p>
+        <p className="mt-2 text-sm text-obsidian-400">Tune the identity, timezone, and deletion controls for {org.name}.</p>
       </div>
 
       <section className="card p-6">
@@ -152,21 +152,6 @@ export function OrgSettings() {
           <button className="btn-primary" disabled={updateOrg.isPending || (!isOwner && org.role !== 'admin')} onClick={() => updateOrg.mutate()}>
             {updateOrg.isPending ? 'Saving...' : 'Save Changes'}
           </button>
-        </div>
-      </section>
-
-      <section className="card p-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-cyan-400/10 text-cyan-200">
-              <CreditCard size={20} />
-            </div>
-            <div>
-              <h2 className="text-xl font-semibold text-white">Plan & Billing</h2>
-              <p className="mt-1 text-sm text-obsidian-500">Current plan: <span className="font-medium capitalize text-cyan-200">{org.plan}</span></p>
-            </div>
-          </div>
-          <Link className="btn-secondary" to="/billing">Open Billing</Link>
         </div>
       </section>
 

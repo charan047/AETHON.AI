@@ -11,7 +11,7 @@ import {
   Sparkles,
   TerminalSquare,
 } from 'lucide-react'
-import { companyApi } from '../api/client'
+import { companyApi, extractApiError } from '../api/client'
 import type { CompanyYamlApplySummary, CompanyYamlPreview, CompanyYamlValidation } from '../types'
 import { GlowCard } from '../components/ui/GlowCard'
 import { toast } from '../lib/toast'
@@ -202,8 +202,8 @@ export function CompanyOS() {
         queryClient.invalidateQueries({ queryKey: ['onboarding-status'] }),
       ])
     },
-    onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Failed to apply company YAML')
+    onError: error => {
+      toast.error(extractApiError(error))
     },
   })
 

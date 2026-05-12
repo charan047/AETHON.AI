@@ -14,6 +14,8 @@ from .company import router as company_router
 from .business import router as business_router
 from .integrations import router as integrations_router
 from .feedback import router as feedback_router
+from .clients import router as clients_router, portal_router as client_portal_router
+from .agency_overview import router as agency_overview_router
 from .dashboard import router as dashboard_router
 from .company_chat import router as company_chat_router
 from .notifications import router as notifications_router
@@ -21,11 +23,12 @@ from .triggers import router as triggers_router
 from .analytics import router as analytics_router
 from .evals import router as evals_router
 from .organizations import router as organizations_router
-from .billing import router as billing_router
 from .marketplace import router as marketplace_router
 from .models import public_router as public_models_router
 from .models import router as models_router, agent_model_router
 from .audit_logs import router as audit_logs_router
+from .roles import router as roles_router
+from .messages import router as messages_router
 if settings.enable_testing_api or settings.environment == "test":
     from .testing import router as testing_router
 else:
@@ -33,6 +36,7 @@ else:
 
 api_router = APIRouter()
 api_router.include_router(auth_router)
+api_router.include_router(client_portal_router, prefix="/portal", tags=["portal"])
 api_router.include_router(agents_router, prefix="/agents", tags=["agents"])
 api_router.include_router(workflows_router, prefix="/workflows", tags=["workflows"])
 api_router.include_router(executions_router, prefix="/executions", tags=["executions"])
@@ -46,6 +50,8 @@ api_router.include_router(company_router, prefix="/company", tags=["company"])
 api_router.include_router(business_router, prefix="/business", tags=["business"])
 api_router.include_router(integrations_router, prefix="/integrations", tags=["integrations"])
 api_router.include_router(feedback_router, prefix="/feedback", tags=["feedback"])
+api_router.include_router(clients_router, prefix="/clients", tags=["clients"])
+api_router.include_router(agency_overview_router, prefix="/agency", tags=["agency"])
 api_router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
 api_router.include_router(company_chat_router, prefix="/company", tags=["company-chat"])
 api_router.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
@@ -53,11 +59,12 @@ api_router.include_router(triggers_router, tags=["triggers"])
 api_router.include_router(analytics_router, prefix="/analytics", tags=["analytics"])
 api_router.include_router(evals_router, prefix="/evals", tags=["evals"])
 api_router.include_router(organizations_router, tags=["organizations"])
-api_router.include_router(billing_router, prefix="/billing", tags=["billing"])
 api_router.include_router(marketplace_router, prefix="/marketplace", tags=["marketplace"])
 api_router.include_router(public_models_router)
 api_router.include_router(models_router)
 api_router.include_router(agent_model_router)
+api_router.include_router(roles_router)
+api_router.include_router(messages_router, prefix="/messages", tags=["messages"])
 api_router.include_router(audit_logs_router)
 if testing_router is not None:
     api_router.include_router(testing_router)

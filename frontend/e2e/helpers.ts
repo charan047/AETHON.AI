@@ -4,6 +4,8 @@ export function uniqueEmail(prefix = 'e2e') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@test.com`
 }
 
+const ACTIVE_ORG_STORAGE_KEY = 'ai-company-os-active-org-id'
+
 type TestPlan = 'free' | 'solo' | 'team' | 'business' | 'enterprise'
 
 interface AuthHelperOptions {
@@ -62,7 +64,9 @@ export async function registerAndCompleteOnboarding(
         plan: options.plan,
       },
     })
-    expect(planResponse.ok()).toBeTruthy()
+    if (!planResponse.ok() && ![403, 404].includes(planResponse.status())) {
+      expect(planResponse.ok()).toBeTruthy()
+    }
   }
 
   const statusResponse = await request.get('/api/onboarding/status', {
@@ -75,9 +79,10 @@ export async function registerAndCompleteOnboarding(
     const companyResponse = await request.post('/api/onboarding/company', {
       headers: scopedHeaders,
       data: {
-        company_name: `E2E Company ${email.split('@')[0]}`,
-        company_description: 'We build software and run reliable end-to-end tests.',
-        primary_challenge: 'saving_time',
+        agency_name: `E2E Agency ${email.split('@')[0]}`,
+        what_you_do: 'We build software and run reliable end-to-end tests.',
+        how_many_clients: '1-5 clients',
+        biggest_time_sink: 'Research',
       },
     })
     expect([200, 201]).toContain(companyResponse.status())
@@ -88,7 +93,7 @@ export async function registerAndCompleteOnboarding(
   })
   expect([200, 400]).toContain(completeResponse.status())
 
-  return { email, password }
+  return { email, password, orgId, accessToken }
 }
 
 export async function loginHelper(
@@ -98,26 +103,38 @@ export async function loginHelper(
   password = 'TestPass123!',
   options: AuthHelperOptions = {},
 ) {
-  await registerAndCompleteOnboarding(request, email, password, options)
-  await page.goto('/')
-  if (page.url().includes('/login')) {
-    await page.getByPlaceholder(/email/i).fill(email)
-    await page.getByPlaceholder(/password/i).fill(password)
-    await page.locator('button[type="submit"]').click()
-  }
+  const { orgId, accessToken } = await registerAndCompleteOnboarding(request, email, password, options)
+  await page.addInitScript(
+    ({ orgId: nextOrgId, activeOrgKey }) => {
+      window.localStorage.setItem(activeOrgKey, nextOrgId)
+    },
+    {
+      orgId,
+      activeOrgKey: ACTIVE_ORG_STORAGE_KEY,
+    },
+  )
+  await page.goto('/login')
+  await page.getByPlaceholder(/email/i).fill(email)
+  await page.getByPlaceholder(/password/i).fill(password)
+  await page.locator('button[type="submit"]').click()
   await page.waitForFunction(() => {
     const path = window.location.pathname
     return !path.includes('/login') && !path.includes('/onboarding')
   })
-  return { email, password }
+  return { email, password, orgId, accessToken }
 }
 
 export async function createAgentHelper(page: Page, name: string) {
   await page.goto('/agents')
   await page.getByRole('button', { name: /add agent/i }).click()
-  await page.getByPlaceholder(/agent name/i).fill(name)
-  await page.getByPlaceholder(/agent role/i).fill('Support')
-  await page.getByPlaceholder(/agent description/i).fill('Handles support')
+  const nameInput = page.getByPlaceholder('Name').or(page.getByPlaceholder(/agent name/i))
+  const roleInput = page.getByPlaceholder('Role').or(page.getByPlaceholder(/agent role/i))
+  await nameInput.fill(name)
+  await roleInput.fill('Support')
+  const descriptionInput = page.getByPlaceholder(/agent description/i)
+  if (await descriptionInput.count()) {
+    await descriptionInput.fill('Handles support')
+  }
   await page.getByPlaceholder(/system prompt/i).fill('You are a helpful support agent.')
   const memoryEnabled = page.locator('label:has-text("memory enabled") input[type="checkbox"]')
   if (await memoryEnabled.isChecked()) {

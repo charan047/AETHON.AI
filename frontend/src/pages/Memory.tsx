@@ -5,11 +5,28 @@ import { agentsApi } from '../api/client'
 import { AgentAvatar } from '../components/ui/AgentAvatar'
 import { GlowCard } from '../components/ui/GlowCard'
 import { AgentMemoryPanel } from '../components/agents/AgentMemoryPanel'
+import { Skeleton } from '../components/ui/Skeleton'
 import type { Agent } from '../types'
 
 export function Memory() {
   const [selected, setSelected] = useState<Agent | null>(null)
-  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: agentsApi.list })
+  const { data: agents = [], isLoading, isError } = useQuery({
+    queryKey: ['agents'],
+    queryFn: agentsApi.list,
+    refetchOnMount: 'always',
+  })
+
+  if (isLoading) {
+    return (
+      <div className="p-6">
+        <Skeleton className="h-40" />
+      </div>
+    )
+  }
+
+  if (isError) {
+    return <div className="p-6 text-center text-white/40">Could not load agents.</div>
+  }
 
   return (
     <div className="space-y-6 p-6 animate-fade-in">

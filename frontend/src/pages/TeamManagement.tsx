@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { format, formatDistanceToNow } from 'date-fns'
 import { MailPlus, RefreshCw, Shield, Trash2, UserMinus, Users } from 'lucide-react'
-import { organizationsApi } from '../api/client'
+import { extractApiError, organizationsApi } from '../api/client'
 import { InviteMemberModal } from '../components/org/InviteMemberModal'
 import { AgentAvatar } from '../components/ui/AgentAvatar'
 import { Skeleton } from '../components/ui/Skeleton'
@@ -56,7 +56,7 @@ export function TeamManagement() {
       void queryClient.invalidateQueries({ queryKey: ['org-members', orgId] })
       void auth.refreshOrganizations(orgId)
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not update role'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const removeMember = useMutation({
@@ -66,7 +66,7 @@ export function TeamManagement() {
       void queryClient.invalidateQueries({ queryKey: ['org-members', orgId] })
       void auth.refreshOrganizations(orgId)
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not remove member'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const resendInvite = useMutation({
@@ -75,7 +75,7 @@ export function TeamManagement() {
       toast.success('Invite resent')
       void queryClient.invalidateQueries({ queryKey: ['org-invites', orgId] })
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not resend invite'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const revokeInvite = useMutation({
@@ -84,7 +84,7 @@ export function TeamManagement() {
       toast.success('Invite revoked')
       void queryClient.invalidateQueries({ queryKey: ['org-invites', orgId] })
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not revoke invite'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const canEditRole = (member: OrgMember) => {

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
 import { Activity, Ban, Clock3, Eye, Pause, Radio, X } from 'lucide-react'
-import { agentsApi } from '../../api/client'
+import { agentsApi, extractApiError } from '../../api/client'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { AgentAvatar } from '../ui/AgentAvatar'
 import { Skeleton } from '../ui/Skeleton'
@@ -149,12 +149,12 @@ function LongTaskProgressCard({
   const pause = useMutation({
     mutationFn: () => agentsApi.pauseLongTask(task.task_id),
     onSuccess: () => toast.success('Pause requested'),
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not pause task'),
+    onError: error => toast.error(extractApiError(error)),
   })
   const cancel = useMutation({
     mutationFn: () => agentsApi.cancelLongTask(task.task_id),
     onSuccess: () => toast.success('Task cancelled'),
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not cancel task'),
+    onError: error => toast.error(extractApiError(error)),
   })
   const active = ['started', 'progress', 'running', 'queued'].includes(task.status)
 
@@ -202,7 +202,7 @@ function LongTaskSlideOver({ task, onClose }: { task: LongTaskStatus | null; onC
   const cancel = useMutation({
     mutationFn: () => agentsApi.cancelLongTask(detail!.task_id),
     onSuccess: () => toast.success('Task cancelled'),
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not cancel task'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   if (!detail) return null

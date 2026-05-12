@@ -8,15 +8,25 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
-engine = create_async_engine(
-    settings.database_url,
-    pool_size=settings.db_pool_size,
-    max_overflow=settings.db_max_overflow,
-    pool_pre_ping=True,
-    pool_recycle=1800,
-    pool_timeout=30,
-    echo=settings.environment == "development",
-)
+_engine_url = settings.database_url or "sqlite+aiosqlite:///:memory:"
+_engine_kwargs = {
+    "echo": settings.environment == "development",
+}
+
+if "sqlite" in _engine_url.lower():
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    _engine_kwargs.update(
+        {
+            "pool_size": settings.db_pool_size,
+            "max_overflow": settings.db_max_overflow,
+            "pool_pre_ping": True,
+            "pool_recycle": 1800,
+            "pool_timeout": 30,
+        }
+    )
+
+engine = create_async_engine(_engine_url, **_engine_kwargs)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 

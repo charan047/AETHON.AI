@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 
 from celery_app import celery_app
+from tasks.async_runtime import run_async
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -34,8 +35,6 @@ def run_eval_suite_task(
 ):
     _ensure_import_path()
 
-    import asyncio
-
     from database.db import AsyncSessionLocal
     from services.eval_runner import EvalRunner
 
@@ -50,7 +49,7 @@ def run_eval_suite_task(
                 db,
             )
 
-    result = asyncio.run(_run())
+    result = run_async(_run())
     return {
         "run_id": result.id,
         "suite_score": result.suite_score,

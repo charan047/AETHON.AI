@@ -1,11 +1,18 @@
 export interface Agent {
   id: string
   name: string
+  persona_name?: string | null
+  client_id?: string | null
+  client_name?: string | null
+  client_color?: string | null
   role: string
   role_slug?: string | null
   seniority_level?: number
   autonomy_level?: string | null
   trust_score?: number | null
+  current_status?: string
+  current_task_summary?: string | null
+  total_tasks_completed?: number
   description: string
   system_prompt: string
   model: string
@@ -25,6 +32,60 @@ export interface Agent {
   is_active: boolean
   created_at: string
   updated_at: string
+}
+
+export interface Client {
+  id: string
+  name: string
+  company_name: string | null
+  contact_email: string | null
+  description: string | null
+  service_type: string | null
+  status: 'active' | 'paused' | 'completed'
+  color: string
+  portal_enabled: boolean
+  portal_token: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ClientWithStats extends Client {
+  agent_count: number
+  execution_count_30d: number
+  last_activity: string | null
+}
+
+export interface ClientDetail extends ClientWithStats {
+  org_id: string
+  notes: string | null
+}
+
+export interface ClientCreateInput {
+  name: string
+  company_name?: string | null
+  contact_email?: string | null
+  description?: string | null
+  service_type?: string | null
+  notes?: string | null
+  color?: string | null
+}
+
+export interface ClientListResponse {
+  clients: ClientWithStats[]
+  total: number
+}
+
+export interface ClientActivityItem {
+  execution_id: string
+  agent_name: string | null
+  status: string
+  input_message_preview: string
+  started_at: string | null
+}
+
+export interface ClientActivityResponse {
+  client_id: string
+  activity: ClientActivityItem[]
 }
 
 export interface LongTaskStatus {
@@ -118,7 +179,7 @@ export interface Execution {
   model_name?: string
   duration_seconds?: number | null
   trigger: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'waiting_approval' | 'rejected' | 'timed_out'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'waiting_approval' | 'rejected' | 'timed_out'
   input?: string
   input_message: string
   output_message: string
@@ -135,7 +196,7 @@ export interface ExecutionStep {
   id: string
   execution_id: string
   org_id: string
-  step_type: 'thought' | 'action' | 'observation' | 'final_answer' | 'error' | 'human_input_required' | 'retry'
+  step_type: 'thought' | 'action' | 'observation' | 'final_answer' | 'speaking' | 'update' | 'error' | 'human_input_required' | 'retry'
   content: string
   tool_name?: string | null
   tool_input?: unknown
@@ -145,6 +206,8 @@ export interface ExecutionStep {
   duration_ms?: number | null
   tokens_used?: number | null
   timestamp?: string
+  agent_id?: string | null
+  agent_name?: string | null
   created_at: string
 }
 
@@ -223,6 +286,35 @@ export interface ApprovalRequest {
   reviewer?: string | null
 }
 
+export interface AgentApprovalRequestItem {
+  id: string
+  title: string
+  description: string
+  risk_level: 'low' | 'medium' | 'high' | 'critical'
+  approval_type: string
+  status: 'pending' | 'approved' | 'rejected' | 'expired'
+  execution_id?: string | null
+  decision_note?: string | null
+  decided_by?: string | null
+  decided_at?: string | null
+  expires_in_minutes: number | null
+  expires_at?: string | null
+  created_at: string
+  agent: {
+    id: string
+    name: string | null
+    persona_name: string | null
+    role: string | null
+    role_slug: string | null
+    trust_score: number | null
+  }
+}
+
+export interface AgentApprovalRequestsResponse {
+  pending_count: number
+  requests: AgentApprovalRequestItem[]
+}
+
 export interface AgentMemoryConfig {
   id: string
   agent_id: string
@@ -255,6 +347,10 @@ export interface OnboardingStatus {
   has_integrations: boolean
   has_workflows?: boolean
   has_company_profile?: boolean
+  latest_agent_id?: string | null
+  latest_workflow_id?: string | null
+  latest_execution_id?: string | null
+  latest_execution_status?: string | null
 }
 
 export interface OnboardingHireResponse {
@@ -435,6 +531,78 @@ export interface DashboardSummary {
   }
 }
 
+export interface AgencyOverviewClient {
+  id: string
+  name: string
+  company_name?: string | null
+  color: string
+  status: 'active' | 'paused' | 'completed'
+  agent_count: number
+  executions_today: number
+  last_activity: string | null
+}
+
+export interface AgencyOverviewAgent {
+  id: string
+  name: string
+  persona_name?: string | null
+  role: string
+  role_slug?: string | null
+  current_status: string
+  current_task_summary?: string | null
+  client_id?: string | null
+  client_name?: string | null
+  client_color?: string | null
+  tasks_completed: number
+}
+
+export interface AgencyOverviewApproval {
+  id: string
+  type: 'agent' | 'human'
+  title: string
+  risk_level: 'low' | 'medium' | 'high' | 'critical' | string
+  agent_name: string
+  created_at: string | null
+}
+
+export interface AgencyOverviewActivity {
+  id: string
+  client_id?: string | null
+  client_name?: string | null
+  agent_name: string
+  status: string
+  started_at: string | null
+  input_preview: string
+}
+
+export interface AgencyOverview {
+  agency_name: string
+  owner_user_id: string
+  generated_at: string
+  clients: {
+    total: number
+    active: number
+    with_activity_today: number
+    list: AgencyOverviewClient[]
+  }
+  agents: {
+    total: number
+    working: number
+    idle: number
+    list: AgencyOverviewAgent[]
+  }
+  approvals: {
+    pending: number
+    critical: number
+    list: AgencyOverviewApproval[]
+  }
+  activity: {
+    executions_today: number
+    completed_today: number
+    recent: AgencyOverviewActivity[]
+  }
+}
+
 export interface AnalyticsCosts {
   total_cost: number
   by_agent: Record<string, number>
@@ -484,30 +652,23 @@ export interface AnalyticsOverview {
   api_calls_last_minute: number
 }
 
-export type OrgPlan = 'free' | 'solo' | 'team' | 'business' | 'enterprise'
 export type OrgMemberRole = 'owner' | 'admin' | 'member'
 
 export interface Organization {
   id: string
   name: string
   slug: string
-  plan: OrgPlan
+  plan: string
   owner_user_id: string
   max_members: number
   max_agents: number
   max_workflows: number
   max_monthly_executions: number
-  stripe_customer_id?: string | null
-  stripe_subscription_id?: string | null
-  stripe_subscription_status?: string | null
-  stripe_current_period_end?: string | null
-  stripe_trial_end?: string | null
-  cancellation_date?: string | null
-  billing_email?: string | null
   monthly_budget_usd?: number | null
   current_period_executions: number
   timezone: string
   logo_url?: string | null
+  agent_message_retention_days?: number | null
   custom_domain?: string | null
   is_active: boolean
   created_at: string
@@ -550,94 +711,6 @@ export interface InviteDetails {
   role: Exclude<OrgMemberRole, 'owner'>
   inviter_name: string
   expires_at: string
-}
-
-export interface PlanUsageItem {
-  used: number
-  limit: number
-  percent: number
-}
-
-export interface BillingUsageSummary {
-  plan: OrgPlan
-  members: PlanUsageItem
-  agents: PlanUsageItem
-  workflows: PlanUsageItem
-  executions: PlanUsageItem
-  custom_tools: PlanUsageItem
-  integrations: PlanUsageItem
-  api_keys: PlanUsageItem
-  webhooks: PlanUsageItem
-  eval_suites: PlanUsageItem
-  monthly_budget: PlanUsageItem
-  features: Record<string, { allowed: boolean; upgrade_to: OrgPlan | null }>
-}
-
-export interface BillingPlan {
-  plan: OrgPlan
-  price_id: string
-  limits: Record<string, string | number | boolean>
-  features: Record<string, boolean>
-}
-
-export interface BillingPlansResponse {
-  publishable_key: string
-  plans: BillingPlan[]
-}
-
-export interface BillingSubscriptionStatus {
-  status: string
-  current_plan: OrgPlan | string
-  current_period_end: string | null
-  cancel_at_period_end: boolean
-  trial_end: string | null
-  next_invoice_amount: number | null
-}
-
-export interface BillingSubscriptionResponse {
-  organization: {
-    id: string
-    name: string
-    plan: OrgPlan
-  }
-  subscription: BillingSubscriptionStatus
-  usage: BillingUsageSummary
-}
-
-export interface BillingPaymentMethod {
-  id: string
-  brand: string | null
-  last4: string | null
-  exp_month: number | null
-  exp_year: number | null
-  is_default: boolean
-}
-
-export interface BillingInvoice {
-  id: string
-  date: string | null
-  amount: number
-  status: string
-  pdf_url: string | null
-}
-
-export interface BillingUpcomingInvoiceLineItem {
-  description: string | null
-  amount: number
-  quantity: number | null
-}
-
-export interface BillingUpcomingInvoice {
-  amount_due: number
-  period_end: string | null
-  line_items: BillingUpcomingInvoiceLineItem[]
-}
-
-export interface PlanLimitHitDetail {
-  detail: string
-  code: 'plan_limit_reached'
-  resource: string
-  current_plan: OrgPlan
 }
 
 export type MarketplaceCategory =
@@ -814,21 +887,43 @@ export interface EvalInsights {
   regression_cases: { case_id: string; case_name?: string }[]
 }
 
+export interface AgentStatus {
+  name: string
+  role: string
+  status: string
+  task: string
+  trust_score: number
+}
+
+export interface ChatActionResult {
+  type: string
+  success: boolean
+  label?: string
+  message?: string
+  page?: string
+  execution_id?: string
+  agent_id?: string
+  agent_name?: string
+  workflow_id?: string
+  notification_id?: string
+  agent_statuses?: AgentStatus[]
+  summary?: string
+  insight?: string
+  insight_type?: string
+  explanation?: string
+  analysis?: string
+  filename?: string
+  data?: Record<string, unknown>
+  execution_count?: number
+  active_count?: number
+  status?: string
+}
+
 export interface CompanyChatStreamEvent {
-  type: 'meta' | 'text' | 'action' | 'done'
+  type: 'meta' | 'text' | 'action' | 'done' | 'typing'
   conversation_id?: string
   content?: string
-  action?: {
-    type: string
-    success?: boolean
-    label?: string
-    page?: string
-    execution_id?: string
-    agent_id?: string
-    workflow_id?: string
-    notification_id?: string
-    message?: string
-  }
+  action?: ChatActionResult
 }
 
 export interface Message {
@@ -874,6 +969,37 @@ export interface WsEvent {
   [key: string]: unknown
 }
 
+export interface InboxMessage {
+  id: string
+  org_id?: string | null
+  from_agent_id?: string | null
+  to_agent_id?: string | null
+  from_agent_name: string
+  from_agent_persona?: string | null
+  to_agent_name: string
+  to_agent_persona?: string | null
+  execution_id?: string | null
+  message: string
+  message_type: string
+  thread_id?: string | null
+  parent_message_id?: string | null
+  is_resolved: boolean
+  resolved_at?: string | null
+  requires_human: boolean
+  priority: 'low' | 'normal' | 'high' | 'urgent'
+  read_at?: string | null
+  response?: string | null
+  delivered_at?: string | null
+  responded_at?: string | null
+  created_at: string
+}
+
+export interface CEOInboxResponse {
+  unread_count: number
+  retention_days?: number | null
+  messages: InboxMessage[]
+}
+
 export interface CustomTool {
   id: string
   name: string
@@ -896,4 +1022,104 @@ export interface Template {
     system_prompt: string
     tools: string[]
   }[]
+}
+
+// ── Direct Messaging types ────────────────────────────────────────────────
+
+export interface DirectMessage {
+  id: string
+  content: string
+  sender_type: 'agent' | 'ceo'
+  sender_name: string
+  message_type: string
+  priority: 'low' | 'normal' | 'high' | 'urgent'
+  is_resolved: boolean
+  read_at: string | null
+  created_at: string
+  scheduled_reply_at: string | null
+  scheduled_reply_job_id: string | null
+  thread_id: string | null
+  parent_message_id: string | null
+  execution_id: string | null
+  from_agent_id: string | null
+  to_agent_id: string | null
+}
+
+export interface ConversationSummary {
+  agent_id: string
+  agent_name: string
+  persona_name: string | null
+  role_slug: string | null
+  role_color: string
+  last_message: string | null
+  last_message_at: string | null
+  last_sender_type: 'agent' | 'ceo' | null
+  unread_count: number
+  is_online: boolean
+  current_status: string
+}
+
+export interface ConversationsResponse {
+  conversations: ConversationSummary[]
+  total_unread: number
+}
+
+export interface ThreadResponse {
+  agent: {
+    id: string
+    name: string
+    persona_name: string | null
+    role_slug: string | null
+    role_color: string
+    current_status: string
+    current_task_summary: string | null
+    trust_score: number
+  }
+  messages: DirectMessage[]
+  has_more: boolean
+  oldest_at: string | null
+}
+
+export interface TeamConversation {
+  from_agent: { id: string; name: string; persona_name: string | null }
+  to_agent: { id: string; name: string; persona_name: string | null }
+  message_type: string
+  content_preview: string
+  created_at: string | null
+  is_resolved: boolean
+}
+
+export interface CompanyConversationSummary {
+  id: string
+  title: string
+  created_at: string | null
+  last_message_at: string | null
+  message_count: number
+  pinned: boolean
+}
+
+export interface CompanyConversationListResponse {
+  conversations: CompanyConversationSummary[]
+}
+
+export interface CompanyConversationMessage {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  actions?: ChatActionResult[]
+  attachments?: Array<Record<string, unknown>>
+  created_at?: string | null
+}
+
+export interface CompanyConversationDetailResponse {
+  conversation: CompanyConversationSummary
+  messages: CompanyConversationMessage[]
+}
+
+export interface CompanyConversationSearchResponse {
+  results: Array<{
+    conversation_id: string
+    title: string
+    message_preview: string
+    created_at: string | null
+  }>
 }

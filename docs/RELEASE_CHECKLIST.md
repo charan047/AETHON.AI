@@ -1,64 +1,63 @@
 # Release Checklist
 
-This checklist is intended for private repository pushes, internal demos, investor diligence drops, and production-minded release candidates.
+Use this checklist before a push intended for public visibility, demos, or production-minded releases.
 
-## 1. Repository hygiene
+## 1. Repository Hygiene
 
 - confirm no plaintext secrets are tracked
-- confirm `.env`, local DBs, browser artifacts, and backup directories are ignored
-- review `git status --short` for accidental machine-specific files
-- ensure new docs use repo-relative links, not local absolute paths
-- review `.gitignore` for any newly introduced generated assets
+- confirm `.env`, local DBs, browser artifacts, archives, and worktree leftovers are ignored
+- review `git status --short`
+- ensure docs use repo-relative links
+- verify no local-only screenshots, zips, or debug output are staged
 
-## 2. Product integrity
+## 2. Product Integrity
 
 - backend starts cleanly
 - frontend builds cleanly
 - database migrations apply cleanly
 - health endpoint returns `200`
-- core onboarding flow works for a new org
-- marketplace install flow works for at least one supported listing
-- workflow execution works end to end
-- billing surfaces fail gracefully when third-party credentials are absent
-- model control plane routes load and org scoping holds
+- onboarding works for a new org
+- `/clients` and `/clients/:id` load
+- model control plane loads
+- marketplace install works for at least one template
+- a workflow executes end to end through the worker
+- portal enable/disable and public token behavior work
 
-## 3. Multi-tenant safety
+## 3. Multi-Tenant Safety
 
-- validate org A cannot see org B dashboard data
-- validate org A cannot see org B notifications
-- validate websocket subscriptions require the active org
-- validate marketplace installs, executions, and model configs are org-scoped
-- validate approval and audit surfaces respect org boundaries
+- org A cannot see org B data
+- WebSocket events are org-scoped
+- analytics is org-scoped
+- model configs are org-scoped
+- approvals and tool logs respect org boundaries
+- public portal never exposes internal-only data
 
 ## 4. Documentation
 
-- [README.md](../README.md) reflects the current product positioning
+- [README.md](../README.md) reflects the current product
 - [DOCUMENTATION.md](../DOCUMENTATION.md) reflects the current architecture
 - [SECURITY.md](../SECURITY.md) reflects the current security posture
-- [CONTRIBUTING.md](../CONTRIBUTING.md) reflects the contributor workflow
-- [docs/DEPLOYMENT.md](DEPLOYMENT.md) reflects the current service topology
-- [backend/docs/quality_report.md](../backend/docs/quality_report.md) reflects the latest verified quality snapshot
+- [CONTRIBUTING.md](../CONTRIBUTING.md) reflects the contribution workflow
+- [docs/DEPLOYMENT.md](DEPLOYMENT.md) reflects the current stack
 
-## 5. Verification signals
+## 5. Verification Signals
 
-- run backend tests relevant to touched surfaces
+- run relevant backend tests
 - run frontend build
-- run representative Playwright checks
-- review CI workflow expectations in [.github/workflows/test.yml](../.github/workflows/test.yml)
-- capture any known gaps in the quality report rather than leaving them implicit
+- run representative browser checks
+- inspect migration files carefully
+- capture known gaps explicitly instead of leaving them implicit
 
-## 6. Pre-push review
+## 6. Pre-Push Review
 
 - inspect `git diff --stat`
-- inspect new migrations carefully
 - verify no temporary debug code remains
-- verify logs do not expose secrets
-- verify no fake or placeholder credentials were committed
+- verify no secrets or fake credentials are staged
+- confirm staged docs match the current product language
 
-## 7. Before pushing to GitHub
+## 7. Before Pushing To GitHub
 
-- confirm the remote URL is correct and private
-- confirm the target branch naming strategy
-- confirm whether the first push should be a full history push or a curated branch push
-- confirm whether large local backup/history folders should remain excluded
-- confirm whether the user wants one initial baseline commit or multiple structured commits
+- confirm the remote is correct
+- confirm the branch is correct
+- confirm whether the push should include all current product changes
+- confirm untracked local artifacts are excluded

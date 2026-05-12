@@ -1,46 +1,46 @@
 # Open Source Launch Checklist
 
-Use this checklist before making the repository public.
+Use this checklist before publishing or refreshing the public repository.
 
 ## GitHub Repository Settings
 
 ### About Section
 
-Set:
+Suggested description:
 
-- Description:
-  `The operating system for AI companies. Run AI teammates, workflows, approvals, models, and company operations from one platform.`
-- Website:
-  add your public landing page or waitlist URL when available
-- Topics:
-  `ai`, `agents`, `multi-agent`, `ai-workflows`, `fastapi`, `react`, `langchain`, `workflow-engine`, `human-in-the-loop`, `ai-ops`, `model-control-plane`, `marketplace`
+`Open-source Agency OS for running AI agents, client workspaces, workflows, approvals, model control, and client portals.`
 
-### Social Preview
+Suggested topics:
 
-Upload a branded social preview image that includes:
-
-- AETHON wordmark
-- short tagline
-- dark Mission OS styling
-- one-line positioning statement
+- `ai`
+- `agents`
+- `agency`
+- `agency-os`
+- `workflow-engine`
+- `fastapi`
+- `react`
+- `multi-tenant`
+- `human-in-the-loop`
+- `model-control-plane`
+- `client-portal`
+- `marketplace`
 
 ### Features
 
 Enable if desired:
 
 - Issues
-- Projects
-- Wiki only if you plan to maintain it
-- Discussions if you want community Q&A
+- Discussions
 - Security advisories
+- Projects
 
 ## Branch Protection
 
 Recommended for `main`:
 
-- require pull request before merge
+- require PR before merge
 - require status checks
-- require linear history if you want a clean public history
+- require linear history if desired
 - restrict force pushes
 
 ## Security Settings
@@ -51,39 +51,40 @@ Enable:
 - Dependabot alerts
 - Dependabot security updates
 - secret scanning
-- push protection for secrets if available
-- code scanning if you later add CodeQL
+- push protection for secrets when available
 
 ## Repo Hygiene
 
 Confirm:
 
 - [ ] README is current
-- [ ] LICENSE exists
+- [ ] LICENSE exists and is MIT
 - [ ] SECURITY.md exists
 - [ ] CONTRIBUTING.md exists
 - [ ] CODE_OF_CONDUCT.md exists
-- [ ] issue templates are present
-- [ ] PR template is present
-- [ ] roadmap and changelog are present
+- [ ] docs are free of stale billing/plan references
+- [ ] local archives and worktree artifacts are ignored
 
 ## Launch Content
 
-Before posting blogs or social launch threads, prepare:
+Before posting publicly, prepare:
 
-- one technical deep-dive post
-- one product story post
-- one architecture diagram or product screenshot thread
-- one demo video or GIF
+- product screenshots
+- one onboarding GIF or short video
+- one dashboard screenshot
+- one client portal screenshot
+- one technical architecture post or thread
 
 ## Discoverability
 
-Your README and repo description should naturally cover:
+Your README and repository description should naturally cover:
 
-- AI company operating system
-- AI teammates
+- AI agency operating system
+- client workspaces
+- AI agents
 - workflow orchestration
+- approvals
 - model control plane
-- human-in-the-loop approvals
-- observability and monitoring
-- marketplace and installable capabilities
+- monitoring and auditability
+- client portal
+- self-hosted open source

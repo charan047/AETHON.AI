@@ -28,7 +28,6 @@ from database.models import (
     MarketplaceListing,
     OrgMember,
     OrgMemberRole,
-    OrgPlan,
     Organization,
     User,
     UserRole,
@@ -58,7 +57,7 @@ async def create_user_with_org(
     role: UserRole,
     org_name: str,
     org_slug: str,
-    plan: OrgPlan = OrgPlan.solo,
+    plan: str = "open_source",
 ):
     user = User(
         email=email,
@@ -76,7 +75,6 @@ async def create_user_with_org(
         slug=org_slug,
         plan=plan,
         owner_user_id=user.id,
-        billing_email=user.email,
     )
     db.add(org)
     await db.commit()

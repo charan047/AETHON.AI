@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, Plus, Send } from 'lucide-react'
 import { clsx } from 'clsx'
-import { organizationsApi } from '../../api/client'
+import { extractApiError, organizationsApi } from '../../api/client'
 import { useAuth } from '../../contexts/AuthContext'
 import { AgentAvatar } from '../ui/AgentAvatar'
 import { InviteMemberModal } from './InviteMemberModal'
@@ -32,7 +32,7 @@ export function OrgSwitcher({ collapsed = false }: { collapsed?: boolean }) {
       setNewOrgName('')
       setOpen(false)
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not create organization'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const switchOrg = (orgId: string) => {

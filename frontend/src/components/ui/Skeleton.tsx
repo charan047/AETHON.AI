@@ -13,7 +13,7 @@ export function Skeleton({ className }: { className?: string }) {
 
 export function SkeletonCard({ className }: { className?: string }) {
   return (
-    <div className={clsx('rounded-2xl border border-white/[0.08] bg-obsidian-900 p-5', className)}>
+    <div className={clsx('glass-card rounded-2xl p-5', className)}>
       <Skeleton className="mb-5 h-14 w-14 rounded-full" />
       <Skeleton className="mb-3 h-5 w-2/3" />
       <Skeleton className="mb-5 h-3 w-full" />
@@ -28,7 +28,7 @@ export function SkeletonCard({ className }: { className?: string }) {
 
 export function AgentCardSkeleton() {
   return (
-    <div className="rounded-xl border border-white/5 bg-base-200 p-4 space-y-3">
+    <div className="glass-card space-y-3 rounded-2xl p-4">
       <div className="flex items-center gap-2">
         <Skeleton className="h-2 w-2 rounded-full" />
         <Skeleton className="h-3 w-28" />
@@ -51,7 +51,7 @@ export function DashboardSkeleton() {
 
       <div className="grid gap-4 lg:grid-cols-4">
         {Array.from({ length: 4 }).map((_, index) => (
-          <div key={index} className="rounded-xl border border-white/[0.06] bg-base-200 p-6">
+          <div key={index} className="glass-card rounded-2xl p-6">
             <Skeleton className="mb-4 h-4 w-24" />
             <Skeleton className="mb-3 h-10 w-24" />
             <Skeleton className="h-3 w-28" />
@@ -60,7 +60,7 @@ export function DashboardSkeleton() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-        <div className="rounded-xl border border-white/[0.06] bg-base-200 p-6">
+        <div className="glass-card rounded-2xl p-6">
           <div className="space-y-3">
             {Array.from({ length: 5 }).map((_, index) => (
               <div key={index} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
@@ -70,7 +70,7 @@ export function DashboardSkeleton() {
             ))}
           </div>
         </div>
-        <div className="rounded-xl border border-white/[0.06] bg-base-200 p-6">
+        <div className="glass-card rounded-2xl p-6">
           <div className="space-y-3">
             {Array.from({ length: 3 }).map((_, index) => (
               <div key={index} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
@@ -83,7 +83,7 @@ export function DashboardSkeleton() {
         </div>
       </div>
 
-      <div className="rounded-xl border border-white/[0.06] bg-base-200 p-6">
+      <div className="glass-card rounded-2xl p-6">
         <div className="space-y-3">
           {Array.from({ length: 5 }).map((_, index) => (
             <div key={index} className="grid grid-cols-5 gap-3">
@@ -102,7 +102,7 @@ export function DashboardSkeleton() {
 
 export function ExecutionRowSkeleton() {
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-base-200 p-3">
+    <div className="glass-card rounded-2xl p-3">
       <div className="mb-2 flex items-center gap-2">
         <Skeleton className="h-3 w-24" />
         <Skeleton className="ml-auto h-3 w-14" />

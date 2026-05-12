@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { customToolsApi, type ToolParam } from '../api/client'
+import { customToolsApi, extractApiError, type ToolParam } from '../api/client'
 import {
   Plus, Trash2, Play, Save, X, Wrench, CheckCircle2,
   AlertCircle, ChevronRight, Code2, FlaskConical, RefreshCw,
@@ -174,7 +174,7 @@ function ToolEditor({
       toast.success('Tool created!')
       onClose()
     },
-    onError: (e: any) => toast.error(e.response?.data?.detail || 'Failed to create tool'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const updateMut = useMutation({
@@ -185,7 +185,7 @@ function ToolEditor({
       toast.success('Tool saved!')
       onClose()
     },
-    onError: (e: any) => toast.error(e.response?.data?.detail || 'Failed to save tool'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const handleSave = () => {
@@ -205,8 +205,8 @@ function ToolEditor({
       const result = await customToolsApi.test(tool.id, paramValues)
       if (result.error) setTestError(result.error)
       else setTestOutput(result.output)
-    } catch (e: any) {
-      setTestError(e.response?.data?.detail || String(e))
+    } catch (e) {
+      setTestError(extractApiError(e))
     } finally {
       setTesting(false)
     }
@@ -215,7 +215,7 @@ function ToolEditor({
   const isBusy = createMut.isPending || updateMut.isPending || testing
 
   return (
-    <div className="flex flex-col h-screen bg-slate-950">
+    <div className="flex flex-col h-full bg-slate-950">
       {/* Toolbar */}
       <div className="flex items-center gap-3 px-5 py-3 bg-slate-900 border-b border-slate-800 flex-shrink-0">
         <button onClick={onClose} className="p-1.5 text-slate-500 hover:text-slate-300 rounded-lg hover:bg-slate-800 transition-colors">

@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Bot, CheckCircle2, FileUp, GitBranch, Sparkles, Workflow, Wrench } from 'lucide-react'
 import { clsx } from 'clsx'
-import { agentsApi, customToolsApi, marketplaceApi, workflowsApi } from '../api/client'
+import { agentsApi, customToolsApi, extractApiError, marketplaceApi, workflowsApi } from '../api/client'
 import type { Agent, CustomTool, MarketplaceCategory, Workflow as WorkflowType } from '../types'
 import { toast } from '../lib/toast'
 
@@ -97,7 +97,7 @@ export function PublishListing() {
       toast.success('Submitted for review')
       setStep(3)
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Could not submit listing'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const choose = (nextKind: PublishKind, item: Agent | WorkflowType | CustomTool) => {

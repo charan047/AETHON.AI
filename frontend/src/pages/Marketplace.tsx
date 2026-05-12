@@ -81,7 +81,7 @@ function ListingCard({ listing, index, installed, onInstall }: {
         <h3 className="line-clamp-1 text-lg font-semibold tracking-tight text-white">{listing.name}</h3>
         <p className="mt-1 line-clamp-1 text-sm text-obsidian-400">{listing.tagline}</p>
         <div className="mt-4 flex items-center gap-3 text-xs text-obsidian-500">
-          <span className="inline-flex items-center gap-1 text-amber-300"><Star size={13} fill="currentColor" /> {listing.rating_avg.toFixed(1)} ({listing.rating_count})</span>
+          <span className="inline-flex items-center gap-1 text-amber-300"><Star size={13} fill="currentColor" /> {(listing.rating_avg ?? 0).toFixed(1)} ({listing.rating_count})</span>
           <span className="inline-flex items-center gap-1"><Download size={13} /> {formatCount(listing.install_count)}</span>
         </div>
         <div className="mt-4 flex items-center justify-between gap-3">

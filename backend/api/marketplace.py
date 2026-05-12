@@ -13,6 +13,7 @@ from auth.org_context import OrgContext, check_plan_limit, get_org_context
 from database import get_db
 from database.models import (
     Agent,
+    AgentContract,
     AuditAction,
     ListingStatus,
     ListingType,
@@ -28,6 +29,8 @@ from database.models import (
     Workflow,
 )
 from services import audit_log_service
+from services.agent_naming_service import agent_naming_service
+from api.agents import _initialize_agent_identity
 from services.marketplace_service import MarketplaceService
 from utils.sanitize import sanitize_html, sanitize_text, validate_url
 
@@ -114,6 +117,26 @@ def _render_template(template: str | None, values: dict[str, Any] | None) -> str
         return ""
     clean_values = {key: value for key, value in (values or {}).items() if value is not None}
     return template.format_map(_SafeFormatDict(clean_values))
+
+
+async def _apply_template_contract_rules(
+    agent_id: str,
+    template: dict[str, Any],
+    db: AsyncSession,
+) -> None:
+    contract_cfg = template.get("contract") if isinstance(template, dict) else None
+    if not isinstance(contract_cfg, dict):
+        return
+
+    contract = await db.scalar(select(AgentContract).where(AgentContract.agent_id == agent_id))
+    if not contract:
+        return
+
+    requires_approval_for = contract_cfg.get("requires_approval_for")
+    if isinstance(requires_approval_for, list):
+        contract.requires_approval_for = [str(item) for item in requires_approval_for if str(item).strip()]
+
+    await db.commit()
 
 
 def _to_role_name(role_slug: str | None, fallback: str) -> str:
@@ -572,6 +595,11 @@ async def install_marketplace_listing(
             MarketplaceInstall.installer_org_id == ctx.org.id,
         )
     )
+    if existing_install and not body.reinstall:
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{listing.name}' is already installed in this organization. Enable reinstall to create a fresh copy.",
+        )
     if not agent_cfg or not workflow_cfg:
         try:
             return await marketplace_service.install_listing(
@@ -585,16 +613,6 @@ async def install_marketplace_listing(
             message = str(exc)
             status_code = 403 if "before reviewing" in message.lower() else 400
             raise HTTPException(status_code=status_code, detail=message) from exc
-    if existing_install and not body.reinstall:
-        return {
-            "success": True,
-            "already_installed": True,
-            "resource_id": existing_install.installed_resource_id,
-            "type": _enum_value(listing.listing_type),
-            "agent_id": existing_install.installed_resource_id,
-            "workflow_id": None,
-            "message": f"'{listing.name}' is already installed",
-        }
     configured_inputs = body.configured_inputs or {}
 
     await check_plan_limit("agents", ctx.org, db)
@@ -607,6 +625,7 @@ async def install_marketplace_listing(
     rendered_system_prompt = _render_template(agent_cfg.get("system_prompt"), configured_inputs)
     rendered_input_template = _render_template(workflow_cfg.get("input_template"), configured_inputs)
     role_slug = agent_cfg.get("role_slug") or listing.role_slug
+    department_type = agent_cfg.get("department_type") or listing.department_type or "research"
 
     agent = Agent(
         id=str(uuid4()),
@@ -626,6 +645,17 @@ async def install_marketplace_listing(
         installed_from_listing_id=listing.id,
         created_by_user_id=current_user.id,
     )
+
+    if not agent.persona_name:
+        taken = await agent_naming_service.get_taken_names(str(ctx.org.id), db)
+        suggestions = agent_naming_service.suggest_names(
+            department_type=department_type,
+            count=1,
+            exclude=taken,
+        )
+        if suggestions:
+            agent.persona_name = suggestions[0]
+
     db.add(agent)
     await db.flush()
 
@@ -668,6 +698,23 @@ async def install_marketplace_listing(
         .values(install_count=MarketplaceListing.install_count + 1)
     )
     await db.commit()
+    await db.refresh(agent)
+    await _initialize_agent_identity(
+        agent_id=str(agent.id),
+        role_slug=agent.role_slug,
+        db=db,
+    )
+    await _apply_template_contract_rules(str(agent.id), template, db)
+    if agent.persona_name:
+        await agent_naming_service.seed_identity_memory(
+            agent_id=str(agent.id),
+            org_id=str(agent.org_id),
+            persona_name=agent.persona_name,
+            role_display=agent.role or agent.role_slug or "Aethon teammate",
+            company_name=ctx.org.name if getattr(ctx.org, "name", None) else "our company",
+            department_type=department_type,
+            db=db,
+        )
 
     input_variables = workflow.input_variables or []
     needs_configuration = bool(input_variables) and not bool(workflow.configured_inputs)
