@@ -134,10 +134,12 @@ export function AuthShell({
                 without the chaos.
               </span>
             </h1>
-            <p className="mt-5 max-w-md text-base leading-7 text-[#8B9DBE]">
-              Deploy AI agents for each client. Stay in control of everything they do.
-              Share a portal so clients see results in real time.
-            </p>
+            <div className="mt-5 max-w-xl rounded-2xl border border-white/[0.06] bg-[rgba(8,13,26,0.46)] px-5 py-4 backdrop-blur-sm">
+              <p className="text-base leading-7 text-[#D6E3FA] [text-shadow:0_1px_18px_rgba(0,0,0,0.45)]">
+                Deploy AI agents for each client. Stay in control of everything they do.
+                Share a portal so clients see results in real time.
+              </p>
+            </div>
           </motion.div>
 
           <motion.div

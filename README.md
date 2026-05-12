@@ -54,8 +54,6 @@ cp backend/.env.example backend/.env
 
 3. Edit `backend/.env` and set at least:
 
-- `DATABASE_URL`
-- `REDIS_URL`
 - `JWT_SECRET_KEY`
 - one LLM provider key:
   - `OPENAI_API_KEY`, or
@@ -66,11 +64,15 @@ Optional:
 - `MEM0_API_KEY` for long-term agent memory
 - integration credentials for Gmail, Slack, Google Docs, and other tools
 
+`docker compose` provides the default Postgres and Redis service URLs for the full stack automatically.
+
 4. Start the stack:
 
 ```bash
 docker compose up -d --build
 ```
+
+`docker-compose up` runs everything — Postgres, Redis, backend, Celery worker, and nginx. No external dependencies.
 
 5. Open the app:
 
@@ -92,6 +94,8 @@ pip install -r requirements.txt
 alembic upgrade head
 uvicorn main:app --reload
 ```
+
+For backend-only local runs, use the `DATABASE_URL` and `REDIS_URL` values from [backend/.env.example](backend/.env.example).
 
 ### Frontend
 

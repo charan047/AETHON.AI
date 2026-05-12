@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-echo "=== AI Agent Orchestration Platform Setup ==="
+echo "=== Aethon Agency OS Setup ==="
 echo ""
 
 # Backend setup
