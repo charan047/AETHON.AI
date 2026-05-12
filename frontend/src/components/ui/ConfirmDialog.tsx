@@ -1,4 +1,4 @@
-import { AlertTriangle, X } from 'lucide-react'
+import { AlertTriangle, Loader2, X } from 'lucide-react'
 import { clsx } from 'clsx'
 
 interface ConfirmDialogProps {
@@ -30,12 +30,12 @@ export function ConfirmDialog({
     ? 'border-red-400/20 bg-red-400/10 text-red-200'
     : tone === 'warning'
       ? 'border-amber-400/20 bg-amber-400/10 text-amber-200'
-      : 'border-accent-400/20 bg-accent-400/10 text-accent-200'
+      : 'border-blue-400/20 bg-blue-500/10 text-blue-200'
 
   return (
-    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/70 p-4 backdrop-blur-xl" onClick={onClose}>
+    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/55 p-4 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-obsidian-900 shadow-glow-lg"
+        className="glass-elevated w-full max-w-md overflow-hidden"
         onClick={event => event.stopPropagation()}
       >
         <div className="flex items-start gap-4 border-b border-white/10 p-5">
@@ -44,7 +44,7 @@ export function ConfirmDialog({
           </div>
           <div className="min-w-0 flex-1">
             <h2 className="text-lg font-semibold tracking-tight text-white">{title}</h2>
-            {description && <p className="mt-2 text-sm leading-6 text-obsidian-400">{description}</p>}
+            {description && <p className="mt-2 text-sm leading-6 text-ink-secondary">{description}</p>}
           </div>
           <button className="btn-ghost h-8 px-2" onClick={onClose} disabled={loading}>
             <X size={16} />
@@ -57,7 +57,12 @@ export function ConfirmDialog({
             onClick={onConfirm}
             disabled={loading}
           >
-            {loading ? 'Working...' : confirmLabel}
+            {loading ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Working...
+              </>
+            ) : confirmLabel}
           </button>
         </div>
       </div>

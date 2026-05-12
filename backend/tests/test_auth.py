@@ -6,7 +6,7 @@ from jose import jwt
 
 from auth.security import create_access_token, hash_password
 from config import settings
-from database.models import Agent, OrgMember, OrgMemberRole, OrgPlan, Organization, User, UserRole, Workflow
+from database.models import Agent, OrgMember, OrgMemberRole, Organization, User, UserRole, Workflow
 
 
 async def register_user(
@@ -58,9 +58,8 @@ async def create_user_with_org(
     org = Organization(
         name=org_name,
         slug=org_slug,
-        plan=OrgPlan.solo,
+        plan="open_source",
         owner_user_id=user.id,
-        billing_email=user.email,
     )
     db.add(org)
     await db.commit()

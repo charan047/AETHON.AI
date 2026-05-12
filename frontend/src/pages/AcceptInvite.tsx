@@ -2,7 +2,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { format } from 'date-fns'
 import { CheckCircle2, Loader2, Mail, ShieldCheck } from 'lucide-react'
-import { organizationsApi } from '../api/client'
+import { extractApiError, organizationsApi } from '../api/client'
+import { AuthShell } from '../components/AuthShell'
 import { useAuth } from '../contexts/AuthContext'
 import { toast } from '../lib/toast'
 
@@ -17,7 +18,11 @@ export function AcceptInvite() {
   const auth = useAuth()
   const navigate = useNavigate()
   const invitePath = `/invite/${token}`
-  const { data: invite, isLoading, error } = useQuery({
+  const {
+    data: invite,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ['invite', token],
     queryFn: () => organizationsApi.inviteDetails(token),
     enabled: Boolean(token),
@@ -28,69 +33,95 @@ export function AcceptInvite() {
     mutationFn: () => organizationsApi.acceptInvite(token),
     onSuccess: async result => {
       await auth.refreshOrganizations(result.org_id)
-      toast.success(`Welcome to ${result.org_name || invite?.org_name || 'your new org'}!`)
+      toast.success(`Welcome to ${result.org_name || invite?.org_name || 'your new agency'}!`)
       navigate('/')
     },
-    onError: (err: any) => toast.error(err.response?.data?.detail || 'Could not accept invitation'),
+    onError: err => toast.error(extractApiError(err)),
   })
 
   return (
-    <div className="grid min-h-screen place-items-center overflow-hidden bg-obsidian-950 px-4 py-10 text-white">
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.20),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(99,102,241,0.18),transparent_30%)]" />
-      <div className="relative w-full max-w-xl rounded-3xl border border-white/10 bg-obsidian-900/90 p-8 shadow-glow-lg backdrop-blur">
-        <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-accent-500/15 text-accent-200">
-          <Mail size={24} />
+    <AuthShell
+      mode="invite"
+      title="You've been invited"
+      subtitle="Accept to join the agency workspace."
+    >
+      {isLoading || auth.isLoading ? (
+        <div className="py-8 text-center">
+          <Loader2 className="mx-auto animate-spin text-blue-300" />
+          <p className="mt-3 text-sm text-[#8B9DBE]">Loading invitation...</p>
         </div>
-
-        {isLoading || auth.isLoading ? (
-          <div className="py-12 text-center">
-            <Loader2 className="mx-auto animate-spin text-accent-300" />
-            <p className="mt-3 text-sm text-obsidian-400">Loading invitation...</p>
+      ) : error || !invite ? (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-200">
+            This invite may have expired, been revoked, or already accepted.
           </div>
-        ) : error || !invite ? (
-          <div className="py-8 text-center">
-            <h1 className="text-2xl font-semibold">Invite unavailable</h1>
-            <p className="mt-2 text-sm text-obsidian-400">This invite may have expired, been revoked, or already accepted.</p>
-            <Link className="btn-primary mt-6" to="/login">Sign in</Link>
-          </div>
-        ) : (
-          <>
-            <div className="mt-6 text-center">
-              <p className="font-mono text-xs uppercase tracking-[0.24em] text-cyan-300">Workspace invitation</p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">Join {invite.org_name}</h1>
-              <p className="mt-3 leading-7 text-obsidian-300">
-                {invite.inviter_name} invited you as <span className="font-semibold capitalize text-white">{invite.role}</span>.
-              </p>
+          <Link className="btn-primary h-12 w-full justify-center" to="/login">
+            Sign in
+          </Link>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-4">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-300">
+              Inviting agency
             </div>
+            <div className="text-xl font-semibold tracking-tight text-white">{invite.org_name}</div>
+            <p className="mt-2 text-sm leading-6 text-[#8B9DBE]">
+              {invite.inviter_name} invited you as{' '}
+              <span className="font-semibold capitalize text-white">{invite.role}</span>.
+            </p>
+          </div>
 
-            <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.025] p-4">
-              <div className="flex items-center gap-3">
-                <ShieldCheck className="text-emerald-300" size={20} />
-                <div>
-                  <div className="text-sm font-medium text-white">{invite.email}</div>
-                  <div className="mt-1 text-xs text-obsidian-500">Expires {formatDate(invite.expires_at)}</div>
-                </div>
+          <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600/10 text-blue-300">
+                <Mail size={18} />
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-white">{invite.email}</div>
+                <div className="mt-1 text-xs text-[#8B9DBE]">Expires {formatDate(invite.expires_at)}</div>
               </div>
             </div>
 
-            {auth.isAuthenticated ? (
-              <button className="btn-primary mt-6 h-12 w-full justify-center" disabled={accept.isPending} onClick={() => accept.mutate()}>
-                {accept.isPending ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-                {accept.isPending ? 'Accepting...' : 'Accept Invitation'}
-              </button>
-            ) : (
-              <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                <Link className="btn-primary h-12 justify-center" to="/login" state={{ from: { pathname: invitePath } }}>
-                  Sign in to accept
-                </Link>
-                <Link className="btn-secondary h-12 justify-center" to="/register" state={{ from: { pathname: invitePath } }}>
-                  Create account
-                </Link>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
+            <div className="mt-4 flex items-center gap-2 rounded-xl border border-white/[0.06] bg-black/10 px-3 py-2 text-xs text-[#8B9DBE]">
+              <ShieldCheck size={14} className="text-emerald-400" />
+              Join the shared workspace, clients, and AI team context.
+            </div>
+          </div>
+
+          {auth.isAuthenticated ? (
+            <button
+              className="btn-primary h-12 w-full justify-center"
+              disabled={accept.isPending}
+              onClick={() => accept.mutate()}
+            >
+              {accept.isPending ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <CheckCircle2 size={16} />
+              )}
+              {accept.isPending ? 'Accepting...' : 'Accept invitation'}
+            </button>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Link
+                className="btn-primary h-12 justify-center"
+                to="/login"
+                state={{ from: { pathname: invitePath } }}
+              >
+                Sign in to accept
+              </Link>
+              <Link
+                className="btn-secondary h-12 justify-center"
+                to="/register"
+                state={{ from: { pathname: invitePath } }}
+              >
+                Create account
+              </Link>
+            </div>
+          )}
+        </div>
+      )}
+    </AuthShell>
   )
 }

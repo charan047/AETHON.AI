@@ -7,6 +7,7 @@ import builtins
 import httpx
 import ast
 import json
+from bs4 import BeautifulSoup
 
 from config import settings
 
@@ -266,18 +267,39 @@ def make_custom_tool(tool_def) -> StructuredTool | Tool:
         return Tool(name=name, description=f"[BROKEN] {description}", func=lambda _: f"Tool load error: {e}")
 
 
+def _search_results_html(query: str, max_results: int = 5) -> list[dict[str, str]]:
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; AethonBot/1.0)"}
+    with httpx.Client(timeout=20, follow_redirects=True, headers=headers) as client:
+        response = client.get("https://www.bing.com/search", params={"q": query})
+        response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "lxml")
+    results: list[dict[str, str]] = []
+    for container in soup.select("li.b_algo")[:max_results]:
+        title_anchor = container.select_one("h2 a")
+        snippet_node = container.select_one(".b_caption p")
+        if not title_anchor:
+            continue
+        results.append(
+            {
+                "title": title_anchor.get_text(" ", strip=True),
+                "snippet": snippet_node.get_text(" ", strip=True) if snippet_node else "",
+                "url": title_anchor.get("href", ""),
+            }
+        )
+    return results
+
+
 @tool
 def web_search(query: str) -> str:
     """Search the internet for information about a topic."""
     try:
-        from ddgs import DDGS
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=5))
+        results = _search_results_html(query, max_results=5)
         if not results:
             return f"No results found for '{query}'."
         formatted = []
         for r in results:
-            formatted.append(f"**{r.get('title', '')}**\n{r.get('body', '')}\nURL: {r.get('href', '')}")
+            formatted.append(f"**{r.get('title', '')}**\n{r.get('snippet', '')}\nURL: {r.get('url', '')}")
         return "\n\n".join(formatted)
     except Exception as e:
         return f"Search error: {str(e)}"

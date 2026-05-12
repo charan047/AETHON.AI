@@ -1,18 +1,18 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 from apscheduler.jobstores.redis import RedisJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import redis.asyncio as redis
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from config import settings
 from database.db import AsyncSessionLocal
-from database.models import Execution, ExecutionStatus, Workflow
+from database.models import AgentMessage, Execution, ExecutionStatus, Organization, Workflow
 from services.distributed_lock import DistributedLock
 from services.websocket_manager import ws_manager
 
@@ -36,15 +36,18 @@ async def trigger_scheduled_workflow_job(workflow_id: str, user_id: str):
     from runtime.workflow_engine import WorkflowEngine
 
     execution_id = str(uuid.uuid4())
-    current_date = datetime.utcnow().date().isoformat()
+    current_date = datetime.utcnow().strftime("%A, %B %d %Y")
+    current_time = datetime.utcnow().strftime("%H:%M UTC")
     standup_prompt = (
-        f"MORNING STANDUP - {current_date}\n"
-        "Report the following in your response:\n"
-        "1. What you completed since the last standup\n"
-        "2. What you are working on today\n"
-        "3. Any blockers or things needing the founder's attention\n"
-        "Use your memory to recall past work. Be specific and concise.\n"
-        "Do NOT search the web. Report on actual work only."
+        f"MORNING STANDUP — {current_date} at {current_time}\n\n"
+        "This is the daily team standup. Speak naturally as yourself.\n\n"
+        "Cover:\n"
+        "1. What you actually completed or worked on since yesterday\n"
+        "2. What you plan to do today specifically\n"
+        "3. Any blockers, questions, or things that need the CEO's attention\n\n"
+        "Keep it under 150 words. Be specific — name actual tasks, files, or data you worked on. "
+        "Don't say 'I will...' for things you haven't started. "
+        "Speak in first person, naturally, like a real team member in a meeting."
     )
     logger = logging.getLogger("scheduler")
     logger.info("Scheduled trigger: workflow %s", workflow_id)
@@ -97,6 +100,43 @@ async def trigger_scheduled_workflow_job(workflow_id: str, user_id: str):
     finally:
         if redis_client:
             await redis_client.aclose()
+
+
+_cleanup_logger = logging.getLogger("scheduler.cleanup")
+
+
+async def _cleanup_old_messages() -> None:
+    """
+    Daily 2 AM UTC job.
+    Deletes AgentMessages older than each org's retention policy.
+    Orgs with retention_days = NULL keep messages forever.
+    """
+    async with AsyncSessionLocal() as db:
+        orgs_result = await db.execute(
+            select(Organization).where(
+                Organization.agent_message_retention_days.isnot(None),
+                Organization.is_active == True,  # noqa: E712
+            )
+        )
+        orgs = orgs_result.scalars().all()
+        total_deleted = 0
+        for org in orgs:
+            if not org.agent_message_retention_days:
+                continue
+            cutoff = datetime.utcnow() - timedelta(days=org.agent_message_retention_days)
+            result = await db.execute(
+                delete(AgentMessage).where(
+                    AgentMessage.org_id == org.id,
+                    AgentMessage.created_at < cutoff,
+                )
+            )
+            total_deleted += result.rowcount or 0
+        await db.commit()
+        _cleanup_logger.info(
+            "Message retention cleanup: deleted %d messages across %d orgs",
+            total_deleted,
+            len(orgs),
+        )
 
 
 class SchedulerService:
@@ -158,7 +198,7 @@ class SchedulerService:
             "platform:scheduler:leader",
             settings.pod_id,
             nx=True,
-            ex=30,
+            ex=60,
         )
         self._is_leader = bool(acquired)
         return self._is_leader
@@ -167,8 +207,20 @@ class SchedulerService:
         if not self.scheduler.running:
             self.scheduler.start()
         loaded = await self._sync_schedules_from_db()
+        self._register_system_jobs()
         print(f"Scheduler started, loaded {loaded} scheduled workflows", flush=True)
         self.logger.info("Scheduler leader %s started, loaded %s scheduled workflows", settings.pod_id, loaded)
+
+    def _register_system_jobs(self) -> None:
+        """Register platform-level recurring jobs (idempotent via replace_existing)."""
+        self.scheduler.add_job(
+            _cleanup_old_messages,
+            CronTrigger(hour=2, minute=0, timezone="UTC"),
+            id="message_retention_cleanup",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+        self.logger.info("Registered system job: message_retention_cleanup")
 
     async def _leadership_loop(self):
         while True:
@@ -192,7 +244,7 @@ class SchedulerService:
             return 0
         end
         """
-        result = await self._redis.eval(script, 1, "platform:scheduler:leader", settings.pod_id, 30)
+        result = await self._redis.eval(script, 1, "platform:scheduler:leader", settings.pod_id, 60)
         return bool(result)
 
     async def _stop_scheduler(self):

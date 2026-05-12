@@ -1,56 +1,48 @@
-# AETHON Roadmap
+# Aethon Roadmap
 
-This roadmap describes the direction of the platform, not a guaranteed release schedule.
+This roadmap describes direction, not a guaranteed release schedule.
 
 ## Current Focus
 
-- platform hardening
-- tenant isolation
+- tenant isolation hardening
+- workflow reliability
 - model control plane maturity
-- marketplace expansion
-- better live operations surfaces
+- agency-centric product polish
+- marketplace and client portal quality
 
-## Near-Term Product Priorities
+## Near-Term Priorities
 
-### 1. Company Operating System Depth
+### 1. Agency Operations Depth
 
-- richer org chart and company structure views
-- better command center summaries
-- more role-aware teammate behaviors
-- stronger company memory and context synthesis
+- better agency dashboard summaries
+- richer client and account activity views
+- stronger agency chat and command workflows
+- better agent-to-client assignment workflows
 
-### 2. Execution Reliability
+### 2. Runtime Reliability
 
-- more resilient approval handling
-- better retry, timeout, and resume semantics
-- deeper workflow debugging and traces
-- improved long-running task visibility
+- better retry, timeout, and resume behavior
+- deeper workflow debugging and tracing
+- stronger background execution guarantees
+- clearer failure recovery for long-running tasks
 
 ### 3. Marketplace Expansion
 
 - more installable agents
-- installable tools and eval labs
 - better template validation
 - stronger install-time configuration UX
+- more agency-specific workflow templates
 
-### 4. Enterprise Readiness
+### 4. Governance And Safety
 
-- stronger audit and compliance surfaces
+- richer approvals
+- stronger audit surfaces
 - more granular permissions
-- improved secrets handling
-- richer org-level governance controls
+- better secret handling and provider health visibility
 
-### 5. Open Source Readiness
+### 5. Open Source Maturity
 
-- clearer public docs
-- stronger CI and quality gates
-- community-friendly contribution paths
-- examples and deployment references
-
-## Longer-Term Direction
-
-- company-wide planning and delegation loops
-- better inter-agent communication
-- richer approval policies
-- production-grade external integrations
-- advanced evaluation pipelines for AI teammates
+- stronger CI and verification
+- clearer docs and examples
+- easier self-host setup
+- cleaner extension and plugin stories

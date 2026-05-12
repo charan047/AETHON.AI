@@ -41,7 +41,7 @@ async def get_costs(
         .join(Execution, Execution.id == ExecutionCostLog.execution_id)
         .where(
             ExecutionCostLog.user_id == current_user.id,
-            Execution.org_id == ctx.org.id,
+            ExecutionCostLog.org_id == ctx.org.id,
             ExecutionCostLog.created_at >= since,
         )
     ) or 0.0
@@ -55,7 +55,7 @@ async def get_costs(
         .outerjoin(Agent, Agent.id == ExecutionCostLog.agent_id)
         .where(
             ExecutionCostLog.user_id == current_user.id,
-            Execution.org_id == ctx.org.id,
+            ExecutionCostLog.org_id == ctx.org.id,
             ExecutionCostLog.created_at >= since,
         )
         .group_by(Agent.name, ExecutionCostLog.agent_id)
@@ -70,7 +70,7 @@ async def get_costs(
         .join(Execution, Execution.id == ExecutionCostLog.execution_id)
         .where(
             ExecutionCostLog.user_id == current_user.id,
-            Execution.org_id == ctx.org.id,
+            ExecutionCostLog.org_id == ctx.org.id,
             ExecutionCostLog.created_at >= since,
         )
         .group_by(ExecutionCostLog.model)
@@ -86,7 +86,7 @@ async def get_costs(
         .outerjoin(Workflow, Workflow.id == Execution.workflow_id)
         .where(
             ExecutionCostLog.user_id == current_user.id,
-            Execution.org_id == ctx.org.id,
+            ExecutionCostLog.org_id == ctx.org.id,
             ExecutionCostLog.created_at >= since,
         )
         .group_by(Workflow.name)
@@ -101,7 +101,7 @@ async def get_costs(
         .join(Execution, Execution.id == ExecutionCostLog.execution_id)
         .where(
             ExecutionCostLog.user_id == current_user.id,
-            Execution.org_id == ctx.org.id,
+            ExecutionCostLog.org_id == ctx.org.id,
             ExecutionCostLog.created_at >= since,
         )
         .group_by(func.date(ExecutionCostLog.created_at))
@@ -242,7 +242,7 @@ async def get_tool_analytics(
         .where(
             ExecutionCostLog.user_id == current_user.id,
             ExecutionCostLog.created_at >= since,
-            Execution.org_id == ctx.org.id,
+            ExecutionCostLog.org_id == ctx.org.id,
         )
         .group_by(ExecutionCostLog.model)
         .order_by(func.sum(ExecutionCostLog.cost_usd).desc())

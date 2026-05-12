@@ -288,6 +288,7 @@ class BaseTool(ABC):
                 "tool": self.name,
                 "function": function_name,
                 "user_id": self.user_id,
+                "org_id": context.get("org_id"),
                 "agent_id": context.get("agent_id"),
                 "agent_name": context.get("agent_name") or "Unknown agent",
                 "execution_id": context.get("execution_id"),

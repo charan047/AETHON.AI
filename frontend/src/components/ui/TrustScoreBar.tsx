@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion'
+import { motion, useReducedMotion } from 'framer-motion'
 import { TRUST_SCORE_COLOR, TRUST_SCORE_LABEL } from '../../lib/design-tokens'
 
 interface TrustScoreBarProps {
@@ -16,6 +16,7 @@ export function TrustScoreBar({
   showNumber = true,
   size = 'sm',
 }: TrustScoreBarProps) {
+  const prefersReducedMotion = useReducedMotion()
   const safeScore = Math.max(0, Math.min(100, score || 0))
   const color = TRUST_SCORE_COLOR(safeScore)
   const label = TRUST_SCORE_LABEL(safeScore)
@@ -40,9 +41,9 @@ export function TrustScoreBar({
         <motion.div
           className={`${HEIGHTS[size]} rounded-full`}
           style={{ backgroundColor: color }}
-          initial={{ width: 0 }}
+          initial={prefersReducedMotion ? false : { width: 0 }}
           animate={{ width: `${safeScore}%` }}
-          transition={{ duration: 0.8, ease: 'easeOut', delay: 0.1 }}
+          transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.8, ease: 'easeOut', delay: 0.1 }}
         />
       </div>
     </div>

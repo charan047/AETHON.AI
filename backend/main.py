@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from contextlib import asynccontextmanager
+from datetime import datetime
 import logging
 
 import asyncio
@@ -26,13 +27,14 @@ from config import settings, AVAILABLE_MODELS
 from database import init_db
 from api import api_router
 from api.tools_registry import router as public_tools_registry_router
-from api.webhooks.stripe_webhook import router as stripe_webhook_router
 from api.triggers import public_router as public_webhook_router
 from channels.telegram import TelegramChannel
 from middleware.plan_limits import PlanLimitMiddleware
 from middleware.rate_limit import limiter
+from middleware.request_id import RequestIDMiddleware
 from middleware.security import SecurityHeadersMiddleware
 from marketplace.seed import seed_marketplace_templates
+from database.seed_roles import seed_system_roles
 from services.hitl_service import HITLService
 from services.memory_service import MemoryService
 from services.scheduler_service import SchedulerService
@@ -41,7 +43,7 @@ from services.websocket_manager import ws_manager
 from runtime.agent_runner import AgentRunner
 from tools.registry import tool_registry
 from database.db import AsyncSessionLocal
-from database.models import Agent
+from database.models import Agent, Execution, ExecutionStatus
 from sqlalchemy import select, update
 
 logging.basicConfig(level=logging.INFO)
@@ -162,13 +164,6 @@ async def ensure_playwright_chromium():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if len(settings.jwt_secret_key) < 32:
-        raise ValueError(
-            "JWT_SECRET_KEY must be at least 32 characters long.\n"
-            "Generate a secure key with:\n"
-            "  python -c \"import secrets; print(secrets.token_hex(32))\"\n"
-            "Then set it in your .env file."
-        )
     await ensure_playwright_chromium()
     if settings.run_migrations_on_startup:
         await asyncio.to_thread(run_migrations)
@@ -176,13 +171,72 @@ async def lifespan(app: FastAPI):
         logger.info("Database migrations applied successfully")
     else:
         logger.info("Skipping automatic database migrations on startup.")
+
+    def _has_config_value(name: str) -> bool:
+        if name in os.environ:
+            return bool(os.getenv(name))
+        env_file = Path(".env")
+        if not env_file.exists():
+            return False
+        try:
+            for line in env_file.read_text().splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, value = stripped.split("=", 1)
+                if key.strip() == name and value.strip():
+                    return True
+        except Exception:
+            return False
+        return False
+
+    validation_errors = []
+    if not settings.database_url or not _has_config_value("DATABASE_URL"):
+        validation_errors.append("DATABASE_URL is not set")
+    if not settings.redis_url or not _has_config_value("REDIS_URL"):
+        validation_errors.append("REDIS_URL is not set")
+    if len(settings.jwt_secret_key) < 32:
+        validation_errors.append("JWT_SECRET_KEY must be at least 32 characters")
+    if not settings.openai_api_key and not settings.anthropic_api_key and not settings.openai_compatible_api_key:
+        logger.warning(
+            "No OpenAI, Anthropic, or OpenAI-compatible API key is set. "
+            "Agents will not be able to run without an LLM provider."
+        )
+
+    if validation_errors:
+        for error in validation_errors:
+            logger.critical("STARTUP VALIDATION FAILED: %s", error)
+        raise SystemExit(
+            f"Startup failed: {len(validation_errors)} config error(s). "
+            "Check the logs above."
+        )
+
     logger.info("Initializing database...")
     await init_db()
+    # Reset any executions stuck in "running" from a previous crash
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            update(Execution)
+            .where(Execution.status == ExecutionStatus.running)
+            .values(
+                status=ExecutionStatus.failed,
+                error="Server restarted while execution was running",
+                completed_at=datetime.utcnow(),
+            )
+            .returning(Execution.id)
+        )
+        stuck_ids = result.all()
+        await db.commit()
+        if stuck_ids:
+            logger.warning(
+                f"Reset {len(stuck_ids)} orphaned 'running' execution(s) to failed on startup"
+            )
     logger.info("Database initialized.")
     tool_registry.load_all_tools()
     logger.info("Loaded %s tools", len(tool_registry.get_all()))
     async with AsyncSessionLocal() as db:
         await seed_marketplace_templates(db)
+        await seed_system_roles(db)
     memory_service = MemoryService()
     app.state.memory_service = memory_service
     hitl_service = HITLService()
@@ -240,6 +294,7 @@ app = FastAPI(
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(RequestIDMiddleware)
 app.add_middleware(PlanLimitMiddleware)
 
 allowed_origins = settings.cors_origins
@@ -250,7 +305,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Api-Key"],
-    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-Request-ID"],
     max_age=600,
 )
 app.add_middleware(SecurityHeadersMiddleware)
@@ -278,7 +333,6 @@ async def api_request_metrics_middleware(request, call_next):
 
 app.include_router(api_router, prefix="/api")
 app.include_router(public_tools_registry_router, prefix="/tools", tags=["tools-registry"])
-app.include_router(stripe_webhook_router)
 app.include_router(public_webhook_router)
 
 

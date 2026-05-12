@@ -7,14 +7,14 @@ import ReactFlow, {
   type Connection, type Edge, type Node,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
-import { workflowsApi, agentsApi, executionsApi } from '../api/client'
+import { workflowsApi, agentsApi, executionsApi, extractApiError } from '../api/client'
 import { AgentNode } from '../components/Workflow/AgentNode'
 import { ApprovalNode } from '../components/Workflow/nodes/ApprovalNode'
 import { ConditionNode } from '../components/Workflow/nodes/ConditionNode'
 import { ParallelGroupNode } from '../components/Workflow/nodes/ParallelGroupNode'
 import { EmptyState } from '../components/ui/EmptyState'
 import { VersionHistory } from '../components/workflows/VersionHistory'
-import { Plus, Save, Play, Trash2, GitBranch, ChevronLeft, X, Layers, MessageSquare, Copy, Cpu, GitMerge, Hand, GitCompareArrows } from 'lucide-react'
+import { Plus, Save, Play, Square, Trash2, GitBranch, ChevronLeft, X, Layers, MessageSquare, Copy, Cpu, GitMerge, Hand, GitCompareArrows } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { Workflow, Agent } from '../types'
 import { SkeletonCard } from '../components/ui/Skeleton'
@@ -72,6 +72,7 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
   const [selectedNode, setSelectedNode] = useState<Node | null>(null)
   const [runInput, setRunInput] = useState('')
   const [running, setRunning] = useState(false)
+  const [runningId, setRunningId] = useState<string | null>(null)
   const [mode, setMode] = useState<'sequential' | 'orchestrator'>(workflow.execution_mode || 'sequential')
   const [orchPrompt, setOrchPrompt] = useState(workflow.orchestration_prompt || '')
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -183,20 +184,23 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
     if (!workflow.id) { toast.error('Save the workflow first'); return }
     if (!runInput) { toast.error('Enter an input message'); return }
     setRunning(true)
+    setRunningId(null)
     try {
       const execution = await executionsApi.run(workflow.id, runInput)
+      setRunning(true)
+      setRunningId(execution.execution_id)
       toast.info('Run started')
       setRunInput('')
       navigate(`/executions/${execution.execution_id}`)
-    } catch (e: any) {
-      toast.error(e.response?.data?.detail || 'Failed to run workflow')
-    } finally {
+    } catch (e) {
       setRunning(false)
+      setRunningId(null)
+      toast.error(extractApiError(e))
     }
   }
 
   return (
-    <div className="flex h-screen flex-col bg-obsidian-950">
+    <div className="flex h-full flex-col bg-obsidian-950">
       {/* Toolbar */}
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[0.08] bg-obsidian-925 px-4">
         <button className="btn-ghost" onClick={onClose}><ChevronLeft size={18} /></button>
@@ -208,14 +212,14 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
         </div>
         <button className="btn-secondary text-xs" onClick={addNode}><Plus size={14} /> Agent</button>
         <button className="btn-secondary text-xs text-amber-300" onClick={addApprovalNode}><Hand size={14} /> Approval</button>
-        <button className="btn-secondary text-xs text-indigo-300" onClick={addConditionNode}><GitBranch size={14} /> Condition</button>
+        <button className="btn-secondary text-xs text-blue-300" onClick={addConditionNode}><GitBranch size={14} /> Condition</button>
         <button className="btn-secondary text-xs text-fuchsia-300" onClick={addParallelGroupNode}><GitCompareArrows size={14} /> Parallel</button>
 
         {/* Execution mode toggle */}
         <div className="flex items-center gap-1 rounded-lg border border-white/[0.08] bg-obsidian-900 p-0.5">
           <button
             onClick={() => setMode('sequential')}
-            className={clsx('flex items-center gap-1 rounded-md px-2.5 py-1 text-xs transition-colors', mode === 'sequential' ? 'bg-accent-500 text-white shadow-glow-sm' : 'text-obsidian-400 hover:text-white')}
+            className={clsx('flex items-center gap-1 rounded-md px-2.5 py-1 text-xs transition-colors', mode === 'sequential' ? 'bg-blue-600 text-white shadow-glow-sm' : 'text-obsidian-400 hover:text-white')}
           >
             <GitMerge size={12} /> Sequential
           </button>
@@ -240,6 +244,23 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
             <button className="btn-primary text-xs" onClick={run} disabled={running}>
               <Play size={14} /> {running ? 'Running...' : 'Run'}
             </button>
+            {running && runningId && (
+              <button
+                className="btn-danger text-xs"
+                onClick={async () => {
+                  try {
+                    await executionsApi.cancel(runningId)
+                    setRunning(false)
+                    setRunningId(null)
+                    toast.success('Execution stopped')
+                  } catch (e) {
+                    toast.error(extractApiError(e))
+                  }
+                }}
+              >
+                <Square size={14} /> Stop
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -270,11 +291,11 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
             onNodeClick={(_, node) => setSelectedNode(node)}
             onPaneClick={() => setSelectedNode(null)}
             fitView
-            defaultEdgeOptions={{ animated: true, style: { stroke: '#6366f1', strokeWidth: 2 }, markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1' } }}
+            defaultEdgeOptions={{ animated: true, style: { stroke: '#2563EB', strokeWidth: 2 }, markerEnd: { type: MarkerType.ArrowClosed, color: '#2563EB' } }}
           >
-            <Background color="rgba(99,102,241,0.22)" gap={22} />
+            <Background color="rgba(37,99,235,0.22)" gap={22} />
             <Controls />
-            <MiniMap nodeColor="#6366f1" maskColor="rgba(10,10,15,0.72)" />
+            <MiniMap nodeColor="#2563EB" maskColor="rgba(10,10,15,0.72)" />
           </ReactFlow>
 
           {nodes.length === 0 && (

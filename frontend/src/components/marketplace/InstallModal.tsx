@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import confetti from 'canvas-confetti'
 import { ArrowRight, CheckCircle2, Download, X } from 'lucide-react'
-import { agentsApi, billingApi, marketplaceApi } from '../../api/client'
+import { agentsApi, extractApiError, marketplaceApi } from '../../api/client'
 import { useAuth } from '../../contexts/AuthContext'
 import { toast } from '../../lib/toast'
 import type { MarketplaceListing } from '../../types'
@@ -41,40 +41,17 @@ export function InstallModal({ listing, open, onClose }: InstallModalProps) {
     setReinstall(false)
   }, [listing?.id, open])
 
-  const { data: usage } = useQuery({
-    queryKey: ['billing', 'usage', 'install-modal'],
-    queryFn: billingApi.usage,
-    enabled: open && auth.isAuthenticated,
-  })
   const { data: agents = [] } = useQuery({
     queryKey: ['agents', 'install-modal'],
     queryFn: agentsApi.list,
     enabled: open && auth.isAuthenticated && listing?.listing_type === 'eval_suite',
   })
 
-  const warning = useMemo(() => {
-    if (!usage || !listing) return null
-    const key = listing.listing_type === 'agent'
-      ? 'agents'
-      : listing.listing_type === 'workflow'
-        ? 'workflows'
-        : listing.listing_type === 'tool_config'
-          ? 'custom_tools'
-          : 'eval_suites'
-    const item = usage[key]
-    if (item?.percent >= 85) {
-      return `Your ${key.replace('_', ' ')} usage is already at ${item.percent}%. This install may hit your plan limit soon.`
-    }
-    return null
-  }, [usage, listing])
-
   const install = useMutation({
     mutationFn: () => marketplaceApi.install(listing!.id, { agent_id: agentId || undefined, reinstall }),
     onSuccess: result => {
       qc.invalidateQueries({ queryKey: ['marketplace', 'installs'] })
-      if (result.already_installed) {
-        toast.info('Already installed in this organization. Enable reinstall to create a fresh copy.')
-      } else if (result.reinstalled) {
+      if (result.reinstalled) {
         toast.success('Fresh copy installed')
       } else {
         confetti({ particleCount: 60, spread: 50, origin: { y: 0.72 }, disableForReducedMotion: true })
@@ -85,7 +62,14 @@ export function InstallModal({ listing, open, onClose }: InstallModalProps) {
         type: result.type ?? 'agent',
       })
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Install failed'),
+    onError: error => {
+      const status = (error as { response?: { status?: number } })?.response?.status
+      if (status === 409) {
+        toast.info(extractApiError(error))
+        return
+      }
+      toast.error(extractApiError(error))
+    },
   })
 
   if (!open || !listing) return null
@@ -157,9 +141,6 @@ export function InstallModal({ listing, open, onClose }: InstallModalProps) {
                 Create a fresh copy if already installed
                 <input type="checkbox" className="accent-accent-500" checked={reinstall} onChange={event => setReinstall(event.target.checked)} />
               </label>
-
-              {warning && <div className="rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100">{warning}</div>}
-
               <button
                 className="btn-primary h-12 w-full"
                 disabled={install.isPending || (listing.listing_type === 'eval_suite' && !agentId)}

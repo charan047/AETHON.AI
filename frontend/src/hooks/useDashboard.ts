@@ -48,6 +48,7 @@ export function useDashboard() {
   return {
     summary,
     loading: query.isLoading,
+    isError: query.isError,
     error: query.error,
     lastUpdated: query.dataUpdatedAt ? new Date(query.dataUpdatedAt) : null,
   }

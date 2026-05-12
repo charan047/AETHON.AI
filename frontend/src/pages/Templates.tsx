@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { workflowsApi, agentsApi } from '../api/client'
+import { workflowsApi, agentsApi, extractApiError } from '../api/client'
 import { Layers, GitBranch, Bot, Wand2, CheckCircle } from 'lucide-react'
 import { useState } from 'react'
 import { clsx } from 'clsx'
@@ -119,8 +119,8 @@ export function Templates() {
       qc.invalidateQueries({ queryKey: ['workflows'] })
       setDeployed(d => [...d, template.id])
       toast.success(`Template "${template.name}" deployed! Agents and workflow created.`)
-    } catch (e: any) {
-      toast.error(e.response?.data?.detail || 'Failed to deploy template')
+    } catch (e) {
+      toast.error(extractApiError(e))
     } finally {
       setDeploying(null)
     }

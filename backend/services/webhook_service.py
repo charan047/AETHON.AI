@@ -5,9 +5,7 @@ import logging
 import secrets
 import uuid
 from datetime import datetime
-from typing import Any
 
-import stripe
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,10 +19,10 @@ from services.websocket_manager import ws_manager
 class WebhookService:
     """
     Handles inbound webhooks that trigger workflows.
-    Supports: generic webhooks, GitHub events, Stripe events.
+    Supports: generic webhooks, GitHub events, Linear events, and Vercel events.
     """
 
-    SUPPORTED_SOURCES = ["generic", "github", "stripe", "linear", "vercel"]
+    SUPPORTED_SOURCES = ["generic", "github", "linear", "vercel"]
 
     def __init__(self):
         self.logger = logging.getLogger("webhooks")
@@ -63,7 +61,7 @@ class WebhookService:
             db.add(endpoint)
             await db.commit()
             await db.refresh(endpoint)
-            endpoint._plain_signing_secret = raw_secret  # shown once by API response
+            endpoint._plain_signing_secret = raw_secret
             return endpoint
         finally:
             if owns_session:
@@ -117,14 +115,15 @@ class WebhookService:
             db.add(execution)
             await db.commit()
 
-            await ws_manager.broadcast(
+            await ws_manager.broadcast_to_channel(
+                f"org:{endpoint.org_id}",
                 {
                     "type": "workflow_webhook_trigger",
                     "workflow_id": endpoint.workflow_id,
                     "execution_id": execution_id,
                     "source": endpoint.source,
                     "event_type": event_type,
-                }
+                },
             )
 
             engine = WorkflowEngine(db)
@@ -149,8 +148,6 @@ class WebhookService:
     def _event_type(self, source: str, headers: dict, payload: dict) -> str:
         if source == "github":
             return headers.get("x-github-event", "unknown")
-        if source == "stripe":
-            return str(payload.get("type", "unknown"))
         return str(payload.get("type") or payload.get("event") or source)
 
     def _verify_signature(self, source: str, body: bytes, headers: dict, secret: str) -> bool:
@@ -158,8 +155,6 @@ class WebhookService:
             return False
         if source == "github":
             return self._verify_github_signature(body, headers.get("x-hub-signature-256", ""), secret)
-        if source == "stripe":
-            return self._verify_stripe_signature(body, headers.get("stripe-signature", ""), secret)
         return self._verify_generic_signature(body, headers, secret)
 
     def _verify_generic_signature(self, body: bytes, headers: dict, secret: str) -> bool:
@@ -183,18 +178,9 @@ class WebhookService:
         expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, signature)
 
-    def _verify_stripe_signature(self, body: bytes, signature: str, secret: str) -> bool:
-        try:
-            stripe.Webhook.construct_event(body, signature, secret)
-            return True
-        except Exception:
-            return False
-
     def _format_event(self, source: str, event_type: str, payload: dict) -> str:
         if source == "github":
             return self._format_github_event(event_type, payload)
-        if source == "stripe":
-            return self._format_stripe_event(event_type, payload)
         return f"{source.title()} webhook event '{event_type}':\n{json.dumps(payload, indent=2, default=str)[:5000]}"
 
     def _format_github_event(self, event_type: str, payload: dict) -> str:
@@ -218,21 +204,5 @@ class WebhookService:
             return f"Comment on issue #{issue.get('number')} by {user}: {preview}"
         return f"GitHub {event_type} event:\n{json.dumps(payload, indent=2, default=str)[:5000]}"
 
-    def _format_stripe_event(self, event_type: str, payload: dict) -> str:
-        data = ((payload.get("data") or {}).get("object") or {}) if isinstance(payload, dict) else {}
-        if event_type == "payment_intent.succeeded":
-            amount = (data.get("amount_received") or data.get("amount") or 0) / 100
-            email = data.get("receipt_email") or data.get("customer_email") or "unknown customer"
-            return f"Stripe payment of ${amount:,.2f} received from {email}"
-        if event_type == "customer.subscription.created":
-            plan = ((data.get("items") or {}).get("data") or [{}])[0].get("price", {}).get("nickname", "unknown plan")
-            email = data.get("customer_email") or data.get("customer") or "unknown customer"
-            return f"New subscription: {plan} from {email}"
-        if event_type == "customer.subscription.deleted":
-            email = data.get("customer_email") or data.get("customer") or "unknown customer"
-            return f"Subscription cancelled: {email}"
-        if event_type == "invoice.payment_failed":
-            amount = (data.get("amount_due") or 0) / 100
-            email = data.get("customer_email") or "unknown customer"
-            return f"Payment failed: ${amount:,.2f} from {email}"
-        return f"Stripe {event_type} event:\n{json.dumps(payload, indent=2, default=str)[:5000]}"
+
+webhook_service = WebhookService()

@@ -20,3 +20,9 @@ coverage_report/
 backend/coverage_report/
 backups/
 docs/.DS_Store
+.claude/
+.cursor/
+*.zip
+chroma_db/
+backend/coverage.xml
+backend/STABILITY_AUDIT.md

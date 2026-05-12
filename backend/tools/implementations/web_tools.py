@@ -23,11 +23,6 @@ except ImportError:  # pragma: no cover
     TTLCache = None
 
 try:
-    from duckduckgo_search import DDGS
-except ImportError:  # pragma: no cover
-    DDGS = None
-
-try:
     from lxml import html
 except ImportError:  # pragma: no cover
     html = None
@@ -98,6 +93,32 @@ class _SimpleTTLCache(dict):
 
     def __setitem__(self, key, value):
         super().__setitem__(key, (value, time.time() + self.ttl))
+
+
+async def _html_search_results(query: str, max_results: int) -> list[dict[str, str]]:
+    async with httpx.AsyncClient(
+        timeout=20.0,
+        follow_redirects=True,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; AethonBot/1.0)"},
+    ) as client:
+        response = await client.get("https://www.bing.com/search", params={"q": query})
+        response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "lxml")
+    results: list[dict[str, str]] = []
+    for container in soup.select("li.b_algo")[:max_results]:
+        title_anchor = container.select_one("h2 a")
+        snippet_node = container.select_one(".b_caption p")
+        if not title_anchor:
+            continue
+        results.append(
+            {
+                "title": title_anchor.get_text(" ", strip=True),
+                "url": title_anchor.get("href", ""),
+                "snippet": snippet_node.get_text(" ", strip=True) if snippet_node else "",
+            }
+        )
+    return results
 
 
 @tool_registry.register
@@ -218,26 +239,19 @@ class WebIntelligenceTool(BaseTool):
         return monitor_webpage_change
 
     async def _web_search_impl(self, query: str, num_results: int = 5) -> str:
-        if DDGS is None:
-            raise RuntimeError("duckduckgo-search is not installed. Run pip install -r requirements.txt.")
-
         num_results = max(1, min(int(num_results or 5), 15))
         cache_key = f"{query}:{num_results}"
         cached = self._search_cache.get(cache_key)
         if cached:
             return cached
 
-        def _search():
-            with DDGS() as ddgs:
-                return list(ddgs.text(query, max_results=num_results * 2))
-
-        results = await asyncio.get_running_loop().run_in_executor(None, _search)
+        results = await _html_search_results(query, num_results * 2)
         filtered = []
         for result in results:
-            url = result.get("href") or result.get("url") or ""
+            url = result.get("url") or ""
             title = result.get("title", "")
-            snippet = result.get("body", "")
-            if not url or "ad_domain" in result or result.get("sponsored"):
+            snippet = result.get("snippet", "")
+            if not url:
                 continue
             filtered.append(f"{title}\n{url}\n{snippet}\n---")
             if len(filtered) >= num_results:

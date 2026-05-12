@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Clock3, GitCompareArrows, RotateCcw, X } from 'lucide-react'
-import { workflowsApi } from '../../api/client'
+import { extractApiError, workflowsApi } from '../../api/client'
 import type { Workflow, WorkflowVersion, WorkflowVersionDetail } from '../../types'
 import { AgentAvatar } from '../ui/AgentAvatar'
 import { SkeletonCard } from '../ui/Skeleton'
@@ -90,7 +90,7 @@ export function VersionHistory({ workflow, open, onClose, onRestored }: VersionH
       toast.success(`Restored to v${selectedVersion?.version_number || ''}`)
       onClose()
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || 'Failed to restore workflow'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   if (!open) return null

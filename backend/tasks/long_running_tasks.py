@@ -9,6 +9,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from celery_app import celery_app
 from config import settings
+from tasks.async_runtime import run_async
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -58,7 +59,7 @@ def _load_checkpoint(task_id: str) -> dict:
 def _broadcast(event: dict):
     from services.websocket_manager import ws_manager
 
-    asyncio.run(ws_manager.broadcast(event))
+    run_async(ws_manager.broadcast(event))
 
 
 @celery_app.task(
@@ -193,7 +194,7 @@ def long_agent_task(
                 }
             )
 
-            output = asyncio.run(_run_step(index, step_name, outputs))
+            output = run_async(_run_step(index, step_name, outputs))
             outputs.append(f"{step_name}: {output}")
             _save_checkpoint(
                 task_id,

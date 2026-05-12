@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from auth.security import create_access_token, hash_password
 from database.db import Base, get_db
-from database.models import Agent, OrgMember, OrgMemberRole, OrgPlan, Organization, User, UserRole, Workflow
+from database.models import Agent, OrgMember, OrgMemberRole, Organization, User, UserRole, Workflow
 from main import app
 from middleware.rate_limit import limiter
 from middleware import plan_limits as plan_limits_middleware
@@ -74,8 +74,6 @@ async def client(db: AsyncSession, db_engine) -> AsyncGenerator[AsyncClient, Non
     previous_enabled = getattr(limiter, "enabled", True)
     limiter.enabled = False
     previous_scheduler = getattr(app.state, "scheduler", None)
-    previous_middleware_session_local = plan_limits_middleware.AsyncSessionLocal
-    plan_limits_middleware.AsyncSessionLocal = session_factory
     app.state.scheduler = DummyScheduler()
     app.dependency_overrides[get_db] = override_get_db
     async with AsyncClient(
@@ -91,7 +89,6 @@ async def client(db: AsyncSession, db_engine) -> AsyncGenerator[AsyncClient, Non
             pass
     else:
         app.state.scheduler = previous_scheduler
-    plan_limits_middleware.AsyncSessionLocal = previous_middleware_session_local
     limiter.enabled = previous_enabled
 
 
@@ -115,7 +112,7 @@ async def test_org(db: AsyncSession, test_user: User) -> Organization:
     org = Organization(
         name="Test Company",
         slug="test-company",
-        plan=OrgPlan.solo,
+        plan="open_source",
         owner_user_id=test_user.id,
     )
     db.add(org)

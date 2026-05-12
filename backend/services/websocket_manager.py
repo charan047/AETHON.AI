@@ -25,26 +25,40 @@ class ConnectionManager:
         self.connection_orgs: dict[WebSocket, str | None] = {}
         self.log_buffer: deque = deque(maxlen=500)
         self._redis = None
+        self._redis_loop = None
         self._pubsub_task = None
+        self._pubsub_task_loop = None
 
     async def startup(self):
         try:
             await self._ensure_redis_client()
             await self._sync_connection_count()
             self._pubsub_task = asyncio.create_task(self._redis_listener())
+            self._pubsub_task_loop = asyncio.get_running_loop()
         except Exception as exc:
             logger.warning("Redis unavailable for WebSocket pub/sub, using local broadcast: %s", exc)
             if self._redis:
                 await self._redis.aclose()
             self._redis = None
+            self._redis_loop = None
             self._pubsub_task = None
+            self._pubsub_task_loop = None
 
     async def _ensure_redis_client(self):
+        current_loop = asyncio.get_running_loop()
         if self._redis is not None:
-            return self._redis
+            if self._redis_loop is current_loop:
+                return self._redis
+            try:
+                await self._redis.aclose()
+            except Exception:
+                pass
+            self._redis = None
+            self._redis_loop = None
         client = redis.from_url(settings.redis_url, decode_responses=True)
         await client.ping()
         self._redis = client
+        self._redis_loop = current_loop
         return client
 
     async def shutdown(self):
@@ -55,11 +69,13 @@ class ConnectionManager:
             except asyncio.CancelledError:
                 pass
             self._pubsub_task = None
+            self._pubsub_task_loop = None
 
         if self._redis:
             await self._redis.delete(self._connection_key())
             await self._redis.aclose()
             self._redis = None
+            self._redis_loop = None
 
     async def connect(
         self,

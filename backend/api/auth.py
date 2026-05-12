@@ -21,7 +21,7 @@ from auth.security import (
 from config import settings
 from database.db import get_db
 from database.seed_models import seed_org_default_model
-from database.models import ApiKey, AuditAction, OrgMember, OrgMemberRole, OrgPlan, Organization, User, UserRole
+from database.models import ApiKey, AuditAction, OrgMember, OrgMemberRole, Organization, User, UserRole
 from middleware.rate_limit import limiter
 from services import audit_log_service
 
@@ -121,9 +121,8 @@ async def register(
         id=str(uuid.uuid4()),
         name="My Company",
         slug=await _unique_org_slug(db, user.email),
-        plan=OrgPlan.free,
+        plan="open_source",
         owner_user_id=user.id,
-        billing_email=user.email,
     )
     db.add(org)
     await db.flush()

@@ -4,18 +4,27 @@
 
 ### Bugs
 
-Open a GitHub issue using the bug report template.
+Open a GitHub issue with:
+
+- what you expected
+- what actually happened
+- reproduction steps
+- logs or screenshots if useful
 
 ### Feature Requests
 
-Open a GitHub issue using the feature request template.
+Open a GitHub issue or discussion describing:
+
+- the problem you are trying to solve
+- why the current product is insufficient
+- the workflow you want to support
 
 ### Security Issues
 
 Do not open a public issue.
-Follow the process in [SECURITY.md](SECURITY.md).
+Follow [SECURITY.md](SECURITY.md).
 
-### Setup And Contribution Questions
+### Setup Or Contribution Questions
 
 Start with:
 
@@ -28,17 +37,15 @@ Start with:
 Please check:
 
 - existing issues
-- [docs/OPEN_SOURCE_LAUNCH_CHECKLIST.md](docs/OPEN_SOURCE_LAUNCH_CHECKLIST.md) for repo-level expectations
-- [backend/docs/quality_report.md](backend/docs/quality_report.md) for recent verification context
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+- [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 
-## What Makes A Good Support Request
+## High-Signal Support Requests
 
-Include:
+Helpful details:
 
-- what you expected
-- what actually happened
-- screenshots or logs if relevant
-- environment details
-- reproduction steps
-
-High-signal issue reports dramatically increase the chance of a quick, correct fix.
+- backend or frontend commit/branch
+- whether you are using Docker or local dev servers
+- browser and OS
+- exact failing route or API endpoint
+- whether the issue is tenant-specific, auth-related, or runtime-related

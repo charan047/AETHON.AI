@@ -12,7 +12,7 @@ from auth.dependencies import get_current_user
 from auth.org_context import get_org_context, require_org_admin, require_org_owner
 from database.db import get_db
 from database.seed_models import seed_org_default_model
-from database.models import AuditAction, OrgInvite, OrgMember, OrgMemberRole, OrgPlan, Organization, User
+from database.models import AuditAction, OrgInvite, OrgMember, OrgMemberRole, Organization, User
 from services import audit_log_service
 from utils.sanitize import validate_url
 
@@ -30,6 +30,7 @@ class OrganizationUpdate(BaseModel):
     slug: str | None = Field(default=None, min_length=1, max_length=100)
     timezone: str | None = Field(default=None, max_length=50)
     logo_url: str | None = Field(default=None, max_length=500)
+    agent_message_retention_days: int | None = Field(default=None)
 
 
 class InviteCreate(BaseModel):
@@ -72,11 +73,11 @@ def _org_payload(org: Organization, role: OrgMemberRole | str | None = None, mem
         "max_agents": org.max_agents,
         "max_workflows": org.max_workflows,
         "max_monthly_executions": org.max_monthly_executions,
-        "billing_email": org.billing_email,
         "monthly_budget_usd": org.monthly_budget_usd,
         "current_period_executions": org.current_period_executions,
         "timezone": org.timezone,
         "logo_url": org.logo_url,
+        "agent_message_retention_days": org.agent_message_retention_days,
         "custom_domain": org.custom_domain,
         "is_active": org.is_active,
         "created_at": org.created_at,
@@ -180,19 +181,12 @@ async def create_organization(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    org_count = await db.scalar(
-        select(func.count(OrgMember.id)).where(OrgMember.user_id == current_user.id)
-    ) or 0
-    if org_count >= 3:
-        raise HTTPException(status_code=429, detail="Free users can create up to 3 organizations")
-
     org = Organization(
         id=str(uuid.uuid4()),
         name=data.name,
         slug=await _unique_slug(db, data.slug or data.name),
-        plan=OrgPlan.free,
+        plan="open_source",
         owner_user_id=current_user.id,
-        billing_email=current_user.email,
     )
     db.add(org)
     await db.flush()
@@ -232,7 +226,11 @@ async def update_organization(
     org, member = await _get_org_member_or_403(org_id, current_user.id, db)
     if member.role not in (OrgMemberRole.owner, OrgMemberRole.admin):
         raise HTTPException(status_code=403, detail="Organization admin access required")
-    updates = data.model_dump(exclude_none=True)
+    updates = data.model_dump(exclude_unset=True)
+    if "agent_message_retention_days" in updates:
+        value = updates["agent_message_retention_days"]
+        if value is not None and value not in {7, 30, 45}:
+            raise HTTPException(status_code=400, detail="Retention must be 7, 30, or 45 days")
     if "logo_url" in updates and not validate_url(updates["logo_url"]):
         raise HTTPException(status_code=400, detail="Invalid logo URL")
     owner_only_fields = {"name", "slug", "logo_url"}

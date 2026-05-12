@@ -6,6 +6,7 @@ import json
 import re
 import logging
 from datetime import datetime
+from uuid import uuid4
 from sqlalchemy import select
 
 from runtime.agent_runner import AgentRunner, build_llm, _extract_text
@@ -13,7 +14,7 @@ from runtime.condition_evaluator import ConditionEvaluator
 from runtime.parallel_executor import ParallelExecutor
 from config import settings
 from database.db import AsyncSessionLocal
-from database.models import Execution, ExecutionStatus
+from database.models import Execution, ExecutionStatus, ExecutionStep
 from services.hitl_service import HITLService
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,155 @@ class WorkflowExecutor:
         self.hitl_service = hitl_service or HITLService()
         self._runners: dict[str, AgentRunner] = {}
 
+    @staticmethod
+    def _is_standup_execution(input_message: str) -> bool:
+        normalized = (input_message or "").upper()
+        return "MORNING STANDUP" in normalized or "DAILY TEAM STANDUP" in normalized
+
+    def _build_agent_task(
+        self,
+        *,
+        input_message: str,
+        previous_output: str,
+        agent_outputs: dict[str, str],
+        agent_name: str,
+    ) -> str:
+        if self._is_standup_execution(input_message):
+            if agent_outputs:
+                prior_updates = "\n\n".join(
+                    f"**{name}**: {output}" for name, output in agent_outputs.items()
+                )
+                previous_speaker = list(agent_outputs.keys())[-1]
+                return (
+                    f"{input_message}\n\n"
+                    f"--- Standup so far ---\n"
+                    f"{prior_updates}\n\n"
+                    f"--- Your turn ---\n"
+                    f"You are {agent_name}. Give your update now. "
+                    f"If relevant, briefly acknowledge or respond to what {previous_speaker} "
+                    f"said before giving your own update."
+                )
+            return (
+                f"{input_message}\n\n"
+                f"You are {agent_name}. You're going first in the standup. Give your update."
+            )
+
+        if agent_outputs:
+            context = "\n\n".join(
+                f"[{name} output]:\n{output}" for name, output in agent_outputs.items()
+            )
+            return f"Previous agent outputs:\n{context}\n\nOriginal task: {input_message}"
+        return previous_output
+
+    async def _broadcast_agent_spoke(
+        self,
+        *,
+        execution_id: str,
+        agent_name: str,
+        agent_id: str,
+        message: str,
+        ordering_hint: int,
+    ) -> None:
+        if not self.ws_manager:
+            return
+        logger.info(
+            "broadcast_to_channel execution:%s agent_spoke %s",
+            execution_id,
+            agent_name,
+        )
+        await self.ws_manager.broadcast_to_channel(
+            f"execution:{execution_id}",
+            {
+                "event": "agent_spoke",
+                "execution_id": execution_id,
+                "agent_name": agent_name,
+                "agent_id": agent_id,
+                "message": message,
+                "step_index": ordering_hint,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        )
+
+    async def _save_standup_summary(
+        self,
+        *,
+        execution_id: str,
+        input_message: str,
+        agent_outputs: dict[str, str],
+    ) -> str:
+        updates_text = "\n\n".join(
+            f"{name}: {output}" for name, output in agent_outputs.items()
+        )
+        timestamp = datetime.utcnow()
+        human_timestamp = timestamp.strftime("%Y-%m-%d %H:%M UTC")
+        summary_prompt = (
+            "You are the chief of staff summarizing a live standup for the CEO.\n\n"
+            f"Standup task:\n{input_message}\n\n"
+            f"Agent updates:\n{updates_text}\n\n"
+            "Write a concise standup summary with:\n"
+            "1. What got done\n"
+            "2. What is happening today\n"
+            "3. Blockers or asks for the CEO\n\n"
+            "Keep it under 180 words and make it sound like an executive recap, not raw notes."
+        )
+        summary_llm = build_llm(settings.default_model, temperature=0.2, max_tokens=500)
+        try:
+            summary_response = await summary_llm.ainvoke([HumanMessage(content=summary_prompt)])
+            summary_body = _extract_text(summary_response.content).strip()
+        except Exception as exc:
+            logger.warning("Standup summary synthesis failed for execution %s: %s", execution_id, exc)
+            summary_body = (
+                "Standup recap:\n"
+                + "\n".join(f"- {name}: {output[:160]}" for name, output in agent_outputs.items())
+            )
+
+        summary_content = f"Standup summary • {human_timestamp}\n\n{summary_body}"
+
+        async with AsyncSessionLocal() as db:
+            execution = await db.scalar(select(Execution).where(Execution.id == execution_id))
+            if not execution:
+                return summary_content
+
+            existing_steps = execution.steps or []
+            next_step_index = max((step.step_index for step in existing_steps), default=-1) + 1
+            step = ExecutionStep(
+                id=str(uuid4()),
+                execution_id=execution_id,
+                org_id=execution.org_id,
+                step_type="update",
+                content=summary_content,
+                step_index=next_step_index,
+                created_at=timestamp,
+            )
+            db.add(step)
+            await db.commit()
+
+            if self.ws_manager:
+                await self.ws_manager.broadcast_to_channel(
+                    f"execution:{execution_id}",
+                    {
+                        "event": "execution_step",
+                        "execution_id": execution_id,
+                        "step": {
+                            "id": step.id,
+                            "step_type": "update",
+                            "content": summary_content,
+                            "tool_name": None,
+                            "tool_input": None,
+                            "tool_output": None,
+                            "tool_success": True,
+                            "step_index": next_step_index,
+                            "duration_ms": None,
+                            "tokens_used": None,
+                            "timestamp": timestamp.isoformat(),
+                            "agent_id": None,
+                            "agent_name": "Standup Summary",
+                        },
+                    },
+                )
+
+        return summary_content
+
     def _get_runner(self, agent_id: str) -> AgentRunner:
         if agent_id not in self._runners:
             self._runners[agent_id] = AgentRunner(
@@ -64,6 +214,14 @@ class WorkflowExecutor:
                 memory_config=self.memory_configs.get(agent_id),
             )
         return self._runners[agent_id]
+
+    async def _broadcast_org_event(self, message: dict) -> None:
+        if not self.ws_manager:
+            return
+        await self.ws_manager.broadcast_to_channel(
+            f"org:{self.workflow.org_id}",
+            message,
+        )
 
     @staticmethod
     def _is_hitl_node(node: dict) -> bool:
@@ -192,7 +350,7 @@ class WorkflowExecutor:
         )
 
         if self.ws_manager:
-            await self.ws_manager.broadcast(
+            await self._broadcast_org_event(
                 {
                     "type": "workflow_paused",
                     "execution_id": execution_id,
@@ -212,7 +370,7 @@ class WorkflowExecutor:
         if decision.get("decision") == "approved":
             await self._update_execution_status(execution_id, ExecutionStatus.running.value)
             if self.ws_manager:
-                await self.ws_manager.broadcast(
+                await self._broadcast_org_event(
                     {
                         "type": "workflow_resumed",
                         "execution_id": execution_id,
@@ -232,7 +390,7 @@ class WorkflowExecutor:
                 completed=True,
             )
             if self.ws_manager:
-                await self.ws_manager.broadcast(
+                await self._broadcast_org_event(
                     {
                         "type": "workflow_rejected",
                         "execution_id": execution_id,
@@ -250,7 +408,7 @@ class WorkflowExecutor:
             completed=True,
         )
         if self.ws_manager:
-            await self.ws_manager.broadcast(
+            await self._broadcast_org_event(
                 {
                     "type": "workflow_timed_out",
                     "execution_id": execution_id,
@@ -325,24 +483,24 @@ class WorkflowExecutor:
                     prev_outputs = state.get("agent_outputs", {})
                     last_message = state["messages"][-1].content if state["messages"] else ""
                     last_message = _extract_text(last_message)
-
-                    if prev_outputs:
-                        context = "\n\n".join(
-                            f"[{k} output]:\n{v}" for k, v in prev_outputs.items()
-                        )
-                        task = f"Previous agent outputs:\n{context}\n\nOriginal task: {last_message}"
-                    else:
-                        task = last_message
+                    task = self._build_agent_task(
+                        input_message=last_message,
+                        previous_output=last_message,
+                        agent_outputs=prev_outputs,
+                        agent_name=name,
+                    )
 
                     execution_id = state.get("execution_id", "")
 
                     async def broadcast(event):
                         if self.ws_manager:
-                            await self.ws_manager.broadcast({
-                                **event,
-                                "execution_id": execution_id,
-                                "node_id": node_id,
-                            })
+                            await self._broadcast_org_event(
+                                {
+                                    **event,
+                                    "execution_id": execution_id,
+                                    "node_id": node_id,
+                                }
+                            )
 
                     response, tokens = await r.run(
                         task,
@@ -355,14 +513,23 @@ class WorkflowExecutor:
                     )
 
                     if self.ws_manager:
-                        await self.ws_manager.broadcast({
-                            "type": "agent_done",
-                            "agent": name,
-                            "node_id": node_id,
-                            "response": response[:500],
-                            "tokens": tokens,
-                            "execution_id": execution_id,
-                        })
+                        await self._broadcast_org_event(
+                            {
+                                "type": "agent_done",
+                                "agent": name,
+                                "node_id": node_id,
+                                "response": response[:500],
+                                "tokens": tokens,
+                                "execution_id": execution_id,
+                            }
+                        )
+                        await self._broadcast_agent_spoke(
+                            execution_id=execution_id,
+                            agent_name=name,
+                            agent_id=r.config.id,
+                            message=response,
+                            ordering_hint=tokens,
+                        )
 
                     return {
                         "messages": [AIMessage(content=response, name=name)],
@@ -406,12 +573,14 @@ class WorkflowExecutor:
         agent_names = [va["agent"].name for va in valid_agents]
 
         if self.ws_manager:
-            await self.ws_manager.broadcast({
-                "type": "workflow_plan",
-                "execution_id": execution_id,
-                "plan": agent_names,
-                "mode": "orchestrator",
-            })
+            await self._broadcast_org_event(
+                {
+                    "type": "workflow_plan",
+                    "execution_id": execution_id,
+                    "plan": agent_names,
+                    "mode": "orchestrator",
+                }
+            )
 
         planner_llm = build_llm(settings.default_model, temperature=0.2, max_tokens=256)
         total_tokens = 0
@@ -460,7 +629,9 @@ class WorkflowExecutor:
 
             async def _broadcast(event, _eid=execution_id, _nid=node_id):
                 if self.ws_manager:
-                    await self.ws_manager.broadcast({**event, "execution_id": _eid, "node_id": _nid})
+                    await self._broadcast_org_event(
+                        {**event, "execution_id": _eid, "node_id": _nid}
+                    )
 
             response, tokens = await runner.run(
                 task,
@@ -475,14 +646,16 @@ class WorkflowExecutor:
             agent_outputs[name] = response
 
             if self.ws_manager:
-                await self.ws_manager.broadcast({
-                    "type": "agent_done",
-                    "agent": name,
-                    "node_id": node_id,
-                    "response": response[:500],
-                    "tokens": tokens,
-                    "execution_id": execution_id,
-                })
+                await self._broadcast_org_event(
+                    {
+                        "type": "agent_done",
+                        "agent": name,
+                        "node_id": node_id,
+                        "response": response[:500],
+                        "tokens": tokens,
+                        "execution_id": execution_id,
+                    }
+                )
 
         if not agent_outputs:
             return "No agents completed successfully.", total_tokens
@@ -549,15 +722,20 @@ class WorkflowExecutor:
                 plan.append(self.agents_map[agent_id].name)
 
         if self.ws_manager:
-            await self.ws_manager.broadcast({
-                "type": "workflow_plan",
-                "execution_id": execution_id,
-                "plan": plan,
-            })
+            await self._broadcast_org_event(
+                {
+                    "type": "workflow_plan",
+                    "execution_id": execution_id,
+                    "plan": plan,
+                }
+            )
 
         total_tokens = 0
         previous_output = input_message
         agent_outputs: dict[str, str] = {}
+        last_response_content: str | None = None
+        identical_response_streak = 0
+        max_identical_responses = 3
 
         while current_node is not None:
             node_id = current_node["id"]
@@ -601,7 +779,7 @@ class WorkflowExecutor:
                 agent_outputs[data.get("label") or node_id] = response
 
                 if self.ws_manager:
-                    await self.ws_manager.broadcast(
+                    await self._broadcast_org_event(
                         {
                             "type": "parallel_group_done",
                             "node_id": node_id,
@@ -627,16 +805,16 @@ class WorkflowExecutor:
             agent_id = current_node.get("data", {}).get("agent_id")
             runner = self._get_runner(agent_id)
             agent_name = self.agents_map[agent_id].name
-
-            if agent_outputs:
-                context = "\n\n".join(f"[{name} output]:\n{output}" for name, output in agent_outputs.items())
-                task = f"Previous agent outputs:\n{context}\n\nOriginal task: {input_message}"
-            else:
-                task = previous_output
+            task = self._build_agent_task(
+                input_message=input_message,
+                previous_output=previous_output,
+                agent_outputs=agent_outputs,
+                agent_name=agent_name,
+            )
 
             async def broadcast(event, _node_id=node_id):
                 if self.ws_manager:
-                    await self.ws_manager.broadcast(
+                    await self._broadcast_org_event(
                         {
                             **event,
                             "execution_id": execution_id,
@@ -657,8 +835,24 @@ class WorkflowExecutor:
             previous_output = response
             agent_outputs[agent_name] = response
 
+            if response.strip() == (last_response_content or "").strip():
+                identical_response_streak += 1
+                if identical_response_streak >= max_identical_responses:
+                    raise WorkflowExecutionStopped(
+                        status=ExecutionStatus.failed.value,
+                        output=(
+                            f"Workflow stopped: agent '{agent_name}' produced "
+                            f"identical output {max_identical_responses} consecutive times. "
+                            "This typically means the agent is stuck or looping. "
+                            "Check the agent's system prompt and tools."
+                        ),
+                    )
+            else:
+                identical_response_streak = 0
+                last_response_content = response
+
             if self.ws_manager:
-                await self.ws_manager.broadcast(
+                await self._broadcast_org_event(
                     {
                         "type": "agent_done",
                         "agent": agent_name,
@@ -668,6 +862,21 @@ class WorkflowExecutor:
                         "execution_id": execution_id,
                     }
                 )
+                await self._broadcast_agent_spoke(
+                    execution_id=execution_id,
+                    agent_name=agent_name,
+                    agent_id=agent_id,
+                    message=response,
+                    ordering_hint=total_tokens,
+                )
             current_node = get_next_node(node_id)
+
+        if self._is_standup_execution(input_message) and len(agent_outputs) >= 2:
+            summary_output = await self._save_standup_summary(
+                execution_id=execution_id,
+                input_message=input_message,
+                agent_outputs=agent_outputs,
+            )
+            return summary_output, total_tokens
 
         return previous_output, total_tokens

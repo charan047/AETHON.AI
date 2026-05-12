@@ -76,6 +76,7 @@ class CostTracker:
                 execution_id=execution_id,
                 agent_id=agent_id,
                 user_id=user_id,
+                org_id=execution.org_id,
                 model=model,
                 input_tokens=input_tokens or 0,
                 output_tokens=output_tokens or 0,
@@ -162,8 +163,8 @@ class CostTracker:
                 .join(Execution, Execution.id == ExecutionCostLog.execution_id)
                 .where(
                     ExecutionCostLog.user_id == user_id,
+                    ExecutionCostLog.org_id == org_id,
                     ExecutionCostLog.created_at >= month_start,
-                    Execution.org_id == org_id,
                 )
             ) or 0.0
 

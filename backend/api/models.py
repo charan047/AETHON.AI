@@ -137,6 +137,39 @@ async def _agent_count_for_config(config_id: str, org_id: str, db: AsyncSession)
     return int(result.scalar() or 0)
 
 
+async def _ensure_single_default_model(org_id: str, db: AsyncSession) -> Optional[ModelConfig]:
+    result = await db.execute(
+        select(ModelConfig)
+        .where(ModelConfig.org_id == org_id)
+        .where(ModelConfig.is_active == True)  # noqa: E712
+        .order_by(ModelConfig.is_default.desc(), ModelConfig.updated_at.desc(), ModelConfig.created_at.desc())
+    )
+    configs = result.scalars().all()
+    if not configs:
+        return None
+
+    default_configs = [config for config in configs if config.is_default]
+    if len(default_configs) == 1:
+        return default_configs[0]
+
+    if len(default_configs) > 1:
+        canonical = default_configs[0]
+        for duplicate in default_configs[1:]:
+            duplicate.is_default = False
+            duplicate.updated_at = datetime.utcnow()
+        canonical.updated_at = datetime.utcnow()
+        await db.commit()
+        await db.refresh(canonical)
+        return canonical
+
+    canonical = configs[0]
+    canonical.is_default = True
+    canonical.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(canonical)
+    return canonical
+
+
 @public_router.get("/templates")
 async def list_model_templates():
     return [_template_payload(template) for template in BUILT_IN_MODELS]
@@ -152,6 +185,7 @@ async def list_model_configs(
     )
     if not existing_count:
         await seed_org_default_model(ctx.org.id, db)
+    await _ensure_single_default_model(ctx.org.id, db)
 
     agent_count_sq = (
         select(
@@ -185,6 +219,7 @@ async def create_model_config(
     current_user: User = Depends(require_editor),
     ctx: OrgContext = Depends(get_org_context),
 ):
+    await _ensure_single_default_model(ctx.org.id, db)
     config = ModelConfig(
         org_id=ctx.org.id,
         provider=data.provider,
@@ -296,6 +331,7 @@ async def set_default_model_config(
     current_user: User = Depends(require_editor),
     ctx: OrgContext = Depends(get_org_context),
 ):
+    await _ensure_single_default_model(ctx.org.id, db)
     config = await _get_org_scoped_config(config_id, ctx.org.id, db)
     if not config.is_active:
         raise HTTPException(status_code=400, detail="Cannot set an inactive model as default")
@@ -340,7 +376,9 @@ async def delete_model_config(
     db: AsyncSession = Depends(get_db),
     ctx: OrgContext = Depends(get_org_context),
 ):
+    await _ensure_single_default_model(ctx.org.id, db)
     config = await _get_org_scoped_config(config_id, ctx.org.id, db)
+    await db.refresh(config)
     if config.is_default:
         raise HTTPException(
             status_code=409,

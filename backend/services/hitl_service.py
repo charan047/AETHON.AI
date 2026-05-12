@@ -72,87 +72,63 @@ class HITLService:
         resume_token: str,
         timeout_seconds: int = 86400,
     ) -> dict:
-        redis_client = None
-        pubsub = None
-        redis_available = False
+        """
+        Poll Postgres every 5 seconds.
+        Also listen on Redis for fast delivery when available.
+        Postgres is the source of truth — Redis is the fast path.
+        This means: if Redis goes down, agent waits at most 5 seconds
+        before the next Postgres check, not the full 86400 seconds.
+        """
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        redis_available = True
 
-        try:
-            redis_client = redis.from_url(settings.redis_url, decode_responses=True)
-            pubsub = redis_client.pubsub()
-            await pubsub.subscribe(HITL_DECISIONS_CHANNEL)
-            redis_available = True
-        except Exception as exc:
-            logger.warning(
-                "HITL Redis subscription unavailable for approval %s; using Postgres polling fallback: %s",
-                approval_id,
-                exc,
-            )
+        while asyncio.get_running_loop().time() < deadline:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
 
-        try:
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + timeout_seconds
-            next_postgres_poll = loop.time()
+            async with AsyncSessionLocal() as check_db:
+                result = await check_db.execute(
+                    select(HumanApprovalRequest).where(HumanApprovalRequest.id == approval_id)
+                )
+                approval = result.scalar_one_or_none()
 
-            while True:
-                now = loop.time()
-                remaining = deadline - now
-                if remaining <= 0:
-                    break
+            if approval and approval.status != ApprovalStatus.pending:
+                return {
+                    "decision": approval.status.value,
+                    "comment": approval.reviewer_comment or "",
+                }
 
-                if now >= next_postgres_poll:
-                    db_decision = await self._check_postgres_decision(approval_id)
-                    if db_decision is not None:
-                        return db_decision
-                    next_postgres_poll = now + POSTGRES_FALLBACK_POLL_SECONDS
-
-                if not redis_available or pubsub is None:
-                    await asyncio.sleep(min(POSTGRES_FALLBACK_POLL_SECONDS, remaining))
-                    continue
-
+            if redis_available:
                 try:
+                    redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+                    pubsub = redis_client.pubsub()
+                    await pubsub.subscribe(HITL_DECISIONS_CHANNEL)
                     msg = await pubsub.get_message(
                         ignore_subscribe_messages=True,
-                        timeout=min(REDIS_POLL_SECONDS, remaining),
+                        timeout=5.0,
                     )
-                except Exception as exc:
+                    await pubsub.aclose()
+                    await redis_client.aclose()
+
+                    if msg and msg.get("type") == "message":
+                        try:
+                            payload = json.loads(msg.get("data") or "{}")
+                            if payload.get("resume_token") == resume_token:
+                                return {
+                                    "decision": payload.get("decision"),
+                                    "comment": payload.get("comment", ""),
+                                }
+                        except json.JSONDecodeError:
+                            pass
+                except Exception as redis_err:
                     logger.warning(
-                        "HITL Redis listener failed for approval %s; continuing with Postgres polling fallback: %s",
-                        approval_id,
-                        exc,
+                        "Redis unavailable in wait_for_decision: %s. Falling back to Postgres polling only.",
+                        redis_err,
                     )
                     redis_available = False
-                    continue
 
-                if not msg or msg.get("type") != "message":
-                    continue
-
-                try:
-                    payload = json.loads(msg.get("data") or "{}")
-                except json.JSONDecodeError:
-                    continue
-
-                if payload.get("resume_token") != resume_token:
-                    continue
-
-                return {
-                    "decision": payload.get("decision"),
-                    "comment": payload.get("comment"),
-                }
-        finally:
-            if pubsub is not None:
-                try:
-                    await pubsub.unsubscribe(HITL_DECISIONS_CHANNEL)
-                except Exception:
-                    pass
-                try:
-                    await pubsub.aclose()
-                except Exception:
-                    pass
-            if redis_client is not None:
-                try:
-                    await redis_client.aclose()
-                except Exception:
-                    pass
+            await asyncio.sleep(5)
 
         async with AsyncSessionLocal() as db:
             result = await db.execute(
@@ -170,7 +146,7 @@ class HITLService:
                 "approval_id": approval_id,
             }
         )
-        return {"decision": "timed_out", "comment": ""}
+        return {"decision": "timed_out", "comment": "Approval timed out"}
 
     async def _check_postgres_decision(self, approval_id: str) -> dict | None:
         async with AsyncSessionLocal() as db:

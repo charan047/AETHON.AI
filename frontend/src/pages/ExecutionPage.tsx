@@ -1,12 +1,12 @@
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ExecutionLiveView } from '../components/execution/ExecutionLiveView'
-import { executionsApi } from '../api/client'
+import { executionsApi, extractApiError } from '../api/client'
 import type { Execution } from '../types'
 
 function refetchExecutionInterval(data: Execution | undefined) {
   const status = data?.status
-  if (!status || ['completed', 'failed', 'timed_out', 'rejected'].includes(status)) {
+  if (!status || ['completed', 'failed', 'cancelled', 'timed_out', 'rejected'].includes(status)) {
     return false
   }
   return 3000
@@ -34,10 +34,7 @@ export function ExecutionPage() {
   }
 
   if (isError || !execution) {
-    const detail =
-      (error as any)?.response?.data?.detail ||
-      (error as Error | undefined)?.message ||
-      'Execution could not be loaded.'
+    const detail = extractApiError(error) || 'Execution could not be loaded.'
     return (
       <div className="mx-auto max-w-2xl space-y-4 px-4 py-10">
         <div className="flex items-center gap-2 text-sm text-white/30">

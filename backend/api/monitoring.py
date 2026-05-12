@@ -7,10 +7,10 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi import Query
 import json
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, desc
 from services.websocket_manager import ws_manager
 from database import get_db
-from database.models import Agent, Workflow, Execution, OrgMember
+from database.models import Agent, Workflow, Execution, ExecutionStep, OrgMember
 from auth.security import decode_token
 
 router = APIRouter()
@@ -187,8 +187,52 @@ async def recent_executions(
 
 
 @router.get("/logs")
-async def get_buffered_logs(
+async def get_monitoring_logs(
+    limit: int = 100,
+    execution_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     ctx: OrgContext = Depends(get_org_context),
 ):
-    return await ws_manager.get_recent_logs_for_org(ctx.org.id)
+    """
+    Returns monitoring events. Uses DB as source of truth for history.
+    Falls back to the in-memory buffer for very recent events not yet in DB.
+    """
+    query = (
+        select(ExecutionStep, Execution.org_id)
+        .join(Execution, ExecutionStep.execution_id == Execution.id)
+        .where(Execution.org_id == ctx.org.id)
+        .order_by(desc(ExecutionStep.created_at))
+        .limit(limit)
+    )
+    if execution_id:
+        query = query.where(ExecutionStep.execution_id == execution_id)
+
+    results = (await db.execute(query)).all()
+    db_events = [
+        {
+            "type": step.step_type,
+            "execution_id": step.execution_id,
+            "content": step.content,
+            "tool": step.tool_name,
+            "agent_id": getattr(step, "agent_id", None),
+            "timestamp": step.created_at.isoformat() if step.created_at else None,
+            "from_db": True,
+        }
+        for step, _org_id in results
+    ]
+
+    live_logs = await ws_manager.get_recent_logs_for_org(ctx.org.id, limit=50)
+    live_unique = [
+        event
+        for event in live_logs
+        if not any(
+            db_event.get("execution_id") == event.get("execution_id")
+            and db_event.get("timestamp") == event.get("timestamp")
+            for db_event in db_events
+        )
+    ]
+
+    combined = live_unique + db_events
+    combined.sort(key=lambda event: event.get("timestamp") or "", reverse=True)
+    return combined[:limit]

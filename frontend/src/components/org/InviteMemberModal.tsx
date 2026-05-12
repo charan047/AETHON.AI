@@ -1,7 +1,7 @@
 import { FormEvent, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Mail, X } from 'lucide-react'
-import { organizationsApi } from '../../api/client'
+import { extractApiError, organizationsApi } from '../../api/client'
 import type { OrgMemberRole } from '../../types'
 import { toast } from '../../lib/toast'
 
@@ -32,7 +32,7 @@ export function InviteMemberModal({ open, orgId, onClose, onSent }: InviteMember
       onSent?.()
       onClose()
     },
-    onError: (error: any) => toast.error(error.response?.data?.detail || error.message || 'Could not send invite'),
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const submit = (event: FormEvent) => {

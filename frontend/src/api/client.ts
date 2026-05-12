@@ -7,6 +7,8 @@ import type {
   Stats,
   Template,
   ApprovalRequest,
+  AgentApprovalRequestItem,
+  AgentApprovalRequestsResponse,
   AgentMemoryConfig,
   AgentMemoryStats,
   AgentMemoryItem,
@@ -22,6 +24,7 @@ import type {
   UserIntegration,
   AgentFeedback,
   AgentReputation,
+  AgencyOverview,
   FeedbackType,
   DashboardSummary,
   WorkflowVersion,
@@ -36,13 +39,6 @@ import type {
   EvalRun,
   EvalRunsResponse,
   EvalSuite,
-  BillingPlan,
-  BillingPlansResponse,
-  BillingInvoice,
-  BillingPaymentMethod,
-  BillingSubscriptionResponse,
-  BillingUpcomingInvoice,
-  BillingUsageSummary,
   InviteDetails,
   LongTaskStatus,
   MarketplaceCategory,
@@ -55,32 +51,105 @@ import type {
   ModelTestResult,
   Organization,
   OrgInvite,
-  OrgPlan,
   OrgMember,
   OrgMemberRole,
   ScoringMethod,
+  CEOInboxResponse,
+  InboxMessage,
+  ConversationsResponse,
+  ThreadResponse,
+  DirectMessage,
+  TeamConversation,
+  CompanyConversationDetailResponse,
+  CompanyConversationListResponse,
+  CompanyConversationSearchResponse,
+  Client,
+  ClientActivityResponse,
+  ClientCreateInput,
+  ClientDetail,
+  ClientListResponse,
 } from '../types'
 
 export const api = axios.create({ baseURL: '/api', withCredentials: true })
 export const apiClient = api
 export const ACTIVE_ORG_STORAGE_KEY = 'ai-company-os-active-org-id'
+const SESSION_HINT_STORAGE_KEY = 'ai-company-os-has-session'
+
+export function extractApiError(error: unknown): string {
+  if (!error) return 'An unexpected error occurred'
+  const axiosError = error as {
+    response?: { data?: { detail?: string | { msg?: string }[]; message?: string } }
+    message?: string
+  }
+  const data = axiosError.response?.data
+  if (typeof data?.detail === 'string') return data.detail
+  if (Array.isArray(data?.detail)) {
+    return data.detail.map(d => d.msg || JSON.stringify(d)).join(', ')
+  }
+  if (data?.message) return data.message
+  if (axiosError.message) return axiosError.message
+  return 'An unexpected error occurred'
+}
 
 const storedOrgId = typeof window !== 'undefined' ? window.localStorage.getItem(ACTIVE_ORG_STORAGE_KEY) : null
 if (storedOrgId) {
   api.defaults.headers.common['X-Org-Id'] = storedOrgId
 }
 
+let isRefreshing = false
+let refreshSubscribers: Array<(token: string) => void> = []
+
+function subscribeTokenRefresh(callback: (token: string) => void) {
+  refreshSubscribers.push(callback)
+}
+
+function onRefreshed(token: string) {
+  refreshSubscribers.forEach(callback => callback(token))
+  refreshSubscribers = []
+}
+
 api.interceptors.response.use(
   response => response,
-  error => {
-    const payload = error?.response?.data
-    const limitPayload = payload?.code === 'plan_limit_reached'
-      ? payload
-      : payload?.detail?.code === 'plan_limit_reached'
-        ? payload.detail
-        : null
-    if ((error?.response?.status === 429 || error?.response?.status === 403) && limitPayload) {
-      window.dispatchEvent(new CustomEvent('plan-limit-hit', { detail: limitPayload }))
+  async error => {
+    const originalRequest = error.config as typeof error.config & { _retry?: boolean }
+
+    if (
+      error?.response?.status === 401 &&
+      originalRequest &&
+      !originalRequest._retry &&
+      !originalRequest.url?.includes('/auth/')
+    ) {
+      if (isRefreshing) {
+        return new Promise(resolve => {
+          subscribeTokenRefresh(token => {
+            originalRequest.headers = originalRequest.headers ?? {}
+            originalRequest.headers.Authorization = `Bearer ${token}`
+            resolve(api(originalRequest))
+          })
+        })
+      }
+
+      originalRequest._retry = true
+      isRefreshing = true
+
+      try {
+        const { data } = await api.post('/auth/refresh', {})
+        const newToken = data.access_token as string
+        api.defaults.headers.common.Authorization = `Bearer ${newToken}`
+        localStorage.setItem(SESSION_HINT_STORAGE_KEY, '1')
+        onRefreshed(newToken)
+        originalRequest.headers = originalRequest.headers ?? {}
+        originalRequest.headers.Authorization = `Bearer ${newToken}`
+        return api(originalRequest)
+      } catch {
+        delete api.defaults.headers.common.Authorization
+        localStorage.removeItem(ACTIVE_ORG_STORAGE_KEY)
+        localStorage.removeItem(SESSION_HINT_STORAGE_KEY)
+        window.location.href = '/login'
+        return Promise.reject(error)
+      } finally {
+        isRefreshing = false
+      }
     }
     return Promise.reject(error)
   },
@@ -107,6 +176,37 @@ export const agentsApi = {
   cancelLongTask: (taskId: string) => api.post<{ cancelled: boolean }>(`/agents/long-tasks/${taskId}/cancel`).then(r => r.data),
 }
 
+export const clientsApi = {
+  list: () =>
+    api.get<ClientListResponse>('/clients').then(r => r.data),
+  get: (id: string) =>
+    api.get<ClientDetail>(`/clients/${id}`).then(r => r.data),
+  create: (data: ClientCreateInput) =>
+    api.post<Client>('/clients', data).then(r => r.data),
+  update: (id: string, data: Partial<ClientCreateInput>) =>
+    api.put<Client>(`/clients/${id}`, data).then(r => r.data),
+  archive: (id: string) =>
+    api.delete(`/clients/${id}`).then(r => r.data),
+  enablePortal: (id: string) =>
+    api.post<{ portal_token: string; portal_url: string }>(
+      `/clients/${id}/portal/enable`,
+    ).then(r => r.data),
+  disablePortal: (id: string) =>
+    api.post(`/clients/${id}/portal/disable`).then(r => r.data),
+  regenerateToken: (id: string) =>
+    api.get<{ portal_token: string }>(`/clients/${id}/portal/regenerate-token`)
+      .then(r => r.data),
+  getActivity: (id: string) =>
+    api.get<ClientActivityResponse>(`/clients/${id}/activity`).then(r => r.data),
+  assignAgent: (agentId: string, clientId: string | null) =>
+    api.post(`/agents/${agentId}/assign-client`, { client_id: clientId })
+      .then(r => r.data),
+}
+
+export const portalApi = {
+  get: (token: string) => api.get(`/portal/${token}`).then(r => r.data),
+}
+
 // Workflows
 export const workflowsApi = {
   list: () => api.get<Workflow[]>('/workflows').then(r => r.data),
@@ -131,6 +231,8 @@ export const executionsApi = {
   get: (id: string) => api.get<Execution>(`/executions/${id}`).then(r => r.data),
   run: (workflowId: string, input: string) =>
     api.post<ExecutionRunResponse>(`/executions/workflows/${workflowId}/run`, { input_message: input }).then(r => r.data),
+  cancel: (id: string) =>
+    api.delete(`/executions/${id}`).then(r => r.data),
   getMessages: (id: string) =>
     api.get(`/executions/${id}/messages`).then(r => r.data),
 }
@@ -194,7 +296,8 @@ export const monitoringApi = {
   stats: () => api.get<Stats>('/monitoring/stats').then(r => r.data),
   recentExecutions: (limit = 10) =>
     api.get('/monitoring/recent-executions', { params: { limit } }).then(r => r.data),
-  logs: () => api.get('/monitoring/logs').then(r => r.data),
+  logs: (params?: { limit?: number; execution_id?: string }) =>
+    api.get('/monitoring/logs', { params }).then(r => r.data),
 }
 
 // HITL Approvals
@@ -206,6 +309,12 @@ export const approvalsApi = {
     api.post<ApprovalRequest>(`/approvals/${id}/approve`, { comment }).then(r => r.data),
   reject: (id: string, comment?: string) =>
     api.post<ApprovalRequest>(`/approvals/${id}/reject`, { comment }).then(r => r.data),
+  agentRequests: () =>
+    api.get<AgentApprovalRequestsResponse>('/approvals/agent-requests').then(r => r.data),
+  approveAgentRequest: (id: string, note?: string) =>
+    api.post<AgentApprovalRequestItem>(`/approvals/agent-requests/${id}/approve`, { note }).then(r => r.data),
+  rejectAgentRequest: (id: string, note: string) =>
+    api.post<AgentApprovalRequestItem>(`/approvals/agent-requests/${id}/reject`, { note }).then(r => r.data),
 }
 
 // Agent memory
@@ -219,9 +328,19 @@ export const memoryApi = {
 // First-run onboarding
 export const onboardingApi = {
   status: () => api.get<OnboardingStatus>('/onboarding/status').then(r => r.data),
-  saveCompany: (data: { company_name: string; company_description: string; primary_challenge: string }) =>
+  saveCompany: (data: {
+    agency_name: string
+    what_you_do: string
+    how_many_clients: string
+    biggest_time_sink: string
+  }) =>
     api.post<{ success: boolean; next_step: string }>('/onboarding/company', data).then(r => r.data),
-  hireFirstAgent: (data: { listing_slug: string; competitors: string; delivery_method: string }) =>
+  hireFirstAgent: (data: {
+    listing_slug: string
+    competitors: string
+    delivery_method: string
+    persona_name?: string | null
+  }) =>
     api.post<OnboardingHireResponse>('/onboarding/hire-first-agent', data).then(r => r.data),
   skip: () =>
     api.post<{ success: boolean }>('/onboarding/skip').then(r => r.data),
@@ -248,6 +367,43 @@ export const companyApi = {
     api.post<CompanyYamlPreview>('/company/yaml/preview', { yaml_content: yamlContent }).then(r => r.data),
   applyYaml: (yamlContent: string) =>
     api.post<CompanyYamlApplySummary>('/company/yaml/apply', { yaml_content: yamlContent }).then(r => r.data),
+}
+
+export const companyChatApi = {
+  authHeaders: () => {
+    const authorization = api.defaults.headers.common.Authorization
+    const orgId = api.defaults.headers.common['X-Org-Id']
+    return {
+      ...(authorization ? { Authorization: String(authorization) } : {}),
+      ...(orgId ? { 'X-Org-Id': String(orgId) } : {}),
+    }
+  },
+  send: async (payload: {
+    message: string
+    conversation_id?: string
+    attachments?: Array<Record<string, unknown>>
+  }) => fetch('/api/company/chat', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/x-ndjson',
+      ...companyChatApi.authHeaders(),
+    },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  }),
+  history: (conversationId: string) =>
+    api.get<CompanyConversationDetailResponse>(`/company/conversations/${conversationId}/messages`).then(r => r.data),
+  conversations: () =>
+    api.get<CompanyConversationListResponse>('/company/conversations').then(r => r.data),
+  searchConversations: (q: string) =>
+    api.get<CompanyConversationSearchResponse>('/company/chat/search', { params: { q } }).then(r => r.data),
+  pinConversation: (id: string) =>
+    api.post<{ id: string; pinned: boolean }>(`/company/conversations/${id}/pin`).then(r => r.data),
+  renameConversation: (id: string, title: string) =>
+    api.post<{ id: string; title: string }>(`/company/conversations/${id}/rename`, { title }).then(r => r.data),
+  deleteConversation: (id: string) =>
+    api.delete<{ deleted: boolean }>(`/company/conversations/${id}`).then(r => r.data),
 }
 
 // Business context engine
@@ -297,6 +453,10 @@ export const dashboardApi = {
   summary: () => api.get<DashboardSummary>('/dashboard/summary').then(r => r.data),
 }
 
+export const agencyApi = {
+  overview: () => api.get<AgencyOverview>('/agency/overview').then(r => r.data),
+}
+
 export const analyticsApi = {
   overview: (periodDays = 30) =>
     api.get<AnalyticsOverview>('/analytics/overview', { params: { period_days: periodDays } }).then(r => r.data),
@@ -343,32 +503,11 @@ export const evalsApi = {
   ciToken: () => api.get<{ ci_token: string; key_prefix: string; message: string }>('/evals/ci/token').then(r => r.data),
 }
 
-export const billingApi = {
-  usage: () => api.get<BillingUsageSummary>('/billing/usage').then(r => r.data),
-  subscription: () => api.get<BillingSubscriptionResponse>('/billing/subscription').then(r => r.data),
-  plan: () => api.get<BillingSubscriptionResponse>('/billing/plan').then(r => r.data),
-  plans: () => api.get<BillingPlansResponse>('/billing/plans').then(r => r.data),
-  invoices: () => api.get<BillingInvoice[]>('/billing/invoices').then(r => r.data),
-  upcomingInvoice: () => api.get<BillingUpcomingInvoice>('/billing/upcoming-invoice').then(r => r.data),
-  setupIntent: () => api.post<{ client_secret: string }>('/billing/setup-intent').then(r => r.data),
-  paymentMethods: () => api.get<BillingPaymentMethod[]>('/billing/payment-methods').then(r => r.data),
-  setDefaultPaymentMethod: (paymentMethodId: string) =>
-    api.post<{ updated: boolean }>(`/billing/payment-methods/${paymentMethodId}/set-default`).then(r => r.data),
-  deletePaymentMethod: (paymentMethodId: string) =>
-    api.delete<{ deleted: boolean }>(`/billing/payment-methods/${paymentMethodId}`).then(r => r.data),
-  subscribe: (plan: OrgPlan, paymentMethodId: string) =>
-    api.post('/billing/subscribe', { plan, payment_method_id: paymentMethodId }).then(r => r.data),
-  upgrade: (plan: OrgPlan) =>
-    api.post('/billing/upgrade', { plan }).then(r => r.data),
-  cancel: (immediately = false) =>
-    api.post('/billing/cancel', { immediately }).then(r => r.data),
-}
-
 export const organizationsApi = {
   mine: () => api.get<Organization[]>('/organizations/me').then(r => r.data),
   create: (data: { name: string; slug?: string }) => api.post<Organization>('/organizations', data).then(r => r.data),
   get: (orgId: string) => api.get<Organization & { members: OrgMember[] }>(`/organizations/${orgId}`).then(r => r.data),
-  update: (orgId: string, data: Partial<Pick<Organization, 'name' | 'slug' | 'timezone' | 'logo_url'>>) =>
+  update: (orgId: string, data: Partial<Pick<Organization, 'name' | 'slug' | 'timezone' | 'logo_url' | 'agent_message_retention_days'>>) =>
     api.put<Organization>(`/organizations/${orgId}`, data).then(r => r.data),
   delete: (orgId: string) => api.delete(`/organizations/${orgId}`),
   members: (orgId: string) => api.get<OrgMember[]>(`/organizations/${orgId}/members`).then(r => r.data),
@@ -383,6 +522,40 @@ export const organizationsApi = {
   removeMember: (orgId: string, userId: string) => api.delete(`/organizations/${orgId}/members/${userId}`),
   inviteDetails: (token: string) => api.get<InviteDetails>(`/invites/${token}`).then(r => r.data),
   acceptInvite: (token: string) => api.post<{ accepted: boolean; org_id: string; org_name?: string | null }>(`/invites/${token}/accept`).then(r => r.data),
+}
+
+export const messagesApi = {
+  // ── New direct-messaging endpoints ──────────────────────────────────────
+  conversations: () =>
+    api.get<ConversationsResponse>('/messages/conversations').then(r => r.data),
+  thread: (agentId: string, params?: { before?: string; limit?: number }) =>
+    api.get<ThreadResponse>(`/messages/thread/${agentId}`, { params }).then(r => r.data),
+  send: (body: {
+    to_agent_id: string
+    content: string
+    message_type?: string
+    priority?: string
+    schedule_reply_in_minutes?: number | null
+  }) => api.post<DirectMessage>('/messages/send', body).then(r => r.data),
+  markRead: (id: string) =>
+    api.post<{ read: boolean; read_at: string }>(`/messages/${id}/read`).then(r => r.data),
+  resolve: (id: string) =>
+    api.post<{ resolved: boolean }>(`/messages/${id}/resolve`).then(r => r.data),
+  cancelScheduledReply: (id: string) =>
+    api.delete<{ cancelled: boolean }>(`/messages/${id}/scheduled-reply`).then(r => r.data),
+  unreadCount: () =>
+    api.get<{ count: number }>('/messages/unread-count').then(r => r.data),
+  setRetention: (retentionDays: number | null) =>
+    api.put<{ retention_days: number | null; updated: boolean }>('/messages/retention', { retention_days: retentionDays }).then(r => r.data),
+  teamConversations: (limit = 20) =>
+    api.get<{ conversations: TeamConversation[] }>('/messages/team-conversations', { params: { limit } }).then(r => r.data),
+  // ── Legacy CEO-inbox endpoints (backward compat) ─────────────────────────
+  ceoInbox: (unreadOnly = false) =>
+    api.get<CEOInboxResponse>('/messages/ceo-inbox', { params: { unread_only: unreadOnly } }).then(r => r.data),
+  ceoRespond: (data: { thread_id: string; content: string; resolve: boolean }) =>
+    api.post<{ sent: boolean; resolved: boolean; message_id: string }>('/messages/ceo-respond', data).then(r => r.data),
+  ceoSend: (data: { to_agent_id: string; content: string; message_type: string }) =>
+    api.post<{ sent: boolean; thread_id: string; message_id: string }>('/messages/ceo-send', data).then(r => r.data),
 }
 
 export const marketplaceApi = {

@@ -21,7 +21,7 @@ test('task 9 command palette, toasts, and empty states work live', async ({ page
 
   await page.goto('/monitoring')
   await expect(page.getByText('Recent Executions')).toBeVisible()
-  await expect(page.getByText(/live/i)).toBeVisible()
+  await expect(page.getByText(/^Live ·/i)).toBeVisible()
 
   await page.goto('/')
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K')

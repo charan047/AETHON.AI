@@ -190,6 +190,14 @@ class MarketplaceService:
             listing.install_count = int(listing.install_count or 0) + 1
             db.add(install)
         await db.commit()
+        if listing_type == ListingType.agent:
+            from api.agents import _initialize_agent_identity
+
+            await _initialize_agent_identity(
+                agent_id=resource_id,
+                role_slug=template.get("role_slug"),
+                db=db,
+            )
         return {
             "installed": True,
             "reinstalled": bool(existing),

@@ -44,6 +44,8 @@ class ModelService:
             .where(ModelConfig.org_id == org_id)
             .where(ModelConfig.is_default == True)  # noqa: E712
             .where(ModelConfig.is_active == True)  # noqa: E712
+            .order_by(ModelConfig.updated_at.desc(), ModelConfig.created_at.desc())
+            .limit(1)
         )
         return result.scalar_one_or_none()
 
