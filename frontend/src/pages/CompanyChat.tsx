@@ -1039,89 +1039,104 @@ export function CompanyChat() {
     ]
   }, [pendingApprovals.length, firstActiveAgent, summary?.this_week.tasks_completed])
 
-  return (
-    <div className="flex h-full flex-col bg-transparent">
-      {sidebarOpen && (
-        <aside className="hidden w-[260px] shrink-0 border-r border-white/[0.06] bg-[rgba(8,13,26,0.78)] backdrop-blur-xl lg:flex lg:flex-col">
-          <div className="border-b border-white/[0.06] px-4 py-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-white">Agency Chat</div>
-                <div className="mt-1 text-xs text-white/35">Command your AI agency</div>
-              </div>
-              <button
-                type="button"
-                onClick={handleNewConversation}
-                className="cursor-pointer rounded-xl border border-white/10 bg-white/[0.03] p-2 text-white/70 transition hover:bg-white/[0.06] hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                title="New conversation"
-              >
-                <Plus size={15} />
-              </button>
-            </div>
-            <div className="mt-4 flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2">
-              <Search size={14} className="text-white/35" />
-              <input
-                value={search}
-                onChange={event => setSearch(event.target.value)}
-                placeholder="Search conversations"
-                className="w-full bg-transparent text-sm text-white outline-none placeholder:text-white/25"
-              />
-            </div>
+  const conversationSidebar = (
+    <aside className="flex h-full w-[280px] shrink-0 flex-col bg-[rgba(8,13,26,0.9)] backdrop-blur-xl">
+      <div className="border-b border-white/[0.06] px-4 py-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-white">Agency Chat</div>
+            <div className="mt-1 text-xs text-white/35">Command your AI agency</div>
           </div>
+          <button
+            type="button"
+            onClick={handleNewConversation}
+            className="cursor-pointer rounded-xl border border-white/10 bg-white/[0.03] p-2 text-white/70 transition hover:bg-white/[0.06] hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+            title="New conversation"
+          >
+            <Plus size={15} />
+          </button>
+        </div>
+        <div className="mt-4 flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2">
+          <Search size={14} className="text-white/35" />
+          <input
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            placeholder="Search conversations"
+            className="w-full bg-transparent text-sm text-white outline-none placeholder:text-white/25"
+          />
+        </div>
+      </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-            {groupedSidebar.pinned.length > 0 && (
-              <div className="mb-5">
-                <div className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/25">Pinned</div>
-                <div className="space-y-1.5">
-                  {groupedSidebar.pinned.map(conversation => (
-                    <button
-                      key={conversation.id}
-                      type="button"
-                      onClick={() => void loadConversation(conversation.id)}
-                      className={clsx(
-                        'w-full cursor-pointer rounded-2xl border px-3 py-3 text-left transition duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500/30',
-                        conversationId === conversation.id ? 'border-blue-500/25 bg-blue-500/10' : 'border-white/5 bg-white/[0.02] hover:border-white/10 hover:bg-white/[0.04]',
-                      )}
-                    >
-                      <div className="flex items-start gap-2">
-                        <Pin size={12} className="mt-0.5 text-amber-300" />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium text-white">{conversation.title}</div>
-                          <div className="mt-1 text-xs text-white/35">{conversation.message_count} messages · {formatRelative(conversation.last_message_at)}</div>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div>
-              <div className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/25">Recent</div>
-              <div className="space-y-1.5">
-                {groupedSidebar.recent.map(conversation => (
-                  <button
-                    key={conversation.id}
-                    type="button"
-                    onClick={() => void loadConversation(conversation.id)}
-                    className={clsx(
-                      'group w-full cursor-pointer rounded-2xl border px-3 py-3 text-left transition duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500/30',
-                      conversationId === conversation.id ? 'border-blue-500/25 bg-blue-500/10' : 'border-white/5 bg-white/[0.02] hover:border-white/10 hover:bg-white/[0.04]',
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-white">{conversation.title}</div>
-                        <div className="mt-1 text-xs text-white/35">{conversation.message_count} messages · {formatRelative(conversation.last_message_at)}</div>
-                      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {groupedSidebar.pinned.length > 0 && (
+          <div className="mb-5">
+            <div className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/25">Pinned</div>
+            <div className="space-y-1.5">
+              {groupedSidebar.pinned.map(conversation => (
+                <button
+                  key={conversation.id}
+                  type="button"
+                  onClick={() => void loadConversation(conversation.id)}
+                  className={clsx(
+                    'w-full cursor-pointer rounded-2xl border px-3 py-3 text-left transition duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500/30',
+                    conversationId === conversation.id ? 'border-blue-500/25 bg-blue-500/10' : 'border-white/5 bg-white/[0.02] hover:border-white/10 hover:bg-white/[0.04]',
+                  )}
+                >
+                  <div className="flex items-start gap-2">
+                    <Pin size={12} className="mt-0.5 text-amber-300" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-white">{conversation.title}</div>
+                      <div className="mt-1 text-xs text-white/35">{conversation.message_count} messages · {formatRelative(conversation.last_message_at)}</div>
                     </div>
-                  </button>
-                ))}
-              </div>
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
-        </aside>
+        )}
+
+        <div>
+          <div className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/25">Recent</div>
+          <div className="space-y-1.5">
+            {groupedSidebar.recent.map(conversation => (
+              <button
+                key={conversation.id}
+                type="button"
+                onClick={() => void loadConversation(conversation.id)}
+                className={clsx(
+                  'group w-full cursor-pointer rounded-2xl border px-3 py-3 text-left transition duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500/30',
+                  conversationId === conversation.id ? 'border-blue-500/25 bg-blue-500/10' : 'border-white/5 bg-white/[0.02] hover:border-white/10 hover:bg-white/[0.04]',
+                )}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-white">{conversation.title}</div>
+                    <div className="mt-1 text-xs text-white/35">{conversation.message_count} messages · {formatRelative(conversation.last_message_at)}</div>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </aside>
+  )
+
+  return (
+    <div className="relative flex h-full min-h-0 flex-col bg-transparent">
+      {sidebarOpen && (
+        <>
+          <div
+            className="absolute inset-0 z-20 hidden bg-black/45 backdrop-blur-[2px] lg:block xl:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+          <div className="absolute inset-y-0 left-0 z-30 hidden shadow-[18px_0_48px_rgba(0,0,0,0.35)] lg:block xl:hidden">
+            {conversationSidebar}
+          </div>
+          <div className="hidden shrink-0 border-r border-white/[0.06] xl:flex">
+            {conversationSidebar}
+          </div>
+        </>
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -1131,6 +1146,8 @@ export function CompanyChat() {
               type="button"
               onClick={() => setSidebarOpen(value => !value)}
               className="hidden cursor-pointer rounded-xl p-2 text-white/40 transition hover:bg-white/5 hover:text-white/70 focus:outline-none focus:ring-2 focus:ring-blue-500/30 lg:inline-flex"
+              aria-label={sidebarOpen ? 'Hide conversations' : 'Show conversations'}
+              title={sidebarOpen ? 'Hide conversations' : 'Show conversations'}
             >
               {sidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
             </button>

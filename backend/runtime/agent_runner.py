@@ -985,6 +985,22 @@ class AgentRunner:
         db: AsyncSession | None = None,
         step_index_ref: dict[str, int] | None = None,
     ) -> tuple[str, int, list[str]]:
+        def extract_response_from_state(state_obj) -> str:
+            if not state_obj or not state_obj.values.get("messages"):
+                return ""
+            msgs = state_obj.values["messages"]
+            for msg in reversed(msgs):
+                if isinstance(msg, AIMessage):
+                    text = _extract_text(msg.content)
+                    if text.strip():
+                        return text
+            tool_outputs = [
+                _extract_text(msg.content)
+                for msg in msgs
+                if isinstance(msg, ToolMessage) and _extract_text(msg.content).strip()
+            ]
+            return "\n\n".join(tool_outputs) if tool_outputs else ""
+
         total_tokens = 0
         input_tokens = 0
         output_tokens = 0
@@ -1114,34 +1130,46 @@ class AgentRunner:
         except Exception:
             state = None
 
-        final_response = ""
-        if state and state.values.get("messages"):
-            msgs = state.values["messages"]
-            # 1st pass: find the last AIMessage that has actual text content
-            for msg in reversed(msgs):
-                if isinstance(msg, AIMessage):
-                    text = _extract_text(msg.content)
-                    if text.strip():
-                        final_response = text
-                        break
-            # 2nd pass: if the AI only produced a tool-call intent (empty text), fall back
-            # to the tool results themselves so downstream agents have something to work with
-            if not final_response:
-                tool_outputs = [
-                    _extract_text(msg.content)
-                    for msg in msgs
-                    if isinstance(msg, ToolMessage) and _extract_text(msg.content).strip()
-                ]
-                if tool_outputs:
-                    final_response = "\n\n".join(tool_outputs)
+        final_response = extract_response_from_state(state)
 
         if recoverable_stream_error and (
             not final_response.strip() or _looks_like_tool_call_stub(final_response)
         ):
-            final_response = (
-                "I started the task, but the model produced an invalid tool call before "
-                "the live work could complete. Please retry the request and I will try again."
-            )
+            retry_response = ""
+            if not tools_called:
+                retry_config = {
+                    **config,
+                    "configurable": {
+                        **config.get("configurable", {}),
+                        "thread_id": f"{thread_id}-retry-{uuid4().hex[:8]}",
+                    },
+                }
+                try:
+                    logger.info(
+                        "Retrying agent %s after malformed tool call for execution %s",
+                        self.config.id,
+                        execution_id,
+                    )
+                    await graph.ainvoke(
+                        {"messages": [HumanMessage(content=message)]},
+                        config=retry_config,
+                    )
+                    retry_state = await graph.aget_state(retry_config)
+                    retry_response = extract_response_from_state(retry_state)
+                except Exception as retry_exc:
+                    logger.warning(
+                        "Retry after malformed tool call failed for agent %s: %s",
+                        self.config.id,
+                        retry_exc,
+                    )
+
+            if retry_response.strip() and not _looks_like_tool_call_stub(retry_response):
+                final_response = retry_response
+            else:
+                final_response = (
+                    "I started the task, but the model produced an invalid tool call before "
+                    "the live work could complete. Please retry the request and I will try again."
+                )
 
         # Last resort: call the LLM directly without tools if we still have nothing
         fallback_error = None
