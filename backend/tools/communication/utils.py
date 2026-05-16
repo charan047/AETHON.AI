@@ -87,6 +87,15 @@ async def get_gmail_service(org_id: str, user_id: str, prefetched_config: dict |
         prefetched_config=prefetched_config,
     )
 
+    if prefetched_config is None:
+        try:
+            from api.integrations import refresh_gmail_oauth_tokens
+
+            async with AsyncSessionLocal() as db:
+                integration, config = await refresh_gmail_oauth_tokens(org_id, user_id, db)
+        except Exception:
+            pass
+
     access_token = config.get("access_token") or config.get("token")
     refresh_token = config.get("refresh_token")
     scopes = config.get("scopes") or ["https://www.googleapis.com/auth/gmail.modify"]

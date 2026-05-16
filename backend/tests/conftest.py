@@ -22,11 +22,13 @@ class DummyScheduler:
     def __init__(self):
         self.scheduled: dict[str, dict] = {}
 
-    async def schedule_workflow(self, workflow_id: str, cron_expression: str, user_id: str):
+    async def schedule_workflow(self, workflow_id: str, cron_expression: str, user_id: str, timezone: str = "UTC"):
         self.scheduled[workflow_id] = {
             "workflow_id": workflow_id,
             "cron_expression": cron_expression,
             "user_id": user_id,
+            "timezone": timezone,
+            "next_run": "2099-01-01T00:00:00+00:00",
         }
 
     async def unschedule_workflow(self, workflow_id: str):

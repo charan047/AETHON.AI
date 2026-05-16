@@ -1,0 +1,38 @@
+# Aethon Agency OS — Cursor Rules
+
+You are working on Aethon, an open-source AI agency operating system.
+Before ANY change: read CLAUDE.md for architecture rules.
+
+## Backend (FastAPI + SQLAlchemy async)
+- All route handlers must include: get_current_user, get_org_context
+- All DB queries: filter by ctx.org.id (org_id scoping — non-negotiable)
+- New models: org_id FK, created_at, updated_at columns required
+- Async only: use await everywhere, no sync DB calls
+- Return 404 not 403 when a cross-org resource is requested
+- Pydantic v2 syntax: model_config = ConfigDict(from_attributes=True)
+
+## Frontend (React 18 + TypeScript + Tailwind)
+- New pages: MUST have isLoading (skeleton), isError, empty state
+- Cards: use glass-card class (see tailwind.config.js — NOT bg-obsidian-900)
+- Primary buttons: btn-primary (NOT bg-blue-600 manually)
+- Forms: label + input with .input class
+- Errors: use extractApiError() from ../api/client
+- Mutations: always show loading state + success/error toast
+
+## Design system
+- Primary color: #2563EB (blue, NOT purple/indigo)
+- Card background: glass-card (backdrop-blur)
+- Font: Plus Jakarta Sans (headings), Inter (body)
+- See tailwind.config.js for full token reference
+
+## Tests
+- Backend: pytest with asyncio, add to backend/tests/
+- Frontend: Playwright E2E, add to frontend/e2e/
+- New features: at minimum one backend test + one Playwright test
+
+## Critical: DO NOT MODIFY
+- backend/runtime/agent_runner.py
+- backend/runtime/workflow_engine.py
+- backend/runtime/graph_builder.py
+- backend/services/permission_engine.py
+- (see CLAUDE.md for full list)

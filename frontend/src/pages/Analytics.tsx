@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Bar,
   BarChart,
@@ -25,7 +26,6 @@ import {
 import { format, subDays } from 'date-fns'
 import { clsx } from 'clsx'
 import { companyApi, extractApiError } from '../api/client'
-import { CostChart } from '../components/analytics/CostChart'
 import { AgentPerformanceCard } from '../components/analytics/AgentPerformanceCard'
 import { GlowCard } from '../components/ui/GlowCard'
 import { Skeleton, SkeletonCard } from '../components/ui/Skeleton'
@@ -51,12 +51,33 @@ function toolTone(rate: number) {
   return '#EF4444'
 }
 
-function normalizeDailyData(data: { date: string; cost: number }[] = [], period: number) {
-  const byDate = new Map(data.map(row => [row.date, row.cost]))
+function normalizeExecutionData(data: { date: string; count: number }[] = [], period: number) {
+  const byDate = new Map(data.map(row => [row.date, row.count]))
   return Array.from({ length: period }).map((_, index) => {
     const date = format(subDays(new Date(), period - index - 1), 'yyyy-MM-dd')
-    return { date, cost: byDate.get(date) || 0 }
+    return { date, count: byDate.get(date) || 0 }
   })
+}
+
+function AnalyticsEmptyState({
+  onOpenAgents,
+  message = 'No data yet',
+  detail = 'Run an agent to start seeing analytics here.',
+}: {
+  onOpenAgents: () => void
+  message?: string
+  detail?: string
+}) {
+  return (
+    <div className="glass-card flex flex-col items-center justify-center rounded-2xl p-12 text-center">
+      <BarChart3 size={32} className="mb-4 text-[#2D3748]" />
+      <p className="text-sm font-semibold text-[#8B9DBE]">{message}</p>
+      <p className="mt-1 text-xs text-[#4B5A73]">{detail}</p>
+      <button className="btn-secondary mt-4 text-xs" onClick={onOpenAgents}>
+        Go to Agents →
+      </button>
+    </div>
+  )
 }
 
 function Gauge({
@@ -139,6 +160,7 @@ function SectionTitle({
 }
 
 export function Analytics() {
+  const navigate = useNavigate()
   const [period, setPeriod] = useState(30)
   const [editingBudget, setEditingBudget] = useState(false)
   const analytics = useAnalytics(period)
@@ -152,13 +174,18 @@ export function Analytics() {
   const budgetPct = (totalCost / Math.max(budget, 1)) * 100
   const budgetTone = budgetPct >= 100 ? 'bg-red-500' : budgetPct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'
 
-  const dailyCost = useMemo(() => normalizeDailyData(analytics.costs?.daily_breakdown || [], period), [analytics.costs, period])
+  const dailyExecutions = useMemo(
+    () => normalizeExecutionData(analytics.overview?.daily_executions || [], period),
+    [analytics.overview, period],
+  )
   const costByAgent = Object.entries(analytics.costs?.by_agent || {}).map(([name, cost], index) => ({
     name,
     cost,
     fill: AGENT_COLORS[index % AGENT_COLORS.length],
   }))
   const maxToolCalls = Math.max(1, ...(analytics.tools?.tools || []).map(tool => tool.calls))
+  const hasExecutionData = dailyExecutions.some(point => point.count > 0)
+  const hasCostByAgentData = costByAgent.some(row => row.cost > 0)
 
   const saveBudget = async () => {
     const next = Number(budgetDraft)
@@ -270,34 +297,68 @@ export function Analytics() {
 
       <section className="grid gap-4 xl:grid-cols-2">
         <GlowCard glowColor="blue" className="p-5">
-          <SectionTitle icon={BarChart3} title="Daily Cost" subtitle={`Spend over the last ${period} days`} />
+          <SectionTitle icon={BarChart3} title="Daily Activity" subtitle={`Execution volume over the last ${period} days`} />
           <div className="mt-5">
-            <CostChart data={dailyCost} period={period} height={300} />
+            {!hasExecutionData ? (
+              <AnalyticsEmptyState onOpenAgents={() => navigate('/agents')} />
+            ) : (
+              <div className="h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={dailyExecutions} margin={{ left: 0, right: 12, top: 8, bottom: 0 }}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                    <XAxis dataKey="date" tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} minTickGap={24} />
+                    <YAxis allowDecimals={false} tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} />
+                    <Tooltip
+                      contentStyle={{
+                        background: 'rgba(8,13,26,0.95)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: 12,
+                        color: '#fff',
+                        backdropFilter: 'blur(16px)',
+                      }}
+                      formatter={value => [`${Number(value)} run${Number(value) === 1 ? '' : 's'}`, 'Executions']}
+                    />
+                    <Bar dataKey="count" fill="#2563EB" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+            <p className="mt-3 text-xs text-[#4B5A73]">
+              {money(totalCost, 2)} spent in the same period.
+            </p>
           </div>
         </GlowCard>
         <GlowCard glowColor="emerald" className="p-5">
           <SectionTitle icon={Coins} title="Cost by Agent" subtitle="Attribution by AI teammate" />
           <div className="mt-5 h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={costByAgent} margin={{ left: 0, right: 12, top: 8, bottom: 0 }}>
-                <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                <XAxis dataKey="name" tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} />
-                <Tooltip
-                  contentStyle={{
-                    background: 'rgba(8,13,26,0.95)',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: 12,
-                    color: '#fff',
-                    backdropFilter: 'blur(16px)',
-                  }}
-                  formatter={value => [money(Number(value), 6), 'Total cost']}
-                />
-                <Bar dataKey="cost" radius={[8, 8, 0, 0]}>
-                  {costByAgent.map(row => <Cell key={row.name} fill={row.fill} />)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            {!hasCostByAgentData ? (
+              <AnalyticsEmptyState
+                onOpenAgents={() => navigate('/agents')}
+                message="No cost data yet"
+                detail="Runs are being tracked even if your current models cost $0.00."
+              />
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={costByAgent} margin={{ left: 0, right: 12, top: 8, bottom: 0 }}>
+                  <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                  <XAxis dataKey="name" tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} />
+                  <Tooltip
+                    contentStyle={{
+                      background: 'rgba(8,13,26,0.95)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: 12,
+                      color: '#fff',
+                      backdropFilter: 'blur(16px)',
+                    }}
+                    formatter={value => [money(Number(value), 6), 'Total cost']}
+                  />
+                  <Bar dataKey="cost" radius={[8, 8, 0, 0]}>
+                    {costByAgent.map(row => <Cell key={row.name} fill={row.fill} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </GlowCard>
       </section>

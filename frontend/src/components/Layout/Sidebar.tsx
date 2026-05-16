@@ -1,6 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   BarChart3,
+  Bell,
   Bot,
   Brain,
   Briefcase,
@@ -68,6 +69,7 @@ const NAV_GROUPS: NavGroup[] = [
     title: 'SETTINGS',
     items: [
       { to: '/settings/org', icon: Settings, label: 'Settings', activePrefixes: ['/settings/org', '/company'] },
+      { to: '/settings/notifications', icon: Bell, label: 'Notifications', activePrefixes: ['/settings/notifications'] },
       { to: '/settings/models', icon: Bot, label: 'AI Models', activePrefixes: ['/settings/models'], badge: 'models' },
       { to: '/analytics', icon: BarChart3, label: 'Analytics', activePrefixes: ['/analytics'] },
       { to: '/evals', icon: FlaskConical, label: 'Evals', activePrefixes: ['/evals'] },

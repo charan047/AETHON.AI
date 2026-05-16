@@ -14,9 +14,9 @@ import { ConditionNode } from '../components/Workflow/nodes/ConditionNode'
 import { ParallelGroupNode } from '../components/Workflow/nodes/ParallelGroupNode'
 import { EmptyState } from '../components/ui/EmptyState'
 import { VersionHistory } from '../components/workflows/VersionHistory'
-import { Plus, Save, Play, Square, Trash2, GitBranch, ChevronLeft, X, Layers, MessageSquare, Copy, Cpu, GitMerge, Hand, GitCompareArrows } from 'lucide-react'
+import { Plus, Save, Play, Square, Trash2, GitBranch, ChevronLeft, X, Layers, MessageSquare, Copy, Cpu, GitMerge, Hand, GitCompareArrows, CalendarClock, Webhook, SunMedium, Newspaper, FileText } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { Workflow, Agent } from '../types'
+import type { Workflow, Agent, AutomationTemplate, ScheduledWorkflow } from '../types'
 import { SkeletonCard } from '../components/ui/Skeleton'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
 import { toast } from '../lib/toast'
@@ -26,6 +26,26 @@ const nodeTypes = {
   approval: ApprovalNode,
   condition: ConditionNode,
   parallel_group: ParallelGroupNode,
+}
+
+const SCHEDULE_PRESETS = [
+  { label: 'Every day 8am', cron: '0 8 * * *' },
+  { label: 'Every Monday', cron: '0 9 * * 1' },
+  { label: 'Friday 5pm', cron: '0 17 * * 5' },
+]
+
+function formatRunTime(iso?: string | null) {
+  if (!iso) return 'Not scheduled yet'
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime())
+    ? 'Not scheduled yet'
+    : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+function automationIcon(id: string) {
+  if (id === 'morning_brief') return SunMedium
+  if (id === 'weekly_client_reports') return FileText
+  return Newspaper
 }
 
 function normalizeNodeType(type?: string) {
@@ -76,7 +96,28 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
   const [mode, setMode] = useState<'sequential' | 'orchestrator'>(workflow.execution_mode || 'sequential')
   const [orchPrompt, setOrchPrompt] = useState(workflow.orchestration_prompt || '')
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [scheduleValue, setScheduleValue] = useState(workflow.schedule || '')
+  const [scheduleTimezone, setScheduleTimezone] = useState(workflow.schedule_timezone || 'UTC')
+  const [scheduleEnabled, setScheduleEnabled] = useState(Boolean(workflow.schedule_enabled))
   const idRef = useRef(Date.now())
+  const qc = useQueryClient()
+
+  const { data: webhookInfo } = useQuery({
+    queryKey: ['workflow-webhook-url', workflow.id],
+    queryFn: () => workflowsApi.webhookUrl(workflow.id!),
+    enabled: Boolean(workflow.id),
+  })
+  const scheduleMut = useMutation({
+    mutationFn: () => workflowsApi.setSchedule(workflow.id!, scheduleValue, scheduleEnabled, scheduleTimezone),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['workflows'] }),
+        qc.invalidateQueries({ queryKey: ['workflows-scheduled'] }),
+      ])
+      toast.success(scheduleEnabled ? 'Schedule saved' : 'Schedule disabled')
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
 
   const onConnect = useCallback((connection: Connection) => {
     setEdges(es => addEdge({ ...connection, animated: true, markerEnd: { type: MarkerType.ArrowClosed } }, es))
@@ -281,6 +322,108 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
         </div>
       )}
 
+      {workflow.id && (
+        <div className="grid shrink-0 gap-4 border-b border-white/[0.08] bg-[#080D1A]/80 px-4 py-4 lg:grid-cols-[1.2fr_1fr]">
+          <div className="glass-card p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <div className="rounded-xl bg-blue-600/12 p-2 text-blue-400">
+                <CalendarClock size={16} />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-white">Schedule</h3>
+                <p className="text-xs text-[#8B9DBE]">Run this workflow automatically on a cron schedule.</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {SCHEDULE_PRESETS.map(preset => (
+                <button
+                  key={preset.cron}
+                  type="button"
+                  onClick={() => {
+                    setScheduleEnabled(true)
+                    setScheduleValue(preset.cron)
+                  }}
+                  className={clsx(
+                    'rounded-xl border px-3 py-2 text-xs font-medium transition-all duration-150',
+                    scheduleValue === preset.cron
+                      ? 'border-blue-500/50 bg-blue-600/12 text-blue-300'
+                      : 'border-white/[0.08] bg-white/[0.03] text-[#8B9DBE] hover:bg-white/[0.04]',
+                  )}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-[1fr_180px_120px]">
+              <input
+                className="input"
+                placeholder="0 8 * * 1-5"
+                value={scheduleValue}
+                onChange={e => setScheduleValue(e.target.value)}
+              />
+              <select className="input" value={scheduleTimezone} onChange={e => setScheduleTimezone(e.target.value)}>
+                {['UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Asia/Kolkata'].map(zone => (
+                  <option key={zone} value={zone}>{zone}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className={scheduleEnabled ? 'btn-secondary' : 'btn-primary'}
+                onClick={() => setScheduleEnabled(current => !current)}
+              >
+                {scheduleEnabled ? 'Enabled' : 'Enable'}
+              </button>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-[#4B5A73]">
+                Current mode: {scheduleEnabled ? 'Scheduled' : 'Manual'}
+              </p>
+              <button
+                className="btn-primary text-xs"
+                onClick={() => scheduleMut.mutate()}
+                disabled={!scheduleValue || scheduleMut.isPending}
+              >
+                {scheduleMut.isPending ? 'Saving…' : 'Save Schedule'}
+              </button>
+            </div>
+          </div>
+
+          <div className="glass-card p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <div className="rounded-xl bg-emerald-600/12 p-2 text-emerald-400">
+                <Webhook size={16} />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-white">Webhook trigger</h3>
+                <p className="text-xs text-[#8B9DBE]">Trigger this workflow from external tools without logging in.</p>
+              </div>
+            </div>
+            {webhookInfo ? (
+              <>
+                <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2">
+                  <div className="flex items-start gap-2">
+                    <code className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-[#8B9DBE]">
+                      {webhookInfo.webhook_url}
+                    </code>
+                    <button className="btn-ghost px-2 py-1 text-xs" onClick={() => {
+                      navigator.clipboard.writeText(webhookInfo.webhook_url)
+                      toast.success('Webhook URL copied')
+                    }}>
+                      <Copy size={12} />
+                    </button>
+                  </div>
+                </div>
+                <pre className="mt-3 overflow-x-auto rounded-xl border border-white/[0.08] bg-black/20 p-3 text-[11px] text-[#4B5A73]">
+                  {webhookInfo.curl_example}
+                </pre>
+              </>
+            ) : (
+              <p className="text-xs text-[#4B5A73]">Save this workflow to generate a signed webhook URL.</p>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-1 overflow-hidden">
         {/* Canvas */}
         <div className="obsidian-grid relative flex-1" data-testid="workflow-builder">
@@ -377,6 +520,8 @@ export function Workflows() {
   const [workflowToDelete, setWorkflowToDelete] = useState<Workflow | null>(null)
 
   const { data: workflows = [], isLoading } = useQuery({ queryKey: ['workflows'], queryFn: workflowsApi.list })
+  const { data: scheduledWorkflows = [] } = useQuery({ queryKey: ['workflows-scheduled'], queryFn: workflowsApi.listScheduled })
+  const { data: automationTemplates = [] } = useQuery({ queryKey: ['workflow-automation-templates'], queryFn: workflowsApi.automationTemplates })
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: agentsApi.list })
 
   const createMut = useMutation({
@@ -392,6 +537,31 @@ export function Workflows() {
   const deleteMut = useMutation({
     mutationFn: workflowsApi.delete,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['workflows'] }); setWorkflowToDelete(null); toast.success('Workflow deleted') },
+  })
+  const enableAutomationMut = useMutation({
+    mutationFn: workflowsApi.enableAutomationTemplate,
+    onSuccess: async (payload: { workflow: Workflow }) => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['workflows'] }),
+        qc.invalidateQueries({ queryKey: ['workflows-scheduled'] }),
+        qc.invalidateQueries({ queryKey: ['workflow-automation-templates'] }),
+      ])
+      toast.success(`${payload.workflow.name} enabled`)
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
+  const disableAutomationMut = useMutation({
+    mutationFn: (args: { workflowId: string; schedule: string; timezone: string }) =>
+      workflowsApi.setSchedule(args.workflowId, args.schedule, false, args.timezone),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['workflows'] }),
+        qc.invalidateQueries({ queryKey: ['workflows-scheduled'] }),
+        qc.invalidateQueries({ queryKey: ['workflow-automation-templates'] }),
+      ])
+      toast.success('Automation disabled')
+    },
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const handleSave = (data: Partial<Workflow>) => {
@@ -414,6 +584,61 @@ export function Workflows() {
 
   return (
     <div className="space-y-6 p-6 animate-fade-in">
+      <section className="space-y-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[#4B5A73]">Automations</p>
+          <h2 className="mt-2 text-2xl font-extrabold tracking-tight text-white">Quick automations</h2>
+          <p className="mt-1 text-sm text-[#8B9DBE]">Enable the agency routines founders expect to run without touching a button.</p>
+        </div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          {automationTemplates.map((template: AutomationTemplate) => {
+            const Icon = automationIcon(template.id)
+            const scheduled = scheduledWorkflows.find((item: ScheduledWorkflow) => item.workflow_id === template.workflow_id)
+            return (
+              <div key={template.id} className="glass-card flex flex-col gap-4 p-5">
+                <div className="flex items-start gap-3">
+                  <div className="rounded-2xl bg-blue-600/12 p-3 text-blue-400">
+                    <Icon size={18} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-semibold text-white">{template.name}</h3>
+                      <span className={template.enabled ? 'badge-emerald' : 'badge-glass'}>
+                        {template.enabled ? 'Enabled' : 'Ready'}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-[#8B9DBE]">{template.description}</p>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-xs text-[#4B5A73]">
+                  {template.enabled && scheduled?.next_run_at
+                    ? `Next run: ${formatRunTime(scheduled.next_run_at)}`
+                    : `Cron: ${template.cron}`}
+                </div>
+                <div className="mt-auto flex gap-2">
+                  {template.enabled && template.workflow_id && scheduled ? (
+                    <button
+                      className="btn-secondary w-full text-xs"
+                      onClick={() => disableAutomationMut.mutate({
+                        workflowId: template.workflow_id!,
+                        schedule: scheduled.schedule,
+                        timezone: scheduled.schedule_timezone,
+                      })}
+                    >
+                      Disable
+                    </button>
+                  ) : (
+                    <button className="btn-primary w-full text-xs" onClick={() => enableAutomationMut.mutate(template.id)}>
+                      Enable →
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-4xl font-semibold tracking-[-0.05em] text-white">Workflows</h1>

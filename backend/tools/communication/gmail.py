@@ -20,6 +20,20 @@ def _get_header(headers: list[dict], name: str) -> str:
     return ""
 
 
+async def _get_gmail_credentials(org_id: str, user_id: str, prefetched_config: dict | None = None):
+    try:
+        service = await get_gmail_service(org_id, user_id, prefetched_config=prefetched_config)
+        return service, None
+    except ValueError as exc:
+        message = str(exc)
+        if "gmail not connected" in message.lower() or "settings > integrations" in message.lower():
+            return None, "Gmail is not connected. Visit /integrations to connect with OAuth."
+        return None, message
+    except Exception as exc:
+        logger.error("Could not load Gmail credentials: %s", exc)
+        return None, f"Gmail error: {exc}"
+
+
 class GmailReadTool(BaseTool):
     name = "gmail_read"
     display_name = "Read Gmail"
@@ -54,11 +68,8 @@ class GmailReadTool(BaseTool):
         }
 
     async def validate_auth(self, org_id: str, user_id: str) -> bool:
-        try:
-            await get_gmail_service(org_id, user_id, prefetched_config=self.config)
-            return True
-        except Exception:
-            return False
+        service, _error = await _get_gmail_credentials(org_id, user_id, prefetched_config=self.config)
+        return service is not None
 
     async def execute(self, input_data: dict, org_id: str, user_id: str) -> ToolOutput:
         query = str(input_data.get("query", "")).strip()
@@ -66,9 +77,11 @@ class GmailReadTool(BaseTool):
         if not query:
             return ToolOutput(success=False, error="Query is required")
 
-        try:
-            service = await get_gmail_service(org_id, user_id, prefetched_config=self.config)
+        service, auth_error = await _get_gmail_credentials(org_id, user_id, prefetched_config=self.config)
+        if not service:
+            return ToolOutput(success=False, error=auth_error or "Gmail is not connected. Visit /integrations to connect with OAuth.")
 
+        try:
             def _list_messages():
                 return service.users().messages().list(
                     userId="me",
@@ -166,11 +179,8 @@ class GmailSendTool(BaseTool):
         }
 
     async def validate_auth(self, org_id: str, user_id: str) -> bool:
-        try:
-            await get_gmail_service(org_id, user_id, prefetched_config=self.config)
-            return True
-        except Exception:
-            return False
+        service, _error = await _get_gmail_credentials(org_id, user_id, prefetched_config=self.config)
+        return service is not None
 
     async def execute(self, input_data: dict, org_id: str, user_id: str) -> ToolOutput:
         to = str(input_data.get("to", "")).strip()
@@ -182,9 +192,11 @@ class GmailSendTool(BaseTool):
         if not all([to, subject, body]):
             return ToolOutput(success=False, error="to, subject, and body are required")
 
-        try:
-            service = await get_gmail_service(org_id, user_id, prefetched_config=self.config)
+        service, auth_error = await _get_gmail_credentials(org_id, user_id, prefetched_config=self.config)
+        if not service:
+            return ToolOutput(success=False, error=auth_error or "Gmail is not connected. Visit /integrations to connect with OAuth.")
 
+        try:
             message = MIMEMultipart("alternative")
             message["to"] = to
             message["subject"] = subject

@@ -257,6 +257,9 @@ class Workflow(Base):
     status = Column(String, default="draft")
     trigger = Column(String, default="manual")
     schedule = Column(String, nullable=True)
+    schedule_enabled = Column(Boolean, default=False, nullable=False)
+    schedule_timezone = Column(String(64), default="UTC", nullable=False)
+    last_run_at = Column(DateTime, nullable=True)
     input_template = Column(Text, default="")
     input_variables = Column(JSON, default=list)
     configured_inputs = Column(JSON, default=dict)
@@ -699,6 +702,7 @@ class EvalRun(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     suite_id = Column(String, ForeignKey("eval_suites.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    model_config_id = Column(String, ForeignKey("model_configs.id", ondelete="SET NULL"), nullable=True)
     status = Column(
         SAEnum(
             EvalRunStatus,
@@ -718,6 +722,8 @@ class EvalRun(Base):
     total_cost_usd = Column(Float, default=0.0)
     git_commit = Column(String(40), nullable=True)
     notes = Column(Text, nullable=True)
+    comparison_group_id = Column(String, nullable=True)
+    comparison_slot = Column(String(10), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -811,6 +817,24 @@ class InAppNotification(Base):
     )
     is_read = Column(Boolean, default=False)
     action_url = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class NotificationPreference(Base):
+    __tablename__ = "notification_preferences"
+    __table_args__ = (
+        UniqueConstraint("org_id", "user_id", name="uq_notification_preferences_org_user"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    email_on_approval_needed = Column(Boolean, default=True, nullable=False)
+    email_on_execution_complete = Column(Boolean, default=False, nullable=False)
+    email_on_autonomy_change = Column(Boolean, default=True, nullable=False)
+    daily_digest_enabled = Column(Boolean, default=True, nullable=False)
+    daily_digest_time = Column(String(5), default="08:00", nullable=False)
+    notification_email = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -1113,6 +1137,8 @@ class AgentTrustScore(Base):
     cost_efficiency = Column(Float, default=100.0)
     on_time_rate = Column(Float, default=100.0)
     risky_action_rate = Column(Float, default=100.0)
+    eval_pass_rate = Column(Float, default=0.0, nullable=False)
+    eval_runs_count = Column(Integer, default=0, nullable=False)
     overall_score = Column(Float, default=50.0)
     skill_scores = Column(JSON, default=dict)
     trajectory = Column(String(20), default="stable")

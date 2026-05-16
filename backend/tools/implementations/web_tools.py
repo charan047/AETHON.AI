@@ -3,6 +3,7 @@ import base64
 import difflib
 import hashlib
 import json
+import logging
 import socket
 import ssl
 import time
@@ -16,6 +17,8 @@ import redis.asyncio as redis
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
+
+logger = logging.getLogger(__name__)
 
 try:
     from cachetools import TTLCache
@@ -40,6 +43,7 @@ except ImportError:  # pragma: no cover
 from config import settings
 from tools.base import BaseTool, ToolCategory, ToolHealth
 from tools.registry import tool_registry
+from tools.research.search_backend import search_backend as _search_backend
 
 
 USER_AGENT = (
@@ -93,32 +97,6 @@ class _SimpleTTLCache(dict):
 
     def __setitem__(self, key, value):
         super().__setitem__(key, (value, time.time() + self.ttl))
-
-
-async def _html_search_results(query: str, max_results: int) -> list[dict[str, str]]:
-    async with httpx.AsyncClient(
-        timeout=20.0,
-        follow_redirects=True,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; AethonBot/1.0)"},
-    ) as client:
-        response = await client.get("https://www.bing.com/search", params={"q": query})
-        response.raise_for_status()
-
-    soup = BeautifulSoup(response.text, "lxml")
-    results: list[dict[str, str]] = []
-    for container in soup.select("li.b_algo")[:max_results]:
-        title_anchor = container.select_one("h2 a")
-        snippet_node = container.select_one(".b_caption p")
-        if not title_anchor:
-            continue
-        results.append(
-            {
-                "title": title_anchor.get_text(" ", strip=True),
-                "url": title_anchor.get("href", ""),
-                "snippet": snippet_node.get_text(" ", strip=True) if snippet_node else "",
-            }
-        )
-    return results
 
 
 @tool_registry.register
@@ -239,25 +217,21 @@ class WebIntelligenceTool(BaseTool):
         return monitor_webpage_change
 
     async def _web_search_impl(self, query: str, num_results: int = 5) -> str:
-        num_results = max(1, min(int(num_results or 5), 15))
+        num_results = max(1, min(int(num_results or 5), settings.search_max_results))
         cache_key = f"{query}:{num_results}"
         cached = self._search_cache.get(cache_key)
         if cached:
             return cached
 
-        results = await _html_search_results(query, num_results * 2)
-        filtered = []
-        for result in results:
-            url = result.get("url") or ""
-            title = result.get("title", "")
-            snippet = result.get("snippet", "")
-            if not url:
-                continue
-            filtered.append(f"{title}\n{url}\n{snippet}\n---")
-            if len(filtered) >= num_results:
+        raw = await _search_backend.search(query, num_results)
+        lines = []
+        for r in raw:
+            if not r.get("url") and r.get("title") == "Search unavailable":
+                lines.append(r["snippet"])
                 break
+            lines.append(f"{r.get('title', '')}\n{r.get('url', '')}\n{r.get('snippet', '')}\n---")
 
-        output = "\n".join(filtered) or f"No results found for '{query}'."
+        output = "\n".join(lines) or f"No results found for '{query}'."
         self._search_cache[cache_key] = output
         return output
 
@@ -481,9 +455,10 @@ class WebIntelligenceTool(BaseTool):
 
     async def health_check(self) -> tuple[ToolHealth, str]:
         try:
+            provider = await _search_backend.active_provider()
             content = await self._fetch_webpage_impl("https://example.com", "text")
             if "Example Domain" in content:
-                return ToolHealth.healthy, "Web fetch and extraction working"
+                return ToolHealth.healthy, f"Web fetch working; search provider: {provider}"
             return ToolHealth.degraded, "Fetched example.com but content was unexpected"
         except Exception as exc:
             return ToolHealth.unhealthy, str(exc)

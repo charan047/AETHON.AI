@@ -112,6 +112,57 @@ npm run dev
 - backend health: `http://localhost:8000/health`
 - Flower: `http://localhost:5555`
 
+## Development Setup
+
+### For Claude Code users (recommended)
+
+Install Superpowers — battle-tested TDD, debugging, and planning skills:
+
+```text
+/plugin marketplace add obra/superpowers-marketplace
+```
+
+What you get immediately:
+
+- `/brainstorm` — explore approaches before coding
+- `/write-plan` — create an implementation plan
+- `/execute-plan` — work through tasks with subagents
+- auto-triggered TDD support
+- systematic debugging and root-cause tracing
+- subagent-driven development for complex features
+
+### For Cursor users
+
+Install the Vercel skills CLI:
+
+```bash
+npx skills add vercel-labs/agent-skills --skill react-best-practices
+npx skills add vercel-labs/agent-skills --skill web-design-guidelines
+```
+
+### Engineering skills (Claude Code / Cursor)
+
+For engineering contributors:
+
+```text
+/plugin marketplace add alirezarezvani/claude-skills
+/plugin install engineering-skills@claude-code-skills
+```
+
+For product and architecture decisions:
+
+```text
+/plugin install product-skills@claude-code-skills
+```
+
+These skills are installed locally by contributors, not committed into the repo.
+
+### For all contributors
+
+- read [CLAUDE.md](CLAUDE.md) fully before making changes
+- check [.taskmaster/tasks](.taskmaster/tasks) for the current Phase 16 task list
+- use [AGENTS.md](AGENTS.md) if you are working with a non-Claude coding agent
+
 ## Architecture
 
 ```text
@@ -207,6 +258,102 @@ Aethon is multi-tenant by design. Important invariants:
 - high-risk actions should degrade toward approval, not silent allow
 
 If you touch auth, approvals, model configs, analytics, WebSocket broadcasting, or execution logs, read [SECURITY.md](SECURITY.md) first.
+
+## Contributing
+
+### Quick Start For Contributors
+
+1. Read [CLAUDE.md](CLAUDE.md) before touching code.
+2. Start the stack with `docker compose up -d --build`.
+3. Pick up the next structured task with `task-master next`.
+4. Use the spec workflow for new feature work instead of jumping straight to implementation.
+
+### Development Setup (Claude Code)
+
+- install Superpowers:
+  `/plugin marketplace add obra/superpowers-marketplace`
+- use the repo constitution in [CLAUDE.md](CLAUDE.md)
+- use the spec-kit skills under `.claude/skills/`
+- use Task Master for the active backlog:
+  `task-master list`
+  `task-master next`
+
+### Development Setup (Cursor)
+
+- install:
+  `npx skills add vercel-labs/agent-skills --skill react-best-practices`
+  `npx skills add vercel-labs/agent-skills --skill web-design-guidelines`
+- follow [.cursorrules](.cursorrules)
+- read [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md) before edits
+
+### Working On Phase 16 Tasks (Task Master)
+
+If you want to work on Phase 16 features:
+
+1. Install Task Master:
+
+```bash
+npm install -g task-master-ai
+```
+
+2. See the next available task:
+
+```bash
+task-master next
+```
+
+3. See all tasks:
+
+```bash
+task-master list
+```
+
+4. Mark a task complete:
+
+```bash
+task-master set-status --id=1 --status=done
+```
+
+The Phase 16 PRD lives in [.taskmaster/docs/prd.txt](.taskmaster/docs/prd.txt). Generated task files live in [.taskmaster/tasks](.taskmaster/tasks).
+
+### Starting A New Feature (spec-kit)
+
+1. Checkout a new branch:
+
+```bash
+git checkout -b 017-my-feature-name
+```
+
+2. Run `/speckit-specify` in Claude Code to define the feature.
+3. Run `/speckit-plan` to create the technical plan.
+4. Run `/speckit-tasks` to generate individual tasks.
+5. Use Task Master to track progress with `task-master list`.
+6. Submit a PR so reviewers can read the spec artifacts and implementation history.
+
+### Architecture Overview
+
+- repo constitution: [CLAUDE.md](CLAUDE.md)
+- agent-generic guidance: [AGENTS.md](AGENTS.md)
+- cursor rules: [.cursorrules](.cursorrules)
+- spec memory: [.specify/memory/constitution.md](.specify/memory/constitution.md)
+
+### What NOT To Touch
+
+- `backend/runtime/agent_runner.py`
+- `backend/runtime/workflow_engine.py`
+- `backend/runtime/graph_builder.py`
+- `backend/services/permission_engine.py`
+- any other guarded areas listed in [CLAUDE.md](CLAUDE.md)
+
+### Pull Request Process
+
+1. Read [CLAUDE.md](CLAUDE.md) and confirm your change respects org isolation and approval-first security.
+2. Add or update tests:
+   backend work should land with pytest coverage in `backend/tests/`
+   frontend work should land with Playwright coverage in `frontend/e2e/`
+3. Run the smallest verification set that proves the change.
+4. Update docs if contributor workflow, setup, or architecture expectations changed.
+5. Keep PR descriptions specific: what changed, why, how it was verified, and any remaining risk.
 
 ## Open Source Model
 

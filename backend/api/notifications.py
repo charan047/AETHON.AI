@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth.dependencies import get_current_user
 from auth.org_context import OrgContext, get_org_context
 from database import get_db
-from database.models import InAppNotification, User
+from database.models import InAppNotification, NotificationPreference, User
 
 
 router = APIRouter(dependencies=[Depends(get_current_user), Depends(get_org_context)])
@@ -24,6 +24,24 @@ class NotificationResponse(BaseModel):
     created_at: datetime | None
 
 
+class NotificationPreferenceResponse(BaseModel):
+    email_on_approval_needed: bool
+    email_on_execution_complete: bool
+    email_on_autonomy_change: bool
+    daily_digest_enabled: bool
+    daily_digest_time: str
+    notification_email: str | None
+
+
+class NotificationPreferenceUpdate(BaseModel):
+    email_on_approval_needed: bool = True
+    email_on_execution_complete: bool = False
+    email_on_autonomy_change: bool = True
+    daily_digest_enabled: bool = True
+    daily_digest_time: str = "08:00"
+    notification_email: str | None = None
+
+
 def _response(notification: InAppNotification) -> NotificationResponse:
     priority = notification.priority.value if hasattr(notification.priority, "value") else str(notification.priority)
     return NotificationResponse(
@@ -35,6 +53,33 @@ def _response(notification: InAppNotification) -> NotificationResponse:
         action_url=notification.action_url,
         created_at=notification.created_at,
     )
+
+
+def _serialize_preference(pref: NotificationPreference) -> NotificationPreferenceResponse:
+    return NotificationPreferenceResponse(
+        email_on_approval_needed=bool(pref.email_on_approval_needed),
+        email_on_execution_complete=bool(pref.email_on_execution_complete),
+        email_on_autonomy_change=bool(pref.email_on_autonomy_change),
+        daily_digest_enabled=bool(pref.daily_digest_enabled),
+        daily_digest_time=pref.daily_digest_time or "08:00",
+        notification_email=pref.notification_email,
+    )
+
+
+async def _get_or_create_preferences(user_id: str, org_id: str, db: AsyncSession) -> NotificationPreference:
+    pref = await db.scalar(
+        select(NotificationPreference).where(
+            NotificationPreference.user_id == user_id,
+            NotificationPreference.org_id == org_id,
+        )
+    )
+    if pref:
+        return pref
+    pref = NotificationPreference(org_id=org_id, user_id=user_id)
+    db.add(pref)
+    await db.commit()
+    await db.refresh(pref)
+    return pref
 
 
 async def _get_notification(notification_id: str, user_id: str, org_id: str, db: AsyncSession) -> InAppNotification:
@@ -67,6 +112,35 @@ async def list_notifications(
         query = query.where(InAppNotification.is_read == False)  # noqa: E712
     result = await db.execute(query.order_by(InAppNotification.created_at.desc()).limit(limit))
     return [_response(notification) for notification in result.scalars().all()]
+
+
+@router.get("/preferences", response_model=NotificationPreferenceResponse)
+async def get_notification_preferences(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    pref = await _get_or_create_preferences(current_user.id, ctx.org.id, db)
+    return _serialize_preference(pref)
+
+
+@router.put("/preferences", response_model=NotificationPreferenceResponse)
+async def update_notification_preferences(
+    data: NotificationPreferenceUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    pref = await _get_or_create_preferences(current_user.id, ctx.org.id, db)
+    pref.email_on_approval_needed = data.email_on_approval_needed
+    pref.email_on_execution_complete = data.email_on_execution_complete
+    pref.email_on_autonomy_change = data.email_on_autonomy_change
+    pref.daily_digest_enabled = data.daily_digest_enabled
+    pref.daily_digest_time = data.daily_digest_time
+    pref.notification_email = data.notification_email
+    await db.commit()
+    await db.refresh(pref)
+    return _serialize_preference(pref)
 
 
 @router.get("/count")

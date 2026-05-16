@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -23,12 +24,18 @@ from database.models import (
     EvalRunStatus,
     EvalSuite,
     EvalSuiteStatus,
+    ModelConfig,
     ScoringMethod,
     User,
 )
 from services.eval_runner import EvalRunner
 from services.eval_generator import EvalGenerator
 from services.plan_service import plan_service
+from services.trust_score_service import trust_score_service
+from runtime.agent_runner import _extract_text, build_llm
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
@@ -88,6 +95,11 @@ class CIRunRequest(BaseModel):
     suite_ids: list[str]
     git_commit: Optional[str] = None
     branch: Optional[str] = None
+
+
+class CompareModelsRequest(BaseModel):
+    model_a_id: str
+    model_b_id: str
 
 
 def _enum_value(value):
@@ -168,6 +180,7 @@ def _run_response(run: EvalRun, results: list[dict] | None = None):
         "id": run.id,
         "suite_id": run.suite_id,
         "user_id": run.user_id,
+        "model_config_id": run.model_config_id,
         "status": _enum_value(run.status),
         "triggered_by": run.triggered_by,
         "total_cases": run.total_cases,
@@ -178,8 +191,11 @@ def _run_response(run: EvalRun, results: list[dict] | None = None):
         "passed": run.passed,
         "duration_seconds": run.duration_seconds,
         "total_cost_usd": run.total_cost_usd,
+        "cost_usd": run.total_cost_usd,
         "git_commit": run.git_commit,
         "notes": run.notes,
+        "comparison_group_id": run.comparison_group_id,
+        "comparison_slot": run.comparison_slot,
         "created_at": run.created_at,
         "completed_at": run.completed_at,
         "results": results,
@@ -217,6 +233,122 @@ async def _last_run(suite_id: str, db: AsyncSession) -> EvalRun | None:
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def _get_model_config_for_org(model_config_id: str, org_id: str, db: AsyncSession) -> ModelConfig:
+    config = await db.scalar(
+        select(ModelConfig).where(
+            ModelConfig.id == model_config_id,
+            ModelConfig.org_id == org_id,
+            ModelConfig.is_active == True,  # noqa: E712
+        )
+    )
+    if not config:
+        raise HTTPException(status_code=404, detail="Model config not found")
+    return config
+
+
+def _pass_rate(run: EvalRun) -> float:
+    total = int(run.total_cases or 0)
+    if total <= 0:
+        return 0.0
+    return round((int(run.passed_cases or 0) / total) * 100, 1)
+
+
+def _comparison_payload(run: EvalRun, model: ModelConfig) -> dict[str, Any]:
+    return {
+        "model_config_id": model.id,
+        "model_name": model.model_id,
+        "display_name": model.display_name,
+        "pass_rate": _pass_rate(run),
+        "avg_duration_seconds": round(float(run.duration_seconds or 0), 2),
+        "cost_usd": round(float(run.total_cost_usd or 0), 6),
+        "run_id": run.id,
+    }
+
+
+def _pick_winner(model_a: dict[str, Any], model_b: dict[str, Any]) -> str | None:
+    if model_a["pass_rate"] > model_b["pass_rate"]:
+        return "model_a"
+    if model_b["pass_rate"] > model_a["pass_rate"]:
+        return "model_b"
+    if model_a["cost_usd"] < model_b["cost_usd"]:
+        return "model_a"
+    if model_b["cost_usd"] < model_a["cost_usd"]:
+        return "model_b"
+    if model_a["avg_duration_seconds"] < model_b["avg_duration_seconds"]:
+        return "model_a"
+    if model_b["avg_duration_seconds"] < model_a["avg_duration_seconds"]:
+        return "model_b"
+    return None
+
+
+async def _generate_comparison_reason(model_a: dict[str, Any], model_b: dict[str, Any], winner: str | None) -> str:
+    if not winner:
+        return "Models performed similarly. Choose based on cost."
+
+    winner_payload = model_a if winner == "model_a" else model_b
+    loser_payload = model_b if winner == "model_a" else model_a
+    if winner_payload["pass_rate"] > loser_payload["pass_rate"]:
+        fallback = (
+            f"{winner_payload['model_name']} had a higher pass rate "
+            f"({winner_payload['pass_rate']}% vs {loser_payload['pass_rate']}%)"
+        )
+        if winner_payload["cost_usd"] < loser_payload["cost_usd"]:
+            fallback += (
+                f" at lower cost "
+                f"(${winner_payload['cost_usd']:.4f} vs ${loser_payload['cost_usd']:.4f})."
+            )
+        else:
+            fallback += "."
+    elif winner_payload["cost_usd"] < loser_payload["cost_usd"]:
+        fallback = (
+            f"Both models passed at {winner_payload['pass_rate']}%, but "
+            f"{winner_payload['model_name']} was cheaper per run "
+            f"(${winner_payload['cost_usd']:.4f} vs ${loser_payload['cost_usd']:.4f})."
+        )
+    elif winner_payload["avg_duration_seconds"] < loser_payload["avg_duration_seconds"]:
+        fallback = (
+            f"Both models performed similarly on pass rate and cost, but "
+            f"{winner_payload['model_name']} finished faster "
+            f"({winner_payload['avg_duration_seconds']:.1f}s vs {loser_payload['avg_duration_seconds']:.1f}s)."
+        )
+    else:
+        fallback = "Models performed similarly. Choose based on cost."
+
+    prompt = (
+        "Write one short sentence comparing two eval runs for an AI agent. "
+        "Prioritize pass rate first, then cost, then speed. Avoid hype.\n"
+        f"Model A: {json.dumps(model_a)}\n"
+        f"Model B: {json.dumps(model_b)}\n"
+        f"Winner: {winner}\n"
+    )
+    try:
+        llm = build_llm("gpt-4o-mini", temperature=0.1, max_tokens=120)
+        response = await llm.ainvoke(prompt)
+        text = _extract_text(response.content).strip()
+        return text or fallback
+    except Exception as exc:
+        logger.warning("Comparison reason generation failed: %s", exc)
+        return fallback
+
+
+def _comparison_history_entry(run_a: EvalRun, run_b: EvalRun, model_a: ModelConfig, model_b: ModelConfig) -> dict[str, Any]:
+    payload_a = _comparison_payload(run_a, model_a)
+    payload_b = _comparison_payload(run_b, model_b)
+    winner = _pick_winner(payload_a, payload_b)
+    return {
+        "comparison_group_id": run_a.comparison_group_id,
+        "created_at": run_a.created_at if (run_a.created_at and (not run_b.created_at or run_a.created_at >= run_b.created_at)) else run_b.created_at,
+        "model_a": payload_a,
+        "model_b": payload_b,
+        "winner": winner,
+        "winner_label": payload_a["model_name"] if winner == "model_a" else payload_b["model_name"] if winner == "model_b" else "tie",
+        "pass_rates": {
+            "model_a": payload_a["pass_rate"],
+            "model_b": payload_b["pass_rate"],
+        },
+    }
 
 
 async def _get_ci_user(
@@ -513,6 +645,103 @@ async def run_suite(
     return _run_response(run)
 
 
+@router.post("/suites/{suite_id}/compare")
+@router.post("/{suite_id}/compare")
+async def compare_models(
+    suite_id: str,
+    data: CompareModelsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    if data.model_a_id == data.model_b_id:
+        raise HTTPException(status_code=400, detail="Choose two different model configs")
+
+    suite = await _get_suite_for_user(suite_id, current_user.id, db, ctx.org.id)
+    case_count = await _count_cases(suite_id, db)
+    if case_count == 0:
+        raise HTTPException(status_code=400, detail="Eval suite has no cases")
+
+    model_a = await _get_model_config_for_org(data.model_a_id, ctx.org.id, db)
+    model_b = await _get_model_config_for_org(data.model_b_id, ctx.org.id, db)
+
+    comparison_group_id = str(uuid.uuid4())
+    runner = EvalRunner()
+    run_a, run_b = await asyncio.gather(
+        runner.run_suite(
+            suite_id,
+            current_user.id,
+            triggered_by="compare",
+            model_config_id=model_a.id,
+            comparison_group_id=comparison_group_id,
+            comparison_slot="model_a",
+        ),
+        runner.run_suite(
+            suite_id,
+            current_user.id,
+            triggered_by="compare",
+            model_config_id=model_b.id,
+            comparison_group_id=comparison_group_id,
+            comparison_slot="model_b",
+        ),
+    )
+
+    payload_a = _comparison_payload(run_a, model_a)
+    payload_b = _comparison_payload(run_b, model_b)
+    winner = _pick_winner(payload_a, payload_b)
+    winner_reason = await _generate_comparison_reason(payload_a, payload_b, winner)
+
+    return {
+        "suite_id": suite.id,
+        "model_a": payload_a,
+        "model_b": payload_b,
+        "winner": winner,
+        "winner_reason": winner_reason,
+        "comparison_group_id": comparison_group_id,
+    }
+
+
+@router.get("/suites/{suite_id}/compare-history")
+@router.get("/{suite_id}/compare-history")
+async def compare_history(
+    suite_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await _get_suite_for_user(suite_id, current_user.id, db, ctx.org.id)
+    result = await db.execute(
+        select(EvalRun)
+        .where(
+            EvalRun.suite_id == suite_id,
+            EvalRun.comparison_group_id.is_not(None),
+        )
+        .order_by(EvalRun.created_at.desc())
+        .limit(40)
+    )
+    runs = result.scalars().all()
+    groups: dict[str, dict[str, EvalRun]] = {}
+    for run in runs:
+        groups.setdefault(run.comparison_group_id, {})
+        if run.comparison_slot:
+            groups[run.comparison_group_id][run.comparison_slot] = run
+
+    comparisons = []
+    for group_id, slots in groups.items():
+        run_a = slots.get("model_a")
+        run_b = slots.get("model_b")
+        if not run_a or not run_b or not run_a.model_config_id or not run_b.model_config_id:
+            continue
+        model_a = await db.get(ModelConfig, run_a.model_config_id)
+        model_b = await db.get(ModelConfig, run_b.model_config_id)
+        if not model_a or not model_b:
+            continue
+        comparisons.append(_comparison_history_entry(run_a, run_b, model_a, model_b))
+
+    comparisons.sort(key=lambda item: item["created_at"] or datetime.min, reverse=True)
+    return {"comparisons": comparisons[:10]}
+
+
 @router.post("/suites/{suite_id}/cases/{case_id}/run")
 async def run_single_case(
     suite_id: str,
@@ -557,7 +786,78 @@ async def run_single_case(
     run.completed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(run)
+    pass_rate = 100.0 if passed else 0.0
+    await trust_score_service.record_eval_completed(
+        agent_id=str(suite.agent_id),
+        pass_rate=pass_rate,
+        total_cases=1,
+        passed_cases=1 if passed else 0,
+        db=db,
+    )
     return _run_response(run)
+
+
+@router.post("/quick-test/{agent_id}")
+async def quick_test_agent(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    agent = await db.scalar(select(Agent).where(Agent.id == agent_id, Agent.org_id == ctx.org.id))
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    suite = await db.scalar(
+        select(EvalSuite)
+        .where(
+            EvalSuite.org_id == ctx.org.id,
+            EvalSuite.user_id == current_user.id,
+            EvalSuite.agent_id == agent_id,
+        )
+        .order_by(EvalSuite.updated_at.desc(), EvalSuite.created_at.desc())
+        .limit(1)
+    )
+
+    if not suite:
+        suite = EvalSuite(
+            id=str(uuid.uuid4()),
+            org_id=ctx.org.id,
+            user_id=current_user.id,
+            agent_id=agent_id,
+            name=f"Quick Eval - {agent.name}",
+            description="Automatically generated quick regression suite.",
+            pass_threshold=0.8,
+        )
+        db.add(suite)
+        await db.commit()
+        await db.refresh(suite)
+
+    case_count = await _count_cases(suite.id, db)
+    if case_count == 0:
+        generated = await EvalGenerator().generate_cases_from_agent_prompt(
+            agent_id=agent_id,
+            suite_id=suite.id,
+            count=5,
+            db=db,
+        )
+        if not generated:
+            raise HTTPException(status_code=400, detail="Could not generate quick test cases for this agent")
+
+    run = await EvalRunner().run_suite(
+        suite.id,
+        current_user.id,
+        triggered_by="quick_test",
+        db=db,
+        model_config_id=agent.model_config_id,
+    )
+    return {
+        "suite_id": suite.id,
+        "run_id": run.id,
+        "pass_rate": _pass_rate(run),
+        "passed": int(run.passed_cases or 0),
+        "total": int(run.total_cases or 0),
+    }
 
 
 @router.get("/runs/{run_id}")

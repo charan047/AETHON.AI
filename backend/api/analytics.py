@@ -27,6 +27,25 @@ def _duration_seconds_expr():
     return func.extract("epoch", Execution.completed_at) - func.extract("epoch", Execution.started_at)
 
 
+def _normalize_daily_series(
+    rows: list[tuple[object, object]],
+    period_days: int,
+) -> list[dict[str, int]]:
+    by_date = {
+        str(day): int(value or 0)
+        for day, value in rows
+        if day is not None
+    }
+    start = (datetime.utcnow() - timedelta(days=period_days - 1)).date()
+    return [
+        {
+            "date": (start + timedelta(days=index)).isoformat(),
+            "count": by_date.get((start + timedelta(days=index)).isoformat(), 0),
+        }
+        for index in range(period_days)
+    ]
+
+
 @router.get("/costs")
 async def get_costs(
     period_days: int = Query(default=30, ge=1, le=365),
@@ -278,6 +297,7 @@ async def get_analytics_overview(
     ctx: OrgContext = Depends(get_org_context),
 ):
     costs = await get_costs(period_days=period_days, db=db, current_user=current_user, ctx=ctx)
+    since = datetime.utcnow() - timedelta(days=period_days)
     execution_counts = (
         await db.execute(
             select(
@@ -285,9 +305,26 @@ async def get_analytics_overview(
                 func.count(case((Execution.status == ExecutionStatus.completed, 1))).label("completed"),
                 func.count(case((Execution.status == ExecutionStatus.failed, 1))).label("failed"),
             )
-            .where(Execution.org_id == ctx.org.id)
+            .where(
+                Execution.org_id == ctx.org.id,
+                Execution.started_at >= since,
+            )
         )
     ).one()
+    daily_execution_rows = (
+        await db.execute(
+            select(
+                func.date(Execution.started_at).label("day"),
+                func.count(Execution.id).label("count"),
+            )
+            .where(
+                Execution.org_id == ctx.org.id,
+                Execution.started_at >= since,
+            )
+            .group_by(func.date(Execution.started_at))
+            .order_by(func.date(Execution.started_at).asc())
+        )
+    ).all()
     tool_calls = await db.scalar(
         select(func.count(ToolCallLog.id))
         .outerjoin(Execution, Execution.id == ToolCallLog.execution_id)
@@ -302,8 +339,15 @@ async def get_analytics_overview(
 
     return {
         "costs": costs,
-        "workflow_runs": execution_counts.total or 0,
+        "workflow_runs": int(execution_counts.total or 0),
         "workflow_success_rate": round(((execution_counts.completed or 0) / max((execution_counts.completed or 0) + (execution_counts.failed or 0), 1)) * 100, 2),
+        "executions_this_week": int(execution_counts.total or 0),
+        "completed_this_week": int(execution_counts.completed or 0),
+        "failed_this_week": int(execution_counts.failed or 0),
+        "daily_executions": _normalize_daily_series(
+            daily_execution_rows,
+            period_days=period_days,
+        ),
         "tool_calls": tool_calls,
         "api_calls_last_minute": telemetry_service.get_api_calls_last_minute(),
     }

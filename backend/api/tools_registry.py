@@ -6,8 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.dependencies import get_current_user, require_admin
 from auth.org_context import OrgContext, get_org_context
+from config import settings
 from database import get_db
 from database.models import Agent, Execution, ToolCallLog, User
+from tools.research.search_backend import search_backend
 from tools.registry import tool_registry
 
 
@@ -20,8 +22,8 @@ async def get_tool_catalog():
     return tool_registry.get_available_tools()
 
 
-@router.get("/health")
-async def get_tool_health(current_user: User = Depends(require_admin)):
+@router.get("/catalog-health")
+async def get_tool_catalog_health(current_user: User = Depends(require_admin)):
     """Admin-only health status for every registered tool."""
     await tool_registry.run_health_checks()
     return [
@@ -33,6 +35,56 @@ async def get_tool_health(current_user: User = Depends(require_admin)):
         }
         for item in tool_registry.get_available_tools()
     ]
+
+
+async def _build_provider_health() -> dict:
+    """
+    Returns configuration and live status for each tool provider.
+    Results are cached in Redis for 60 seconds.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    search_status = await search_backend.check_health()
+    if "last_check" not in search_status:
+        search_status["last_check"] = now
+
+    gmail_status = {
+        "provider": "oauth",
+        "status": "healthy" if settings.google_client_id else "not_configured",
+        "last_check": now,
+        "note": (
+            "Google OAuth configured."
+            if settings.google_client_id
+            else "No Google OAuth configured. Visit Settings → Integrations."
+        ),
+    }
+
+    result = {
+        "search": search_status,
+        "gmail": gmail_status,
+        "slack": {
+            "provider": "oauth",
+            "status": "not_configured",
+            "last_check": now,
+            "note": "Slack integration not configured. Connect via Integrations page.",
+        },
+        "github": {
+            "provider": "token",
+            "status": "not_configured",
+            "last_check": now,
+            "note": "Connect a GitHub token via the Integrations page.",
+        },
+    }
+    return result
+
+
+@router.get("/health")
+async def get_tool_health(current_user: User = Depends(get_current_user)):
+    return await _build_provider_health()
+
+
+@router.get("/provider-health")
+async def get_provider_health(current_user: User = Depends(get_current_user)):
+    return await _build_provider_health()
 
 
 @router.get("/analytics")

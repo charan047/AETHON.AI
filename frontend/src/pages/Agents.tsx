@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Brain, Briefcase, Check, Loader2, MessageSquare, Plus, Trash2, Wrench, X } from 'lucide-react'
 import { clsx } from 'clsx'
 
-import { agentsApi, extractApiError, modelsApi } from '../api/client'
+import { agentsApi, evalsApi, extractApiError, modelsApi } from '../api/client'
 import { AgentMemoryPanel } from '../components/agents/AgentMemoryPanel'
 import { ReputationCard } from '../components/agents/ReputationCard'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
@@ -403,6 +403,14 @@ export function Agents() {
       toast.success('Agent deleted')
     },
   })
+  const quickTestMut = useMutation({
+    mutationFn: (agentId: string) => evalsApi.quickTest(agentId),
+    onSuccess: result => {
+      qc.invalidateQueries({ queryKey: ['evals'] })
+      toast.success(`Quick test finished: ${result.passed}/${result.total} passed (${Math.round(result.pass_rate)}%)`)
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
 
   const handleSave = async (data: { agent: Partial<Agent>; modelConfigId: string | null; useOrgDefault: boolean }) => {
     try {
@@ -543,6 +551,14 @@ export function Agents() {
 
                   <div className="mt-5 flex gap-2">
                     <button className="btn-secondary flex-1 text-xs" onClick={() => setEditing(agent)}>Configure</button>
+                    <button
+                      className="btn-secondary flex-1 text-xs"
+                      disabled={quickTestMut.isPending}
+                      onClick={() => quickTestMut.mutate(agent.id)}
+                    >
+                      {quickTestMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                      Quick Test
+                    </button>
                     <Link to="/workflows" className="btn-secondary flex-1 text-xs"><MessageSquare size={13} /> Workflows</Link>
                     <button className="btn-secondary px-3 text-xs" onClick={() => setMemoryAgent(agent)}><Brain size={13} /></button>
                     <button className="btn-danger px-3 text-xs" onClick={() => setAgentToDelete(agent)}><Trash2 size={13} /></button>

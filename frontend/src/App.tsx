@@ -29,6 +29,7 @@ import { MarketplaceDetail } from './pages/MarketplaceDetail'
 import { PublishListing } from './pages/PublishListing'
 import { TeamManagement } from './pages/TeamManagement'
 import { OrgSettings } from './pages/OrgSettings'
+import { NotificationsSettings } from './pages/NotificationsSettings'
 import { AcceptInvite } from './pages/AcceptInvite'
 import { OnboardingWizard } from './pages/OnboardingWizard'
 import { Integrations } from './pages/Integrations'
@@ -172,6 +173,7 @@ function DocumentTitleManager() {
     : location.pathname.startsWith('/analytics') ? 'Analytics'
     : location.pathname.startsWith('/evals') ? 'Evals'
     : location.pathname.startsWith('/settings/models') ? 'AI Models'
+    : location.pathname.startsWith('/settings/notifications') ? 'Notifications'
     : location.pathname.startsWith('/settings/team') ? 'Team Structure'
     : location.pathname.startsWith('/settings/org') || location.pathname.startsWith('/company') ? 'Settings'
     : location.pathname.startsWith('/marketplace') ? 'Marketplace'
@@ -268,8 +270,10 @@ export default function App() {
                 <Route path="chat/:workflowId" element={<WorkflowChat />} />
                 <Route path="tools" element={<Tools />} />
                 <Route path="integrations" element={<Integrations />} />
+                <Route path="integrations/oauth/callback" element={<Integrations />} />
                 <Route path="company" element={<Navigate to="/settings/org" replace />} />
                 <Route path="settings/models" element={<ModelsPage />} />
+                <Route path="settings/notifications" element={<NotificationsSettings />} />
                 <Route path="settings/team" element={<TeamManagement />} />
                 <Route path="settings/org" element={<OrgSettings />} />
               </Route>

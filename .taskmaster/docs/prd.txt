@@ -1,0 +1,12 @@
+This PRD describes Phase 16 of Aethon Agency OS.
+Phase 16 adds: MCP Server (10 tools), Gmail/Slack OAuth,
+Scheduled automation (visual UI + 3 quick templates),
+webhook triggers, notification preferences,
+and developer experience tooling (CLAUDE.md, Task Master,
+Superpowers, spec-kit integration).
+
+The MCP server must support stdio and HTTP transports.
+OAuth must use Google Cloud Console for Gmail.
+Schedules must validate cron strings before saving.
+All new endpoints need org_id scoping.
+Frontend pages need isLoading + isError + empty states.

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -245,3 +245,52 @@ async def test_analytics_costs_are_org_scoped(client, org_pair, db: AsyncSession
     assert payload["total_cost"] == 1.25
     assert payload["by_model"].get("gpt-4o-mini") == 1.25
     assert "gpt-4o" not in payload["by_model"]
+
+
+@pytest.mark.asyncio
+async def test_analytics_overview_counts_executions_without_cost_logs(client, org_pair, db: AsyncSession):
+    workflow = Workflow(
+        id=str(uuid4()),
+        org_id=org_pair["org_a"].id,
+        name="Analytics Workflow",
+        description="Execution-only analytics coverage",
+        nodes=[],
+        edges=[],
+        status="draft",
+        trigger="manual",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(workflow)
+    await db.commit()
+
+    started_at = datetime.utcnow()
+    executions = [
+        Execution(
+            id=str(uuid4()),
+            org_id=org_pair["org_a"].id,
+            workflow_id=workflow.id,
+            trigger="manual",
+            status=ExecutionStatus.completed,
+            input_message=f"Execution {index}",
+            output_message="done",
+            started_at=started_at - timedelta(days=index),
+            completed_at=started_at - timedelta(days=index),
+            cost=0.0,
+            max_runtime_seconds=3600,
+        )
+        for index in range(3)
+    ]
+    db.add_all(executions)
+    await db.commit()
+
+    response = await client.get("/api/analytics/overview?period_days=7", headers=org_pair["org_a_headers"])
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workflow_runs"] == 3
+    assert payload["executions_this_week"] == 3
+    assert payload["completed_this_week"] == 3
+    assert payload["failed_this_week"] == 0
+    assert payload["costs"]["total_cost"] == 0.0
+    assert len(payload["daily_executions"]) == 7
+    assert sum(day["count"] for day in payload["daily_executions"]) == 3

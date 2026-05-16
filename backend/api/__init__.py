@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from config import settings
 from .auth import router as auth_router
 from .agents import router as agents_router
-from .workflows import router as workflows_router
+from .workflows import router as workflows_router, public_router as public_workflows_router
 from .executions import router as executions_router
 from .monitoring import router as monitoring_router
 from .tools import router as tools_router
@@ -39,6 +39,7 @@ api_router.include_router(auth_router)
 api_router.include_router(client_portal_router, prefix="/portal", tags=["portal"])
 api_router.include_router(agents_router, prefix="/agents", tags=["agents"])
 api_router.include_router(workflows_router, prefix="/workflows", tags=["workflows"])
+api_router.include_router(public_workflows_router)
 api_router.include_router(executions_router, prefix="/executions", tags=["executions"])
 api_router.include_router(monitoring_router, prefix="/monitoring", tags=["monitoring"])
 api_router.include_router(tools_registry_router, prefix="/tools", tags=["tools-registry"])
@@ -63,7 +64,7 @@ api_router.include_router(marketplace_router, prefix="/marketplace", tags=["mark
 api_router.include_router(public_models_router)
 api_router.include_router(models_router)
 api_router.include_router(agent_model_router)
-api_router.include_router(roles_router)
+api_router.include_router(roles_router, prefix="/roles", tags=["roles"])
 api_router.include_router(messages_router, prefix="/messages", tags=["messages"])
 api_router.include_router(audit_logs_router)
 if testing_router is not None:

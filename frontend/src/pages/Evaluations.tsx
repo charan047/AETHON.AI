@@ -14,13 +14,16 @@ import {
   CalendarClock,
   ChevronDown,
   ChevronRight,
+  CheckCircle2,
   FileJson,
   FlaskConical,
   History,
+  Loader2,
   Pencil,
   Play,
   Plus,
   Sparkles,
+  Trophy,
   Trash2,
   Upload,
   X,
@@ -39,16 +42,25 @@ import {
 import { format, formatDistanceToNow } from 'date-fns'
 import { clsx } from 'clsx'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { agentsApi, evalsApi, extractApiError } from '../api/client'
+import { agentsApi, evalsApi, extractApiError, modelsApi } from '../api/client'
 import { GlowCard } from '../components/ui/GlowCard'
 import { Skeleton, SkeletonCard } from '../components/ui/Skeleton'
 import { ScoreBadge } from '../components/evals/ScoreBadge'
 import { RunSuiteModal } from '../components/evals/RunSuiteModal'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
-import type { EvalCase, EvalCaseResult, EvalRun, EvalSuite, ScoringMethod } from '../types'
+import type {
+  EvalCase,
+  EvalCaseResult,
+  EvalModelComparisonHistoryItem,
+  EvalModelComparisonResult,
+  EvalRun,
+  EvalSuite,
+  ModelConfigRecord,
+  ScoringMethod,
+} from '../types'
 import { toast } from '../lib/toast'
 
-type Tab = 'cases' | 'history' | 'details' | 'insights'
+type Tab = 'cases' | 'history' | 'details' | 'insights' | 'compare'
 
 const scoringMethods: ScoringMethod[] = [
   'llm_judge',
@@ -119,6 +131,15 @@ export function Evaluations() {
   const insightsQuery = useQuery({
     queryKey: ['evals', 'insights', selectedSuiteId],
     queryFn: () => evalsApi.insights(selectedSuiteId!),
+    enabled: Boolean(selectedSuiteId),
+  })
+  const modelConfigsQuery = useQuery({
+    queryKey: ['model-configs', 'evals-compare'],
+    queryFn: modelsApi.list,
+  })
+  const compareHistoryQuery = useQuery({
+    queryKey: ['evals', 'compare-history', selectedSuiteId],
+    queryFn: () => evalsApi.compareHistory(selectedSuiteId!),
     enabled: Boolean(selectedSuiteId),
   })
 
@@ -258,6 +279,19 @@ export function Evaluations() {
             {tab === 'insights' && (
               <InsightsTab suite={detailQuery.data} insights={insightsQuery.data} loading={insightsQuery.isLoading} />
             )}
+
+            {tab === 'compare' && (
+              <CompareTab
+                suite={detailQuery.data}
+                models={modelConfigsQuery.data || []}
+                history={compareHistoryQuery.data?.comparisons || []}
+                loadingHistory={compareHistoryQuery.isLoading}
+                onRefresh={() => {
+                  qc.invalidateQueries({ queryKey: ['evals', 'compare-history', selectedSuiteId] })
+                  qc.invalidateQueries({ queryKey: ['evals', 'suite-runs', selectedSuiteId] })
+                }}
+              />
+            )}
           </div>
         ) : null}
       </main>
@@ -394,9 +428,10 @@ function Tabs({ tab, setTab, hasRun }: { tab: Tab; setTab: (tab: Tab) => void; h
     { id: 'history', label: 'Run History', icon: History },
     { id: 'details', label: 'Run Details', icon: Braces, disabled: !hasRun },
     { id: 'insights', label: 'Insights', icon: Sparkles },
+    { id: 'compare', label: 'Compare', icon: Trophy },
   ]
   return (
-    <div className="flex flex-wrap gap-2 rounded-xl border border-white/[0.08] bg-obsidian-900 p-1">
+    <div className="glass-card flex flex-wrap gap-2 rounded-xl p-1">
       {tabs.map(({ id, label, icon: Icon, disabled }) => (
         <button
           key={id}
@@ -404,7 +439,7 @@ function Tabs({ tab, setTab, hasRun }: { tab: Tab; setTab: (tab: Tab) => void; h
           onClick={() => setTab(id)}
           className={clsx(
             'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-40',
-            tab === id ? 'bg-accent-500 text-white shadow-glow-sm' : 'text-obsidian-400 hover:bg-white/[0.04] hover:text-white',
+            tab === id ? 'bg-blue-600/12 text-white shadow-glow-sm' : 'text-obsidian-400 hover:bg-white/[0.04] hover:text-white',
           )}
         >
           <Icon size={15} /> {label}
@@ -680,6 +715,215 @@ function InsightsTab({ suite, insights, loading }: { suite: EvalSuite; insights?
         <div className="mb-3 font-semibold text-white">Suite threshold</div>
         <ScoreBadge score={suite.pass_threshold} threshold={suite.pass_threshold} size="lg" />
         <p className="mt-3 text-sm text-obsidian-500">Runs pass when the weighted average reaches this threshold.</p>
+      </GlowCard>
+    </div>
+  )
+}
+
+function CompareTab({
+  suite,
+  models,
+  history,
+  loadingHistory,
+  onRefresh,
+}: {
+  suite: EvalSuite
+  models: ModelConfigRecord[]
+  history: EvalModelComparisonHistoryItem[]
+  loadingHistory: boolean
+  onRefresh: () => void
+}) {
+  const qc = useQueryClient()
+  const [modelAId, setModelAId] = useState('')
+  const [modelBId, setModelBId] = useState('')
+  const [result, setResult] = useState<EvalModelComparisonResult | null>(null)
+  const estimatedSeconds = Math.max((suite.case_count || suite.cases?.length || 0) * 2, 8)
+
+  useEffect(() => {
+    if (!models.length) return
+    if (!modelAId) setModelAId(models[0]?.id || '')
+    if (!modelBId) setModelBId(models[1]?.id || models[0]?.id || '')
+  }, [modelAId, modelBId, models])
+
+  const compareMutation = useMutation({
+    mutationFn: () => evalsApi.compareModels(suite.id, modelAId, modelBId),
+    onSuccess: payload => {
+      setResult(payload)
+      onRefresh()
+      toast.success('Model comparison finished')
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
+
+  const applyMutation = useMutation({
+    mutationFn: (modelConfigId: string) => agentsApi.assignModel(suite.agent_id, modelConfigId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['agents'] })
+      qc.invalidateQueries({ queryKey: ['model-configs'] })
+      toast.success('Winning model applied to this agent')
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
+
+  const winnerSide = result?.winner === 'model_a' ? result.model_a : result?.winner === 'model_b' ? result.model_b : null
+
+  return (
+    <div className="space-y-4">
+      <GlowCard glowColor="blue" className="p-5">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <h3 className="text-xl font-semibold text-white">Compare Models on This Suite</h3>
+            <p className="mt-2 text-sm text-obsidian-400">
+              Run the same eval suite on two saved model configs and compare pass rate, speed, and cost.
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-[1fr_auto_1fr] xl:min-w-[680px]">
+            <select className="input" value={modelAId} onChange={e => setModelAId(e.target.value)}>
+              {models.map(model => (
+                <option key={model.id} value={model.id}>
+                  {model.display_name} — {model.model_id}
+                </option>
+              ))}
+            </select>
+            <div className="grid place-items-center text-sm font-semibold text-obsidian-400">vs</div>
+            <select className="input" value={modelBId} onChange={e => setModelBId(e.target.value)}>
+              {models.map(model => (
+                <option key={model.id} value={model.id}>
+                  {model.display_name} — {model.model_id}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            className="btn-primary"
+            disabled={!modelAId || !modelBId || modelAId === modelBId || compareMutation.isPending}
+            onClick={() => compareMutation.mutate()}
+          >
+            {compareMutation.isPending ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Running comparison...
+              </>
+            ) : (
+              <>
+                <Beaker size={16} />
+                Run Comparison
+              </>
+            )}
+          </button>
+          {compareMutation.isPending && (
+            <span className="text-sm text-obsidian-500">This takes about {estimatedSeconds}s for two full runs.</span>
+          )}
+        </div>
+      </GlowCard>
+
+      {result && (
+        <GlowCard glowColor={winnerSide ? 'emerald' : 'cyan'} className="p-5">
+          <div className="grid gap-4 lg:grid-cols-2">
+            {([
+              ['A', result.model_a],
+              ['B', result.model_b],
+            ] as Array<['A' | 'B', EvalModelComparisonResult['model_a']]>).map(([slot, side]) => {
+              const isWinner = result.winner === `model_${slot.toLowerCase()}`
+              return (
+                <div
+                  key={side.model_config_id}
+                  className={clsx(
+                    'rounded-2xl border p-4 transition',
+                    isWinner ? 'border-emerald-500/30 bg-emerald-500/[0.06]' : 'border-white/[0.08] bg-white/[0.03]',
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.18em] text-obsidian-500">Model {slot}</div>
+                      <div className="mt-2 text-lg font-semibold text-white">{side.display_name || side.model_name}</div>
+                      <div className="mt-1 text-sm text-obsidian-400">{side.model_name}</div>
+                    </div>
+                    {isWinner && <span className="badge-emerald"><Trophy size={12} /> Winner</span>}
+                  </div>
+                  <div className="mt-4 space-y-2 text-sm text-white/80">
+                    <div className="flex items-center justify-between"><span>Pass rate</span><span className="font-semibold text-white">{side.pass_rate}%</span></div>
+                    <div className="flex items-center justify-between"><span>Avg speed</span><span className="font-semibold text-white">{side.avg_duration_seconds}s</span></div>
+                    <div className="flex items-center justify-between"><span>Cost / run</span><span className="font-semibold text-white">${side.cost_usd.toFixed(4)}</span></div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-xl bg-emerald-500/12 p-2 text-emerald-300">
+                <CheckCircle2 size={18} />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-white">Winner reason</div>
+                <p className="mt-1 text-sm leading-6 text-obsidian-400">{result.winner_reason}</p>
+              </div>
+            </div>
+            {winnerSide && (
+              <button
+                className="btn-emerald mt-4"
+                disabled={applyMutation.isPending}
+                onClick={() => applyMutation.mutate(winnerSide.model_config_id)}
+              >
+                {applyMutation.isPending ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Applying...
+                  </>
+                ) : (
+                  <>Apply {winnerSide.display_name || winnerSide.model_name} to this agent</>
+                )}
+              </button>
+            )}
+          </div>
+        </GlowCard>
+      )}
+
+      <GlowCard glowColor="cyan" className="overflow-hidden">
+        <div className="border-b border-white/[0.08] px-5 py-4">
+          <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-white/70">Previous Comparisons</h4>
+        </div>
+        {loadingHistory ? (
+          <div className="p-5"><Skeleton className="h-40" /></div>
+        ) : !history.length ? (
+          <div className="p-5 text-sm text-obsidian-400">No comparisons yet. Run one to build a history for this suite.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-white/[0.03] text-left text-xs uppercase tracking-[0.14em] text-obsidian-500">
+                <tr>
+                  <th className="px-4 py-3">Date</th>
+                  <th className="px-4 py-3">Model A</th>
+                  <th className="px-4 py-3">Model B</th>
+                  <th className="px-4 py-3">Winner</th>
+                  <th className="px-4 py-3">Pass Rates</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map(item => (
+                  <tr key={item.comparison_group_id} className="border-t border-white/[0.05] hover:bg-white/[0.025]">
+                    <td className="px-4 py-3 text-obsidian-400">{relative(item.created_at)}</td>
+                    <td className="px-4 py-3 text-white">{item.model_a.display_name || item.model_a.model_name}</td>
+                    <td className="px-4 py-3 text-white">{item.model_b.display_name || item.model_b.model_name}</td>
+                    <td className="px-4 py-3">
+                      <span className={clsx('badge-glass', item.winner && 'badge-emerald')}>
+                        {item.winner_label}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-obsidian-400">
+                      {item.pass_rates.model_a}% vs {item.pass_rates.model_b}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </GlowCard>
     </div>
   )

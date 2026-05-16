@@ -1,7 +1,11 @@
 import axios from 'axios'
 import type {
   Agent,
+  AgentTrustScoreDetail,
   Workflow,
+  ScheduledWorkflow,
+  AutomationTemplate,
+  WorkflowWebhookUrl,
   Execution,
   ExecutionRunResponse,
   Stats,
@@ -38,6 +42,9 @@ import type {
   EvalInsights,
   EvalRun,
   EvalRunsResponse,
+  EvalModelComparisonHistoryResponse,
+  EvalModelComparisonResult,
+  EvalQuickTestResponse,
   EvalSuite,
   InviteDetails,
   LongTaskStatus,
@@ -68,6 +75,7 @@ import type {
   ClientCreateInput,
   ClientDetail,
   ClientListResponse,
+  NotificationPreference,
 } from '../types'
 
 export const api = axios.create({ baseURL: '/api', withCredentials: true })
@@ -159,6 +167,7 @@ api.interceptors.response.use(
 export const agentsApi = {
   list: () => api.get<Agent[]>('/agents').then(r => r.data),
   get: (id: string) => api.get<Agent>(`/agents/${id}`).then(r => r.data),
+  getTrustScore: (id: string) => api.get<AgentTrustScoreDetail>(`/roles/agents/${id}/trust-score`).then(r => r.data),
   create: (data: Partial<Agent>) => api.post<Agent>('/agents', data).then(r => r.data),
   update: (id: string, data: Partial<Agent>) => api.put<Agent>(`/agents/${id}`, data).then(r => r.data),
   delete: (id: string) => api.delete(`/agents/${id}`),
@@ -210,11 +219,21 @@ export const portalApi = {
 // Workflows
 export const workflowsApi = {
   list: () => api.get<Workflow[]>('/workflows').then(r => r.data),
+  listScheduled: () => api.get<ScheduledWorkflow[]>('/workflows/scheduled').then(r => r.data),
   get: (id: string) => api.get<Workflow>(`/workflows/${id}`).then(r => r.data),
   create: (data: Partial<Workflow>) => api.post<Workflow>('/workflows', data).then(r => r.data),
   update: (id: string, data: Partial<Workflow>) => api.put<Workflow>(`/workflows/${id}`, data).then(r => r.data),
+  setSchedule: (id: string, schedule: string, scheduleEnabled: boolean, scheduleTimezone: string) =>
+    api.patch<ScheduledWorkflow>(`/workflows/${id}/schedule`, {
+      schedule,
+      schedule_enabled: scheduleEnabled,
+      schedule_timezone: scheduleTimezone,
+    }).then(r => r.data),
   delete: (id: string) => api.delete(`/workflows/${id}`),
   getTemplates: () => api.get<Template[]>('/workflows/templates').then(r => r.data),
+  automationTemplates: () => api.get<AutomationTemplate[]>('/workflows/automation-templates').then(r => r.data),
+  enableAutomationTemplate: (id: string) => api.post(`/workflows/automation-templates/${id}/enable`).then(r => r.data),
+  webhookUrl: (id: string) => api.get<WorkflowWebhookUrl>(`/workflows/${id}/webhook-url`).then(r => r.data),
   versions: (id: string) => api.get<WorkflowVersion[]>(`/workflows/${id}/versions`).then(r => r.data),
   version: (id: string, version: number) =>
     api.get<WorkflowVersionDetail>(`/workflows/${id}/versions/${version}`).then(r => r.data),
@@ -420,6 +439,22 @@ export const businessApi = {
 
 export const integrationsApi = {
   list: () => api.get<UserIntegration[]>('/integrations').then(r => r.data),
+  startGmailOAuth: () =>
+    api.get<{ oauth_url: string }>('/integrations/oauth/gmail/start').then(r => r.data),
+  startSlackOAuth: () =>
+    api.get<{ oauth_url: string }>('/integrations/oauth/slack/start').then(r => r.data),
+  oauthCallback: (data: { code: string; state: string }) =>
+    api.post<{
+      success: boolean
+      provider: 'gmail' | 'slack'
+      email?: string
+      workspace?: string
+      integration: UserIntegration
+    }>('/integrations/oauth/callback', data).then(r => r.data),
+  refreshGmailOAuth: () =>
+    api.get<{ success: boolean; provider: 'gmail'; email: string; expires_at?: string | null }>(
+      '/integrations/oauth/gmail/refresh',
+    ).then(r => r.data),
   createGitHub: (data: { name: string; access_token: string; default_repo?: string }) =>
     api.post<UserIntegration>('/integrations/github', data).then(r => r.data),
   createEmail: (data: {
@@ -434,6 +469,14 @@ export const integrationsApi = {
   }) => api.post<UserIntegration>('/integrations/email', data).then(r => r.data),
   test: (id: string) => api.post<UserIntegration>(`/integrations/${id}/test`).then(r => r.data),
   delete: (id: string) => api.delete(`/integrations/${id}`),
+}
+
+export const notificationsApi = {
+  list: (unreadOnly = true) => api.get('/notifications', { params: { unread_only: unreadOnly } }).then(r => r.data),
+  count: () => api.get<{ unread: number }>('/notifications/count').then(r => r.data),
+  preferences: () => api.get<NotificationPreference>('/notifications/preferences').then(r => r.data),
+  updatePreferences: (data: NotificationPreference) =>
+    api.put<NotificationPreference>('/notifications/preferences', data).then(r => r.data),
 }
 
 export const feedbackApi = {
@@ -465,6 +508,14 @@ export const analyticsApi = {
   performance: () => api.get<AnalyticsPerformance>('/analytics/performance').then(r => r.data),
   tools: (periodDays = 30) =>
     api.get<AnalyticsTools>('/analytics/tools', { params: { period_days: periodDays } }).then(r => r.data),
+}
+
+export const toolsApi = {
+  toolsHealth: () => api.get('/tools/health').then(r => r.data),
+  providerHealth: () => api.get('/tools/provider-health').then(r => r.data),
+  catalog: () => api.get('/tools/catalog').then(r => r.data),
+  analytics: (periodDays = 7) =>
+    api.get('/tools/analytics', { params: { period_days: periodDays } }).then(r => r.data),
 }
 
 export const evalsApi = {
@@ -500,6 +551,15 @@ export const evalsApi = {
   runs: (suiteId: string, limit = 20) =>
     api.get<EvalRunsResponse>(`/evals/suites/${suiteId}/runs`, { params: { limit } }).then(r => r.data),
   insights: (suiteId: string) => api.get<EvalInsights>(`/evals/suites/${suiteId}/insights`).then(r => r.data),
+  compareModels: (suiteId: string, modelAId: string, modelBId: string) =>
+    api.post<EvalModelComparisonResult>(`/evals/${suiteId}/compare`, {
+      model_a_id: modelAId,
+      model_b_id: modelBId,
+    }).then(r => r.data),
+  compareHistory: (suiteId: string) =>
+    api.get<EvalModelComparisonHistoryResponse>(`/evals/${suiteId}/compare-history`).then(r => r.data),
+  quickTest: (agentId: string) =>
+    api.post<EvalQuickTestResponse>(`/evals/quick-test/${agentId}`).then(r => r.data),
   ciToken: () => api.get<{ ci_token: string; key_prefix: string; message: string }>('/evals/ci/token').then(r => r.data),
 }
 

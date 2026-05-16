@@ -34,6 +34,43 @@ export interface Agent {
   updated_at: string
 }
 
+export interface AgentTrustScoreDetail {
+  id: string
+  agent_id: string
+  overall_score: number
+  autonomy_level: string
+  trajectory: string
+  trajectory_delta: number
+  skill_scores: Record<string, number>
+  eval_pass_rate: number
+  eval_runs_count: number
+  components: {
+    task_success_rate: number
+    review_pass_rate: number
+    risky_action_rate: number
+    on_time_rate: number
+    cost_efficiency: number
+    eval_pass_rate: number
+  }
+  counters: {
+    total_tasks: number
+    successful_tasks: number
+    failed_tasks: number
+  }
+  next_level: {
+    level: string
+    points_needed: number
+  } | null
+  autonomy_history: Array<{
+    from: string
+    to: string
+    direction: string
+    score_at_change: number
+    at: string
+  }>
+  last_calculated: string | null
+}
+
 export interface Client {
   id: string
   name: string
@@ -133,6 +170,9 @@ export interface Workflow {
   status: 'draft' | 'active' | 'paused'
   trigger: string
   schedule: string | null
+  schedule_enabled?: boolean
+  schedule_timezone?: string
+  last_run_at?: string | null
   input_template?: string
   input_variables?: Array<Record<string, unknown>>
   configured_inputs?: Record<string, unknown>
@@ -142,6 +182,40 @@ export interface Workflow {
   max_cycles: number
   created_at: string
   updated_at: string
+}
+
+export interface ScheduledWorkflow {
+  workflow_id: string
+  name: string
+  schedule: string
+  schedule_enabled: boolean
+  schedule_timezone: string
+  next_run_at?: string | null
+  last_run_at?: string | null
+}
+
+export interface AutomationTemplate {
+  id: string
+  name: string
+  cron: string
+  description: string
+  enabled: boolean
+  workflow_id?: string | null
+}
+
+export interface WorkflowWebhookUrl {
+  workflow_id: string
+  webhook_url: string
+  curl_example: string
+}
+
+export interface NotificationPreference {
+  email_on_approval_needed: boolean
+  email_on_execution_complete: boolean
+  email_on_autonomy_change: boolean
+  daily_digest_enabled: boolean
+  daily_digest_time: string
+  notification_email?: string | null
 }
 
 export interface WorkflowVersion {
@@ -437,8 +511,9 @@ export interface BusinessSummary {
 
 export interface UserIntegration {
   id: string
-  integration_type: 'github' | 'email_smtp' | 'slack' | 'notion' | 'linear'
+  integration_type: 'github' | 'email_smtp' | 'gmail' | 'slack' | 'notion' | 'linear'
   name: string
+  connected_account?: string | null
   is_active: boolean
   last_tested_at: string | null
   last_test_result: string | null
@@ -648,6 +723,10 @@ export interface AnalyticsOverview {
   costs: AnalyticsCosts
   workflow_runs: number
   workflow_success_rate: number
+  executions_this_week: number
+  completed_this_week: number
+  failed_this_week: number
+  daily_executions: { date: string; count: number }[]
   tool_calls: number
   api_calls_last_minute: number
 }
@@ -858,6 +937,7 @@ export interface EvalRun {
   id: string
   suite_id: string
   user_id: string
+  model_config_id?: string | null
   status: 'pending' | 'running' | 'completed' | 'failed'
   triggered_by: string
   total_cases: number
@@ -868,8 +948,11 @@ export interface EvalRun {
   passed?: boolean | null
   duration_seconds?: number | null
   total_cost_usd: number
+  cost_usd?: number
   git_commit?: string | null
   notes?: string | null
+  comparison_group_id?: string | null
+  comparison_slot?: string | null
   created_at: string
   completed_at?: string | null
   results?: EvalCaseResult[] | null
@@ -885,6 +968,50 @@ export interface EvalInsights {
   hardest_cases: { case_id: string; case_name?: string; failures?: number; avg_score?: number }[]
   most_improved_cases: { case_id: string; case_name?: string; delta: number }[]
   regression_cases: { case_id: string; case_name?: string }[]
+}
+
+export interface EvalModelComparisonSide {
+  model_config_id: string
+  model_name: string
+  display_name?: string
+  pass_rate: number
+  avg_duration_seconds: number
+  cost_usd: number
+  run_id: string
+}
+
+export interface EvalModelComparisonResult {
+  suite_id: string
+  comparison_group_id?: string
+  model_a: EvalModelComparisonSide
+  model_b: EvalModelComparisonSide
+  winner: 'model_a' | 'model_b' | null
+  winner_reason: string
+}
+
+export interface EvalModelComparisonHistoryItem {
+  comparison_group_id: string
+  created_at: string
+  model_a: EvalModelComparisonSide
+  model_b: EvalModelComparisonSide
+  winner: 'model_a' | 'model_b' | null
+  winner_label: string
+  pass_rates: {
+    model_a: number
+    model_b: number
+  }
+}
+
+export interface EvalModelComparisonHistoryResponse {
+  comparisons: EvalModelComparisonHistoryItem[]
+}
+
+export interface EvalQuickTestResponse {
+  suite_id: string
+  run_id: string
+  pass_rate: number
+  passed: number
+  total: number
 }
 
 export interface AgentStatus {

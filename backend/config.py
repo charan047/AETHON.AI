@@ -46,11 +46,37 @@ class Settings(BaseSettings):
     docker_execution_image: str = "platform-executor:latest"
     otlp_endpoint: str = ""
     default_monthly_budget_usd: float = 50.0
+    # ─── Google OAuth (Gmail) ───────────────────────────────────────────────
+    # Setup: console.cloud.google.com → OAuth 2.0 credentials
+    # Redirect URI: http://localhost:5173/integrations/oauth/callback
     google_client_id: str = ""
     google_client_secret: str = ""
+    google_oauth_redirect_uri: str = "http://localhost:5173/integrations/oauth/callback"
+    # ─── Slack OAuth ────────────────────────────────────────────────────────
+    # Setup: api.slack.com/apps
+    slack_client_id: str = ""
+    slack_client_secret: str = ""
+    slack_oauth_redirect_uri: str = "http://localhost:5173/integrations/oauth/callback"
     tavily_api_key: str = ""
+    # ─── Search ───────────────────────────────────────────────────────────────
+    # Provider priority: brave → serper → ddg (free fallback)
+    # brave_search_api_key: free key at search.brave.com/app/keys (2 000 req/mo)
+    # serper_api_key: free key at serper.dev (2 500 queries)
+    brave_search_api_key: str = ""
+    serper_api_key: str = ""
+    search_max_results: int = 8
+    # ─── MCP Server ──────────────────────────────────────────────────────────
+    mcp_enabled: bool = False
+    mcp_api_secret: str = ""
+    # Run: python backend/mcp_server.py
+    # See docs/MCP.md for Claude Desktop and IDE setup.
     run_migrations_on_startup: bool = False
     enable_testing_api: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
     pod_id: str = f"{socket.gethostname()}:{os.getpid()}"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
@@ -83,7 +109,7 @@ AVAILABLE_MODELS = [
 ]
 
 AVAILABLE_TOOLS = [
-    {"id": "web_search",    "name": "Web Search",    "description": "Search the internet using DuckDuckGo"},
+    {"id": "web_search",    "name": "Web Search",    "description": "Search the internet (Brave → Serper → DuckDuckGo fallback)"},
     {"id": "calculator",    "name": "Calculator",    "description": "Perform mathematical calculations"},
     {"id": "http_request",  "name": "HTTP Request",  "description": "Make HTTP GET requests to external APIs"},
     {"id": "datetime_tool", "name": "Date & Time",   "description": "Get the current date and time"},

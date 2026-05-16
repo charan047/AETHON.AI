@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage
 
+from runtime import agent_runner as agent_runner_module
 from runtime.agent_runner import AgentRunner
 
 
@@ -81,3 +82,70 @@ async def test_agent_runner_retries_malformed_tool_call_before_apology():
     assert "invalid tool call" not in response
     assert total_tokens == 0
     assert tools_called == []
+
+
+@pytest.mark.asyncio
+async def test_failed_run_records_zero_cost_log(monkeypatch):
+    config = SimpleNamespace(
+        id="agent-2",
+        name="Jordan",
+        org_id="org-1",
+        model="test-model",
+        tools=[],
+    )
+    runner = AgentRunner(config, memory_service=_NoopMemoryService())
+    runner.llm = SimpleNamespace()
+
+    async def _noop_step(**_kwargs):
+        return None, None
+
+    async def _failing_execute(**_kwargs):
+        raise RuntimeError("provider exploded")
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    async def _not_blocked(**_kwargs):
+        return False
+
+    recorded: dict[str, object] = {}
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    def _fake_session_local():
+        return _FakeSession()
+
+    async def _fake_record_execution_cost(**kwargs):
+        recorded.update(kwargs)
+        return 0.0
+
+    monkeypatch.setattr(runner, "_resolve_llm", _noop)
+    monkeypatch.setattr(runner, "_build_runtime_tools", _noop)
+    monkeypatch.setattr(runner, "_build_enhanced_system_prompt", _noop)
+    monkeypatch.setattr(runner, "_record_execution_step", _noop_step)
+    monkeypatch.setattr(runner, "_execute_with_retry", _failing_execute)
+    monkeypatch.setattr(runner, "_handle_blocker_escalation", _not_blocked)
+    monkeypatch.setattr(runner, "_finalize_trust_and_status", _noop)
+    monkeypatch.setattr(agent_runner_module, "AsyncSessionLocal", _fake_session_local)
+    monkeypatch.setattr(agent_runner_module.cost_tracker, "record_execution_cost", _fake_record_execution_cost)
+
+    with pytest.raises(RuntimeError, match="provider exploded"):
+        await runner.run(
+            "Handle this request",
+            user_id="user-1",
+            thread_id="thread-1",
+            execution_id="exec-123",
+            org_id="org-1",
+        )
+
+    assert recorded["execution_id"] == "exec-123"
+    assert recorded["agent_id"] == "agent-2"
+    assert recorded["model"] == "test-model"
+    assert recorded["input_tokens"] == 0
+    assert recorded["output_tokens"] == 0
+    assert recorded["user_id"] == "user-1"

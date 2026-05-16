@@ -17,6 +17,89 @@ logger = logging.getLogger(__name__)
 class EvalGenerator:
     """Generates eval suites/cases from successful execution history."""
 
+    async def generate_cases_from_agent_prompt(
+        self,
+        agent_id: str,
+        suite_id: str,
+        count: int = 5,
+        db: AsyncSession = None,
+    ) -> list[EvalCase]:
+        if db is None:
+            raise ValueError("db session is required")
+
+        agent = await db.get(Agent, agent_id)
+        suite = await db.get(EvalSuite, suite_id)
+        if not agent or not suite:
+            raise ValueError("Agent or eval suite not found")
+
+        prompt = f"""
+You are generating eval cases for an AI agency agent.
+
+Agent name: {agent.name}
+Role: {agent.role}
+System prompt:
+{agent.system_prompt}
+
+Create {count} compact but high-signal evaluation cases that would test whether this agent is doing its job well.
+Vary the cases across straightforward, edge-case, and judgment-based prompts.
+Prefer these scoring methods:
+- exact_match for deterministic answers
+- contains for required elements
+- llm_judge for quality or reasoning tasks
+
+Return JSON array only:
+[
+  {{
+    "name": "Short case name",
+    "description": "What this checks",
+    "input": "User request",
+    "expected_output": "Expected response or requirement",
+    "scoring_method": "contains",
+    "scoring_config": {{}},
+    "tags": "quick-test"
+  }}
+]
+"""
+
+        llm = build_llm(settings.default_model, temperature=0.2, max_tokens=1800)
+        try:
+            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            cases = self._parse_cases(_extract_text(response.content))
+        except Exception as exc:
+            logger.warning("Prompt-based eval generation failed: %s", exc)
+            cases = []
+
+        if not cases:
+            cases = self._fallback_prompt_cases(agent, count)
+
+        created: list[EvalCase] = []
+        for item in cases[:count]:
+            scoring_method = item.get("scoring_method") or ScoringMethod.llm_judge.value
+            if scoring_method not in {method.value for method in ScoringMethod}:
+                scoring_method = ScoringMethod.llm_judge.value
+
+            case = EvalCase(
+                id=str(uuid.uuid4()),
+                suite_id=suite_id,
+                name=item.get("name") or f"Quick Test {len(created) + 1}",
+                description=item.get("description"),
+                input=item.get("input") or "",
+                expected_output=item.get("expected_output"),
+                scoring_method=scoring_method,
+                scoring_config=json.dumps(item.get("scoring_config") or {}),
+                weight=float(item.get("weight") or 1.0),
+                tags=item.get("tags") or "generated,quick-test",
+            )
+            if not case.input:
+                continue
+            db.add(case)
+            created.append(case)
+
+        await db.commit()
+        for case in created:
+            await db.refresh(case)
+        return created
+
     async def generate_cases_from_history(
         self,
         agent_id: str,
@@ -186,3 +269,54 @@ Return JSON array of eval cases:
     def _chunks(self, items: list, size: int):
         for index in range(0, len(items), size):
             yield items[index : index + size]
+
+    def _fallback_prompt_cases(self, agent: Agent, count: int) -> list[dict]:
+        base_name = agent.name or "Agent"
+        role = agent.role or "assistant"
+        return [
+            {
+                "name": f"{base_name} mission summary",
+                "description": "Checks whether the agent can clearly explain its role.",
+                "input": f"In one short paragraph, explain how you help as a {role}.",
+                "expected_output": role,
+                "scoring_method": "contains",
+                "scoring_config": {"needle": role},
+                "tags": "quick-test",
+            },
+            {
+                "name": f"{base_name} action plan",
+                "description": "Checks whether the agent can respond with a structured next-step plan.",
+                "input": "Create a short plan with three next steps for a client request.",
+                "expected_output": "1.",
+                "scoring_method": "contains",
+                "scoring_config": {"needle": "1."},
+                "tags": "quick-test",
+            },
+            {
+                "name": f"{base_name} constraint handling",
+                "description": "Checks whether the agent stays professional when information is missing.",
+                "input": "Respond to a vague request and clearly state what details you still need.",
+                "expected_output": "need",
+                "scoring_method": "contains",
+                "scoring_config": {"needle": "need"},
+                "tags": "quick-test",
+            },
+            {
+                "name": f"{base_name} quality bar",
+                "description": "Judges whether the output is concise and useful.",
+                "input": "Produce a high-quality client-ready response to a typical request in your role.",
+                "expected_output": "Clear, professional, and directly useful to the client.",
+                "scoring_method": "llm_judge",
+                "scoring_config": {},
+                "tags": "quick-test",
+            },
+            {
+                "name": f"{base_name} completion behavior",
+                "description": "Checks whether the agent closes with a concrete next step.",
+                "input": "Finish a response with a clear recommended next step.",
+                "expected_output": "next",
+                "scoring_method": "contains",
+                "scoring_config": {"needle": "next"},
+                "tags": "quick-test",
+            },
+        ][:count]

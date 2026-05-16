@@ -18,6 +18,7 @@ from database.models import (
     EvalRunStatus,
     EvalSuite,
     InAppNotification,
+    ModelConfig,
     NotificationPriority,
 )
 from runtime.agent_runner import AgentRunner
@@ -42,6 +43,9 @@ class EvalRunner:
         triggered_by: str = "manual",
         git_commit: str = None,
         db: AsyncSession = None,
+        model_config_id: str | None = None,
+        comparison_group_id: str | None = None,
+        comparison_slot: str | None = None,
     ) -> EvalRun:
         owns_session = db is None
         if owns_session:
@@ -70,10 +74,13 @@ class EvalRunner:
                 id=str(uuid.uuid4()),
                 suite_id=suite_id,
                 user_id=user_id,
+                model_config_id=model_config_id,
                 status=EvalRunStatus.running,
                 triggered_by=triggered_by,
                 total_cases=len(cases),
                 git_commit=git_commit,
+                comparison_group_id=comparison_group_id,
+                comparison_slot=comparison_slot,
             )
             db.add(run)
             await db.commit()
@@ -99,6 +106,7 @@ class EvalRunner:
                             case_id=case.id,
                             agent_id=agent.id,
                             user_id=user_id,
+                            model_config_id=model_config_id,
                         )
                         for case in batch
                     ],
@@ -146,6 +154,21 @@ class EvalRunner:
             run.completed_at = datetime.now(timezone.utc)
             await db.commit()
             await db.refresh(run)
+
+            total_cases = len(cases)
+            pass_rate = (passed_cases / total_cases * 100) if total_cases > 0 else 0.0
+            try:
+                from services.trust_score_service import trust_score_service
+
+                await trust_score_service.record_eval_completed(
+                    agent_id=str(suite.agent_id),
+                    pass_rate=pass_rate,
+                    total_cases=total_cases,
+                    passed_cases=passed_cases,
+                    db=db,
+                )
+            except Exception as exc:
+                logger.warning("Trust score eval update failed: %s", exc)
 
             await ws_manager.broadcast(
                 {
@@ -196,6 +219,7 @@ class EvalRunner:
         case_id: str,
         agent_id: str,
         user_id: str,
+        model_config_id: str | None = None,
     ) -> dict:
         async with AsyncSessionLocal() as db:
             case = await db.get(EvalCase, case_id)
@@ -229,7 +253,30 @@ class EvalRunner:
                     max_memories_per_query=0,
                     memory_window_days=0,
                 )
-                runner = AgentRunner(agent, memory_config=memory_config)
+                runner_agent = agent
+                if model_config_id:
+                    override_cfg = await db.scalar(
+                        select(ModelConfig).where(
+                            ModelConfig.id == model_config_id,
+                            ModelConfig.org_id == getattr(agent, "org_id", None),
+                        )
+                    )
+                    if override_cfg:
+                        # Eval-only override: omit the persisted agent id so AgentRunner
+                        # uses the supplied model directly instead of the saved assignment.
+                        runner_agent = SimpleNamespace(
+                            **{
+                                key: value
+                                for key, value in agent.__dict__.items()
+                                if not key.startswith("_")
+                            }
+                        )
+                        runner_agent.id = None
+                        runner_agent.model = override_cfg.model_id
+                        runner_agent.model_config_id = override_cfg.id
+                        runner_agent.org_id = None
+
+                runner = AgentRunner(runner_agent, memory_config=memory_config)
                 actual_output, tokens_used = await runner.run(
                     case.input,
                     user_id=user_id,
@@ -244,7 +291,8 @@ class EvalRunner:
                 passed = score >= pass_threshold
                 input_tokens = int((tokens_used or 0) * 0.6)
                 output_tokens = int(tokens_used or 0) - input_tokens
-                cost_usd = cost_tracker.calculate_cost(agent.model, input_tokens, output_tokens)
+                cost_model = getattr(runner_agent, "model", None) or agent.model
+                cost_usd = cost_tracker.calculate_cost(cost_model, input_tokens, output_tokens)
                 details.setdefault("pass_threshold", pass_threshold)
             except Exception as exc:
                 error_message = str(exc)

@@ -1474,6 +1474,20 @@ class AgentRunner:
                 db=db,
                 reset_status=not was_blocked,
             )
+            if execution_id and user_id:
+                try:
+                    async with AsyncSessionLocal() as cost_db:
+                        await cost_tracker.record_execution_cost(
+                            execution_id=execution_id,
+                            agent_id=self.config.id,
+                            model=self.config.model,
+                            input_tokens=0,
+                            output_tokens=0,
+                            db=cost_db,
+                            user_id=user_id,
+                        )
+                except Exception as cost_exc:
+                    logger.warning("Cost tracking failed for failed agent run %s: %s", self.config.id, cost_exc)
             raise
 
         await self._record_execution_step(

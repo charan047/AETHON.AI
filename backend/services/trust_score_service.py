@@ -33,12 +33,18 @@ AUTONOMY_THRESHOLDS = {
     "autonomous": (85, 100),
 }
 
+AUTONOMY_EVAL_REQUIREMENTS = {
+    "semi_autonomous": 60.0,
+    "autonomous": 80.0,
+}
+
 OVERALL_SCORE_WEIGHTS = {
-    "task_success_rate": 0.35,
-    "review_pass_rate": 0.25,
-    "risky_action_rate": 0.15,
-    "on_time_rate": 0.10,
-    "cost_efficiency": 0.10,
+    "task_success_rate": 0.30,
+    "review_pass_rate": 0.20,
+    "risky_action_rate": 0.12,
+    "on_time_rate": 0.09,
+    "cost_efficiency": 0.09,
+    "eval_pass_rate": 0.15,
 }
 
 
@@ -118,6 +124,36 @@ class TrustScoreService:
         except Exception as exc:
             logger.warning("trust_score record_override failed: %s", exc)
 
+    async def record_eval_completed(
+        self,
+        agent_id: str,
+        pass_rate: float,
+        total_cases: int,
+        passed_cases: int,
+        db: AsyncSession,
+    ) -> dict:
+        """
+        Update trust score after an eval run.
+
+        Eval pass rate contributes to the overall score and gates future
+        autonomy promotions so agents need evidence before graduating.
+        """
+        del total_cases, passed_cases
+        score = await self._get_or_create(agent_id, db)
+        old_score = score.overall_score
+
+        score.eval_pass_rate = max(0.0, min(100.0, float(pass_rate or 0.0)))
+        score.eval_runs_count = int(score.eval_runs_count or 0) + 1
+
+        await self._recalculate(score, agent_id, old_score, db)
+        await db.commit()
+
+        return {
+            "overall_score": round(score.overall_score, 1),
+            "eval_pass_rate": round(score.eval_pass_rate, 1),
+            "eval_runs_count": score.eval_runs_count,
+        }
+
     async def get_details(self, agent_id: str, db: AsyncSession) -> dict:
         score = await self._get_or_create(agent_id, db)
         current_level = self._score_to_autonomy(score.overall_score)
@@ -134,12 +170,15 @@ class TrustScoreService:
             "trajectory": score.trajectory,
             "trajectory_delta": round(score.trajectory_delta, 1),
             "skill_scores": score.skill_scores or {},
+            "eval_pass_rate": round(score.eval_pass_rate or 0, 1),
+            "eval_runs_count": score.eval_runs_count or 0,
             "components": {
                 "task_success_rate": round(score.task_success_rate, 1),
                 "review_pass_rate": round(score.review_pass_rate, 1),
                 "risky_action_rate": round(score.risky_action_rate, 1),
                 "on_time_rate": round(score.on_time_rate, 1),
                 "cost_efficiency": round(score.cost_efficiency, 1),
+                "eval_pass_rate": round(score.eval_pass_rate or 0, 1),
             },
             "counters": {
                 "total_tasks": score.total_tasks,
@@ -176,6 +215,7 @@ class TrustScoreService:
                         + (score.risky_action_rate * OVERALL_SCORE_WEIGHTS["risky_action_rate"])
                         + (score.on_time_rate * OVERALL_SCORE_WEIGHTS["on_time_rate"])
                         + (score.cost_efficiency * OVERALL_SCORE_WEIGHTS["cost_efficiency"])
+                        + (score.eval_pass_rate * OVERALL_SCORE_WEIGHTS["eval_pass_rate"])
                         + (max(0, 100 - (score.human_overrides * 5)) * 0.05)
                     ),
                 ),
@@ -197,8 +237,15 @@ class TrustScoreService:
 
         score.last_calculated = datetime.utcnow()
 
-        new_level = self._score_to_autonomy(score.overall_score)
-        old_level = self._score_to_autonomy(old_score)
+        agent = await db.scalar(select(Agent).where(Agent.id == agent_id))
+        current_level = getattr(agent, "autonomy_level", None) or self._score_to_autonomy(old_score)
+        candidate_level = self._score_to_autonomy(score.overall_score)
+        if self._autonomy_rank(candidate_level) > self._autonomy_rank(current_level):
+            if not self._passes_eval_gate(candidate_level, score):
+                candidate_level = current_level
+
+        new_level = candidate_level
+        old_level = current_level
 
         await db.execute(
             update(Agent)
@@ -236,6 +283,7 @@ class TrustScoreService:
             agent = agent_r.scalar_one_or_none()
             if agent:
                 from services.websocket_manager import ws_manager
+                from services.notification_email_service import notification_email_service
 
                 await ws_manager.broadcast_to_channel(
                     f"org:{agent.org_id}",
@@ -249,6 +297,13 @@ class TrustScoreService:
                         "new_score": round(score.overall_score, 1),
                     },
                 )
+                await notification_email_service.send_autonomy_changed(
+                    org_id=agent.org_id,
+                    agent_name=agent.name,
+                    old_level=old_level,
+                    new_level=new_level,
+                    score=score.overall_score,
+                )
         except Exception as exc:
             logger.warning("WebSocket autonomy notification failed: %s", exc)
 
@@ -257,6 +312,12 @@ class TrustScoreService:
             if lo <= score < hi:
                 return level
         return "autonomous" if score >= 85 else "restricted"
+
+    def _passes_eval_gate(self, level: str, score: AgentTrustScore) -> bool:
+        required = AUTONOMY_EVAL_REQUIREMENTS.get(level)
+        if required is None:
+            return True
+        return (score.eval_runs_count or 0) > 0 and (score.eval_pass_rate or 0.0) >= required
 
     def _autonomy_rank(self, level: str) -> int:
         return {
@@ -277,6 +338,8 @@ class TrustScoreService:
                 risky_action_rate=100.0,
                 cost_efficiency=100.0,
                 on_time_rate=100.0,
+                eval_pass_rate=0.0,
+                eval_runs_count=0,
             )
             db.add(score)
             await db.flush()

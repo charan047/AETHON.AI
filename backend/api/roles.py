@@ -14,6 +14,7 @@ from database import get_db
 from database.models import Agent, AgentContract, AgentMemoryEntry, AgentRole, AgentTrustScore, Organization, User
 from services.agent_memory_service import agent_memory_service
 from services.agent_naming_service import agent_naming_service
+from services.trust_score_service import trust_score_service
 
 
 router = APIRouter(
@@ -113,6 +114,8 @@ def _trust_score_payload(score: AgentTrustScore) -> dict:
         "cost_efficiency": score.cost_efficiency,
         "on_time_rate": score.on_time_rate,
         "risky_action_rate": score.risky_action_rate,
+        "eval_pass_rate": score.eval_pass_rate,
+        "eval_runs_count": score.eval_runs_count,
         "overall_score": score.overall_score,
         "skill_scores": score.skill_scores or {},
         "trajectory": score.trajectory,
@@ -274,7 +277,12 @@ async def get_agent_trust_score(
     score = await db.scalar(select(AgentTrustScore).where(AgentTrustScore.agent_id == agent_id))
     if not score:
         raise HTTPException(status_code=404, detail="Agent trust score not found")
-    return _trust_score_payload(score)
+    details = await trust_score_service.get_details(agent_id, db)
+    return {
+        "id": score.id,
+        "agent_id": score.agent_id,
+        **details,
+    }
 
 
 @router.get("/agents/{agent_id}/memories")

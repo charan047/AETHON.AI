@@ -3,6 +3,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from apscheduler.jobstores.redis import RedisJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -36,19 +37,6 @@ async def trigger_scheduled_workflow_job(workflow_id: str, user_id: str):
     from runtime.workflow_engine import WorkflowEngine
 
     execution_id = str(uuid.uuid4())
-    current_date = datetime.utcnow().strftime("%A, %B %d %Y")
-    current_time = datetime.utcnow().strftime("%H:%M UTC")
-    standup_prompt = (
-        f"MORNING STANDUP — {current_date} at {current_time}\n\n"
-        "This is the daily team standup. Speak naturally as yourself.\n\n"
-        "Cover:\n"
-        "1. What you actually completed or worked on since yesterday\n"
-        "2. What you plan to do today specifically\n"
-        "3. Any blockers, questions, or things that need the CEO's attention\n\n"
-        "Keep it under 150 words. Be specific — name actual tasks, files, or data you worked on. "
-        "Don't say 'I will...' for things you haven't started. "
-        "Speak in first person, naturally, like a real team member in a meeting."
-    )
     logger = logging.getLogger("scheduler")
     logger.info("Scheduled trigger: workflow %s", workflow_id)
 
@@ -66,14 +54,39 @@ async def trigger_scheduled_workflow_job(workflow_id: str, user_id: str):
             if not workflow:
                 logger.warning("Scheduled workflow %s no longer exists", workflow_id)
                 return
+            now_utc = datetime.utcnow()
+            timezone_name = workflow.schedule_timezone or "UTC"
+            try:
+                local_now = now_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(timezone_name))
+            except Exception:
+                timezone_name = "UTC"
+                local_now = now_utc.replace(tzinfo=ZoneInfo("UTC"))
+            current_date = local_now.strftime("%A, %B %d %Y")
+            current_time = local_now.strftime(f"%H:%M {timezone_name}")
+            scheduled_prompt = (
+                ((workflow.configured_inputs or {}).get("scheduled_prompt") if isinstance(workflow.configured_inputs, dict) else None)
+                or workflow.input_template
+                or (
+                    f"MORNING STANDUP — {current_date} at {current_time}\n\n"
+                    "This is the daily team standup. Speak naturally as yourself.\n\n"
+                    "Cover:\n"
+                    "1. What you actually completed or worked on since yesterday\n"
+                    "2. What you plan to do today specifically\n"
+                    "3. Any blockers, questions, or things that need the CEO's attention\n\n"
+                    "Keep it under 150 words. Be specific — name actual tasks, files, or data you worked on. "
+                    "Don't say 'I will...' for things you haven't started. "
+                    "Speak in first person, naturally, like a real team member in a meeting."
+                )
+            )
+            workflow.last_run_at = now_utc
             execution = Execution(
                 id=execution_id,
                 org_id=workflow.org_id,
                 workflow_id=workflow_id,
                 trigger="schedule",
                 status=ExecutionStatus.running,
-                input_message=standup_prompt,
-                started_at=datetime.utcnow(),
+                input_message=scheduled_prompt,
+                started_at=now_utc,
             )
             db.add(execution)
             await db.commit()
@@ -81,7 +94,7 @@ async def trigger_scheduled_workflow_job(workflow_id: str, user_id: str):
             engine = WorkflowEngine(db)
             await engine.run(
                 workflow_id=workflow_id,
-                input_message=standup_prompt,
+                input_message=scheduled_prompt,
                 user_id=user_id,
                 execution_id=execution_id,
             )
@@ -137,6 +150,16 @@ async def _cleanup_old_messages() -> None:
             total_deleted,
             len(orgs),
         )
+
+
+async def _send_daily_digests() -> None:
+    try:
+        from services.notification_email_service import notification_email_service
+
+        sent = await notification_email_service.send_due_daily_digests()
+        _cleanup_logger.info("Daily digest job sent %d digest emails", sent)
+    except Exception as exc:
+        _cleanup_logger.warning("Daily digest job failed: %s", exc)
 
 
 class SchedulerService:
@@ -221,6 +244,14 @@ class SchedulerService:
             misfire_grace_time=3600,
         )
         self.logger.info("Registered system job: message_retention_cleanup")
+        self.scheduler.add_job(
+            _send_daily_digests,
+            CronTrigger(minute="*", timezone="UTC"),
+            id="daily_digest_dispatch",
+            replace_existing=True,
+            misfire_grace_time=300,
+        )
+        self.logger.info("Registered system job: daily_digest_dispatch")
 
     async def _leadership_loop(self):
         while True:
@@ -271,20 +302,30 @@ class SchedulerService:
     async def _sync_schedules_from_db(self) -> int:
         """On startup: load all scheduled workflows from DB and register them."""
         async with AsyncSessionLocal() as db:
-            result = await db.execute(select(Workflow).where(Workflow.schedule.isnot(None)))
+            result = await db.execute(
+                select(Workflow).where(
+                    Workflow.schedule.isnot(None),
+                    Workflow.schedule_enabled == True,  # noqa: E712
+                )
+            )
             workflows = result.scalars().all()
             for workflow in workflows:
                 if self.scheduler.get_job(f"workflow:{workflow.id}"):
                     continue
-                await self.schedule_workflow(workflow.id, workflow.schedule, user_id="system")
+                await self.schedule_workflow(
+                    workflow.id,
+                    workflow.schedule,
+                    user_id="system",
+                    timezone=workflow.schedule_timezone or "UTC",
+                )
         return len(workflows)
 
-    async def schedule_workflow(self, workflow_id: str, cron_expression: str, user_id: str):
+    async def schedule_workflow(self, workflow_id: str, cron_expression: str, user_id: str, timezone: str = "UTC"):
         """Add or update a workflow schedule."""
         job_id = f"workflow:{workflow_id}"
 
         try:
-            trigger = CronTrigger.from_crontab(cron_expression, timezone="UTC")
+            trigger = CronTrigger.from_crontab(cron_expression, timezone=timezone or "UTC")
         except Exception as exc:
             raise ValueError(f"Invalid cron expression: {cron_expression}") from exc
 
@@ -320,6 +361,7 @@ class SchedulerService:
                         "workflow_id": job.id.replace("workflow:", ""),
                         "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
                         "cron": str(job.trigger),
+                        "timezone": str(getattr(job.trigger, "timezone", "UTC")),
                     }
                 )
         return jobs

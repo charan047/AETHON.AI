@@ -295,7 +295,7 @@ def _register_runtime_tool(
 
 def register_default_tools() -> None:
     """Register the current built-in runtime tools and legacy implementations."""
-    from runtime.tools import calculator, datetime_tool, http_request, text_analysis, web_search
+    from runtime.tools import calculator, datetime_tool, http_request, text_analysis
 
     def import_if_ready(module_name: str, class_name: str) -> bool:
         module = sys.modules.get(module_name)
@@ -316,13 +316,6 @@ def register_default_tools() -> None:
         import_if_ready("tools.implementations.research_tool", "ResearchTool")
     import_if_ready("tools.implementations.github_tool", "GitHubTool")
 
-    _register_runtime_tool(
-        "web_search",
-        "Search the internet for information about a topic.",
-        ToolCategory.web,
-        web_search,
-        rate_limit_per_minute=30,
-    )
     _register_runtime_tool(
         "calculator",
         "Evaluate mathematical expressions safely.",

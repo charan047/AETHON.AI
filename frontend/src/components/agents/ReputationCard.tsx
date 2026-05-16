@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
 import { Lightbulb } from 'lucide-react'
-import { feedbackApi } from '../../api/client'
+import { agentsApi, feedbackApi } from '../../api/client'
 import type { Agent } from '../../types'
 
 function tone(rate: number) {
@@ -15,6 +15,10 @@ export function ReputationCard({ agent }: { agent: Agent }) {
     queryKey: ['agent-reputation', agent.id],
     queryFn: () => feedbackApi.reputation(agent.id),
   })
+  const { data: trustScore } = useQuery({
+    queryKey: ['agent-trust-score', agent.id],
+    queryFn: () => agentsApi.getTrustScore(agent.id),
+  })
   const notes = reputation?.learning_notes || []
   const approvalRate = reputation?.approval_rate || 0
   const percent = Math.round(approvalRate * 100)
@@ -22,6 +26,15 @@ export function ReputationCard({ agent }: { agent: Agent }) {
   const circumference = 2 * Math.PI * 42
   const offset = circumference - approvalRate * circumference
   const outputAccuracy = Math.max(0, Math.round((1 - (reputation?.avg_edit_distance || 0)) * 100))
+  const evalPassRate = trustScore?.components?.eval_pass_rate ?? 0
+  const evalRunsCount = trustScore?.eval_runs_count ?? 0
+  const evalColor = evalRunsCount === 0
+    ? 'rgba(75,90,115,0.5)'
+    : evalPassRate >= 70
+      ? '#059669'
+      : evalPassRate >= 40
+        ? '#F59E0B'
+        : '#EF4444'
 
   return (
     <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-5">
@@ -58,6 +71,36 @@ export function ReputationCard({ agent }: { agent: Agent }) {
             <Stat label="Edited" value={reputation?.edited_count || 0} tone="text-amber-300" />
             <Stat label="Accuracy" value={`${outputAccuracy}%`} tone="text-cyan-300" />
           </div>
+        </div>
+      </div>
+
+      <div className="mt-6 rounded-xl border border-white/[0.08] bg-white/[0.02] p-4">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-[#8B9DBE]">Eval Pass Rate</span>
+            <span className="text-xs font-semibold text-[#F0F6FF]">
+              {evalPassRate.toFixed(0)}%
+              {evalRunsCount > 0 && (
+                <span className="ml-1 text-[#4B5A73]">
+                  ({evalRunsCount} run{evalRunsCount !== 1 ? 's' : ''})
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="h-1.5 rounded-full bg-white/[0.06]">
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{
+                width: `${evalPassRate}%`,
+                background: evalColor,
+              }}
+            />
+          </div>
+          {evalRunsCount === 0 && (
+            <p className="text-[11px] text-[#4B5A73]">
+              No evals run yet. Run an eval suite to measure this agent.
+            </p>
+          )}
         </div>
       </div>
 
