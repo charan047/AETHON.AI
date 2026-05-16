@@ -199,6 +199,33 @@ export function DirectMessages() {
   const feedRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
 
+  const appendThreadMessage = useCallback((agentId: string, message: DirectMessage) => {
+    queryClient.setQueryData(['dm-thread', agentId], (current: any) => {
+      if (!current) return current
+      const existingMessages = Array.isArray(current.messages) ? current.messages : []
+      if (existingMessages.some((item: DirectMessage) => item.id === message.id)) {
+        return current
+      }
+      return {
+        ...current,
+        messages: [...existingMessages, message],
+      }
+    })
+  }, [queryClient])
+
+  const dropMatchingOptimisticMessage = useCallback((agentId: string, content?: string) => {
+    if (!content) return
+    setOptimisticMessages(prev => {
+      const index = prev.findIndex(message =>
+        message.sender_type === 'ceo' &&
+        message.to_agent_id === agentId &&
+        message.content === content,
+      )
+      if (index === -1) return prev
+      return prev.filter((_, messageIndex) => messageIndex !== index)
+    })
+  }, [])
+
   // ── Queries ──────────────────────────────────────────────────────────────
 
   const convsQuery = useQuery({
@@ -362,37 +389,30 @@ export function DirectMessages() {
 
     if (ev.thread_agent_id === activeAgentId) {
       setLiveAgentReply(null)
-      if (ev.sender_type === 'agent' && ev.message_id && ev.content) {
-        const messageId = ev.message_id
-        const messageContent = ev.content
-        queryClient.setQueryData(['dm-thread', activeAgentId], (current: any) => {
-          if (!current) return current
-          const existingMessages = Array.isArray(current.messages) ? current.messages : []
-          if (existingMessages.some((message: DirectMessage) => message.id === messageId)) {
-            return current
-          }
-          const nextMessage: DirectMessage = {
-            id: messageId,
-            content: messageContent,
-            sender_type: 'agent',
-            sender_name: ev.persona_name || current.agent?.persona_name || current.agent?.name || 'Agent',
-            message_type: 'general',
-            priority: 'normal',
-            is_resolved: false,
-            read_at: null,
-            created_at: ev.created_at || new Date().toISOString(),
-            scheduled_reply_at: null,
-            scheduled_reply_job_id: null,
-            thread_id: null,
-            parent_message_id: null,
-            execution_id: null,
-            from_agent_id: activeAgentId,
-            to_agent_id: null,
-          }
-          return {
-            ...current,
-            messages: [...existingMessages, nextMessage],
-          }
+      if (ev.message_id && ev.content) {
+        if (ev.sender_type === 'ceo') {
+          dropMatchingOptimisticMessage(activeAgentId, ev.content)
+        }
+
+        appendThreadMessage(activeAgentId, {
+          id: ev.message_id,
+          content: ev.content,
+          sender_type: ev.sender_type === 'ceo' ? 'ceo' : 'agent',
+          sender_name: ev.sender_type === 'ceo'
+            ? 'You'
+            : ev.persona_name || threadQuery.data?.agent?.persona_name || threadQuery.data?.agent?.name || 'Agent',
+          message_type: 'general',
+          priority: 'normal',
+          is_resolved: false,
+          read_at: null,
+          created_at: ev.created_at || new Date().toISOString(),
+          scheduled_reply_at: null,
+          scheduled_reply_job_id: null,
+          thread_id: null,
+          parent_message_id: null,
+          execution_id: null,
+          from_agent_id: ev.sender_type === 'ceo' ? null : activeAgentId,
+          to_agent_id: ev.sender_type === 'ceo' ? activeAgentId : null,
         })
       }
       void queryClient.invalidateQueries({ queryKey: ['dm-thread', activeAgentId] })
@@ -411,7 +431,7 @@ export function DirectMessages() {
         },
       })
     }
-  }, [lastEvent, activeAgentId, queryClient, navigate])
+  }, [lastEvent, activeAgentId, queryClient, navigate, appendThreadMessage, dropMatchingOptimisticMessage, threadQuery.data?.agent?.name, threadQuery.data?.agent?.persona_name])
 
   // ── Mutations ─────────────────────────────────────────────────────────
 

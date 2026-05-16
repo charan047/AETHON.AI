@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     # OpenAI-compatible (Groq / Ollama / Together AI / OpenRouter / real OpenAI)
     openai_compatible_api_key: str = ""
     openai_compatible_base_url: str = ""   # empty = real OpenAI API
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     ollama_base_url: str = "http://localhost:11434"

@@ -33,6 +33,20 @@ def _build_anthropic_llm(*, model: str, temperature: float, max_tokens: int, api
     )
 
 
+GROQ_MODEL_IDS = {
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "llama3-70b-8192",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
+}
+
+
+def _is_groq_target(model_id: str, base_url: str | None) -> bool:
+    lowered_base = (base_url or "").lower()
+    return model_id in GROQ_MODEL_IDS or "groq.com" in lowered_base
+
+
 class ModelService:
     async def get_org_default(
         self,
@@ -116,12 +130,23 @@ class ModelService:
             )
 
         if provider == "custom":
+            resolved_base_url = config.base_url or settings.openai_compatible_base_url or None
+            if _is_groq_target(config.model_id, resolved_base_url):
+                resolved_api_key = (
+                    settings.groq_api_key
+                    or settings.openai_compatible_api_key
+                    or api_key
+                    or settings.openai_api_key
+                )
+                resolved_base_url = resolved_base_url or settings.groq_base_url
+            else:
+                resolved_api_key = api_key or settings.openai_compatible_api_key or settings.openai_api_key
             return ChatOpenAI(
                 model=config.model_id,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                api_key=api_key or settings.openai_compatible_api_key or settings.openai_api_key,
-                base_url=config.base_url or settings.openai_compatible_base_url or None,
+                api_key=resolved_api_key,
+                base_url=resolved_base_url,
                 model_kwargs={"parallel_tool_calls": False},
             )
 
@@ -143,9 +168,14 @@ class ModelService:
             )
 
         is_ollama = model.startswith("ollama/")
+        is_groq = model in GROQ_MODEL_IDS
         actual_model = model.removeprefix("ollama/")
         base_url = settings.openai_compatible_base_url or None
         api_key = settings.openai_compatible_api_key or settings.openai_api_key or "ollama"
+
+        if is_groq:
+            base_url = settings.groq_base_url or base_url
+            api_key = settings.groq_api_key or settings.openai_compatible_api_key or settings.openai_api_key
 
         if is_ollama and not base_url:
             base_url = f"{settings.ollama_base_url.rstrip('/')}/v1"

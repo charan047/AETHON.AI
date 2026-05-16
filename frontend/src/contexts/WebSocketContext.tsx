@@ -70,7 +70,17 @@ export function WsProvider({ children }: { children: ReactNode }) {
     }
     ws.onmessage = (e) => {
       try {
-        const event = JSON.parse(e.data) as WsEvent
+        const rawEvent = JSON.parse(e.data) as WsEvent
+        const normalizedType =
+          (typeof rawEvent.type === 'string' && rawEvent.type.trim())
+            ? rawEvent.type
+            : (typeof rawEvent.event === 'string' && rawEvent.event.trim())
+              ? rawEvent.event
+              : ''
+
+        if (!normalizedType) return
+
+        const event = { ...rawEvent, type: normalizedType } as WsEvent
 
         if (event.execution_id) {
           const channel = `execution:${event.execution_id}`

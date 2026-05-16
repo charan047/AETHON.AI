@@ -354,6 +354,11 @@ async def send_message(
                 "event": "new_direct_message",
                 "thread_agent_id": body.to_agent_id,
                 "sender_type": "ceo",
+                "message_id": str(new_message.id),
+                "content": new_message.message,
+                "content_preview": new_message.message[:100],
+                "thread_id": new_message.thread_id,
+                "created_at": new_message.created_at.isoformat() if new_message.created_at else datetime.utcnow().isoformat(),
             },
         )
     except Exception as exc:

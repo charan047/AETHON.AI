@@ -604,7 +604,12 @@ export function CompanyChat() {
   const [conversationId, setConversationId] = useState<string | null>(routeConversationId || null)
   const [sending, setSending] = useState(false)
   const [search, setSearch] = useState('')
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [isDesktopSidebar, setIsDesktopSidebar] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 1024 : true,
+  )
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 1024 : false,
+  )
   const [contextOpen, setContextOpen] = useState(true)
   const [showMenu, setShowMenu] = useState(false)
   const [showCommandMenu, setShowCommandMenu] = useState(false)
@@ -673,22 +678,18 @@ export function CompanyChat() {
   }, [historyQuery.data])
 
   useEffect(() => {
-    if (!conversationId && conversationStorageKey) {
-      const remembered = window.sessionStorage.getItem(conversationStorageKey)
-      if (remembered) {
-        setConversationId(remembered)
-        navigate(`/company-chat/${remembered}`, { replace: true })
+    const handleResize = () => {
+      const nextIsDesktop = window.innerWidth >= 1024
+      setIsDesktopSidebar(nextIsDesktop)
+      if (nextIsDesktop) {
+        setSidebarOpen(true)
       }
     }
-  }, [conversationId, conversationStorageKey, navigate])
 
-  useEffect(() => {
-    if (!conversationId && conversationsQuery.data?.conversations?.length) {
-      const first = conversationsQuery.data.conversations[0]
-      setConversationId(first.id)
-      navigate(`/company-chat/${first.id}`, { replace: true })
-    }
-  }, [conversationId, conversationsQuery.data, navigate])
+    handleResize()
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   useEffect(() => {
     const seededDraft = window.sessionStorage.getItem(commandDraftKey)
@@ -840,6 +841,9 @@ export function CompanyChat() {
   const loadConversation = async (id: string) => {
     setConversationId(id)
     navigate(`/company-chat/${id}`)
+    if (!isDesktopSidebar) {
+      setSidebarOpen(false)
+    }
     if (conversationStorageKey) {
       window.sessionStorage.setItem(conversationStorageKey, id)
     }
@@ -1124,28 +1128,29 @@ export function CompanyChat() {
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-transparent">
-      {sidebarOpen && (
+      {isDesktopSidebar ? (
+        <div className="hidden shrink-0 border-r border-white/[0.06] lg:flex">
+          {conversationSidebar}
+        </div>
+      ) : sidebarOpen ? (
         <>
           <div
-            className="absolute inset-0 z-20 hidden bg-black/45 backdrop-blur-[2px] lg:block xl:hidden"
+            className="absolute inset-0 z-20 bg-black/45 backdrop-blur-[2px] lg:hidden"
             onClick={() => setSidebarOpen(false)}
           />
-          <div className="absolute inset-y-0 left-0 z-30 hidden shadow-[18px_0_48px_rgba(0,0,0,0.35)] lg:block xl:hidden">
-            {conversationSidebar}
-          </div>
-          <div className="hidden shrink-0 border-r border-white/[0.06] xl:flex">
+          <div className="absolute inset-y-0 left-0 z-30 shadow-[18px_0_48px_rgba(0,0,0,0.35)] lg:hidden">
             {conversationSidebar}
           </div>
         </>
-      )}
+      ) : null}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.08] bg-[rgba(8,13,26,0.82)] px-5 backdrop-blur-xl">
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={() => setSidebarOpen(value => !value)}
-              className="hidden cursor-pointer rounded-xl p-2 text-white/40 transition hover:bg-white/5 hover:text-white/70 focus:outline-none focus:ring-2 focus:ring-blue-500/30 lg:inline-flex"
+              className="inline-flex cursor-pointer rounded-xl p-2 text-white/40 transition hover:bg-white/5 hover:text-white/70 focus:outline-none focus:ring-2 focus:ring-blue-500/30 lg:hidden"
               aria-label={sidebarOpen ? 'Hide conversations' : 'Show conversations'}
               title={sidebarOpen ? 'Hide conversations' : 'Show conversations'}
             >
@@ -1212,9 +1217,9 @@ export function CompanyChat() {
           </div>
         </header>
 
-        <div className="flex min-h-0 flex-1">
-          <main className="flex min-w-0 flex-1 flex-col">
-            <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-6">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-6">
               {authWarning && (
                 <div className="mx-auto mb-5 max-w-5xl rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
                   <div className="font-medium">Company Chat needs your session again</div>
@@ -1296,7 +1301,7 @@ export function CompanyChat() {
               )}
             </div>
 
-            <footer className="shrink-0 border-t border-white/[0.08] bg-obsidian-925/95 px-5 py-4 backdrop-blur-xl">
+            <footer className="sticky bottom-0 z-10 shrink-0 border-t border-white/[0.08] bg-obsidian-925/95 px-5 py-4 backdrop-blur-xl">
               <div className="mx-auto max-w-5xl">
                 <div className="mb-3 flex flex-wrap gap-2">
                   {dynamicChips.map(chip => (
