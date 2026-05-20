@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Bot, Download, ExternalLink, Flag, LogOut, ShieldCheck, Star, Store, UserCircle, Workflow, Wrench } from 'lucide-react'
+import { ArrowLeft, Bot, Download, ExternalLink, Flag, LogOut, ShieldCheck, Star, UserCircle, Workflow, Wrench, Zap } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { clsx } from 'clsx'
 import { extractApiError, marketplaceApi } from '../api/client'
@@ -24,6 +24,14 @@ function iconFor(type: MarketplaceListingType) {
   if (type === 'tool_config') return Wrench
   if (type === 'eval_suite') return ShieldCheck
   return Bot
+}
+
+function categoryTone(category: string) {
+  if (category === 'research') return 'bg-indigo-500/12 text-indigo-300'
+  if (category === 'marketing') return 'bg-amber-500/12 text-amber-300'
+  if (category === 'customer_support') return 'bg-violet-500/12 text-violet-300'
+  if (category === 'data') return 'bg-emerald-500/12 text-emerald-300'
+  return 'bg-indigo-500/12 text-indigo-300'
 }
 
 function formatCount(value: number) {
@@ -54,8 +62,8 @@ function MarkdownBlock({ content }: { content?: string | null }) {
           const text = line.slice(2)
           return <h1 key={index} id={slugifyHeading(text)} className="scroll-mt-24 pt-5 text-3xl font-semibold tracking-tight text-white">{text}</h1>
         }
-        if (line.startsWith('- ')) return <p key={index} className="pl-4 before:mr-2 before:text-accent-300 before:content-['•']">{line.slice(2)}</p>
-        if (line.startsWith('```')) return <div key={index} className="rounded-xl border border-white/10 bg-obsidian-950 px-3 py-2 font-mono text-xs text-cyan-200">code block</div>
+        if (line.startsWith('- ')) return <p key={index} className="pl-4 before:mr-2 before:text-indigo-300 before:content-['•']">{line.slice(2)}</p>
+        if (line.startsWith('```')) return <div key={index} className="rounded-xl border border-white/[0.08] bg-base-bg px-3 py-2 font-mono text-xs text-emerald-200">code block</div>
         return <p key={index}>{line}</p>
       })}
     </div>
@@ -95,7 +103,7 @@ function ReviewForm({ listingId }: { listingId: string }) {
   }
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+    <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
       <div className="grid gap-3 md:grid-cols-[140px_1fr]">
         <div>
           <label className="label">Rating</label>
@@ -123,6 +131,7 @@ export function MarketplaceDetail() {
   const navigate = useNavigate()
   const auth = useAuth()
   const [installing, setInstalling] = useState<MarketplaceListing | null>(null)
+  const [tab, setTab] = useState<'overview' | 'requirements' | 'reviews'>('overview')
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const { data: listing, isLoading } = useQuery({
     queryKey: ['marketplace', 'detail', slug],
@@ -136,7 +145,7 @@ export function MarketplaceDetail() {
   })
   const installed = listing ? installs.some(item => item.listing.id === listing.id) : false
   const installedResource = listing ? installs.find(item => item.listing.id === listing.id)?.installed_resource_id : null
-  const Icon = listing ? iconFor(listing.listing_type) : Store
+  const Icon = listing ? iconFor(listing.listing_type) : Bot
 
   const distribution = useMemo(() => {
     const counts = [5, 4, 3, 2, 1].map(score => ({
@@ -149,7 +158,7 @@ export function MarketplaceDetail() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-obsidian-950 p-6">
+      <div className="min-h-screen bg-base-bg p-6">
         <div className="mx-auto max-w-7xl space-y-5">
           <Skeleton className="h-72 rounded-3xl" />
           <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
@@ -163,9 +172,9 @@ export function MarketplaceDetail() {
 
   if (!listing) {
     return (
-      <div className="grid min-h-screen place-items-center bg-obsidian-950 text-center">
+      <div className="grid min-h-screen place-items-center bg-base-bg text-center">
         <div>
-          <Store className="mx-auto text-obsidian-600" size={44} />
+          <Zap className="mx-auto text-[#8B9DBE]" size={44} />
           <h1 className="mt-4 text-2xl font-semibold text-white">Listing not found</h1>
           <Link className="btn-primary mt-5" to="/marketplace">Back to marketplace</Link>
         </div>
@@ -183,25 +192,25 @@ export function MarketplaceDetail() {
   const headings = readmeHeadings(listing.readme)
 
   return (
-    <div className="min-h-dvh bg-obsidian-950 text-white">
-      <header className="border-b border-white/10 bg-obsidian-950/80 backdrop-blur-xl">
+    <div className="min-h-dvh bg-base-bg text-white">
+      <header className="border-b border-white/[0.08] bg-obsidian-950/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
           <Link to="/marketplace" className="btn-ghost px-2"><ArrowLeft size={16} /> Marketplace</Link>
           <div className="flex items-center gap-2">
-            <Link to="/" className="hidden items-center gap-2 text-sm text-obsidian-400 hover:text-white sm:flex"><Store size={16} /> Obsidian</Link>
+            <Link to="/" className="hidden items-center gap-2 text-sm text-[#8B9DBE] hover:text-white sm:flex"><Zap size={16} /> Aethon</Link>
             {auth.isAuthenticated ? (
               <div className="relative">
                 <button
-                  className="flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-obsidian-200 transition hover:border-white/20 hover:bg-white/[0.07]"
+                  className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 text-sm text-obsidian-200 transition hover:border-white/20 hover:bg-white/[0.07]"
                   onClick={() => setUserMenuOpen(open => !open)}
                 >
                   <UserCircle size={17} />
                   <span className="hidden max-w-36 truncate md:inline">{auth.email || 'Account'}</span>
                 </button>
                 {userMenuOpen && (
-                  <div className="absolute right-0 top-12 z-40 w-56 overflow-hidden rounded-2xl border border-white/10 bg-obsidian-900 shadow-glow-lg">
-                    <div className="border-b border-white/10 px-4 py-3">
-                      <div className="text-xs text-obsidian-500">Signed in as</div>
+                  <div className="absolute right-0 top-12 z-40 w-56 overflow-hidden rounded-2xl border border-white/[0.08] bg-base-surface shadow-glow-lg">
+                    <div className="border-b border-white/[0.08] px-4 py-3">
+                      <div className="text-xs text-ink-faint">Signed in as</div>
                       <div className="mt-0.5 truncate text-sm font-medium text-white">{auth.email || 'Workspace user'}</div>
                     </div>
                     <button className="block w-full px-4 py-3 text-left text-sm text-obsidian-300 hover:bg-white/[0.04] hover:text-white" onClick={() => navigate('/')}>
@@ -225,158 +234,240 @@ export function MarketplaceDetail() {
 
       <main className="mx-auto grid max-w-7xl gap-8 px-4 py-8 lg:grid-cols-[1fr_380px]">
         <section className="space-y-8">
-          <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-accent-500/70 via-cyan-500/25 to-obsidian-900 p-10">
-            {listing.preview_image_url ? (
-              <img src={listing.preview_image_url} alt="" className="absolute inset-0 h-full w-full object-cover opacity-70" />
-            ) : (
-              <div className="absolute right-8 top-8 opacity-20"><Icon size={160} /></div>
-            )}
-            <div className="relative max-w-2xl">
-              <div className="mb-5 flex flex-wrap gap-2">
-                <span className="badge-purple">{TYPE_LABELS[listing.listing_type]}</span>
-                <span className="badge-blue capitalize">{listing.category.replace('_', ' ')}</span>
-                <span className="badge-gray">v{listing.version}</span>
+          <div className="glass-card overflow-hidden rounded-[28px] p-8">
+            <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
+              <div className="max-w-2xl">
+                <div className="mb-5 flex flex-wrap gap-2">
+                  <span className="badge badge-glass">{TYPE_LABELS[listing.listing_type]}</span>
+                  <span className={clsx('badge capitalize', categoryTone(listing.category))}>{listing.category.replace('_', ' ')}</span>
+                  <span className="badge badge-glass">v{listing.version}</span>
+                </div>
+                <h1 className="text-5xl font-semibold tracking-[-0.06em]">{listing.name}</h1>
+                <p className="mt-4 text-lg leading-8 text-[#D7E0EF]">{listing.tagline}</p>
               </div>
-              <h1 className="text-5xl font-semibold tracking-[-0.06em]">{listing.name}</h1>
-              <p className="mt-4 text-lg leading-8 text-white/78">{listing.tagline}</p>
+              <div className="glass-card flex h-24 w-24 items-center justify-center rounded-3xl bg-white/[0.03]">
+                {listing.preview_image_url ? (
+                  <img src={listing.preview_image_url} alt="" className="h-full w-full rounded-3xl object-cover" />
+                ) : (
+                  <div className={clsx('grid h-20 w-20 place-items-center rounded-2xl', categoryTone(listing.category))}>
+                    <Icon size={34} />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          <div className="card p-6">
-            <h2 className="mb-4 text-2xl font-semibold text-white">Overview</h2>
-            <MarkdownBlock content={listing.description} />
+          <div className="glass-card flex flex-wrap gap-5 rounded-xl px-4 py-3">
+            {([
+              ['overview', 'Overview'],
+              ['requirements', 'Requirements'],
+              ['reviews', 'Reviews'],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setTab(id)}
+                className={clsx(
+                  'border-b-2 pb-2 font-mono text-[11px] uppercase tracking-[0.14em] transition',
+                  tab === id ? 'border-indigo-400 text-indigo-300' : 'border-transparent text-[#8B9DBE] hover:text-white',
+                )}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
-          {listing.readme && (
-            <div className="card p-6">
-              <div className="mb-5 flex items-center justify-between">
-                <h2 className="text-2xl font-semibold text-white">Readme</h2>
-                <span className="font-mono text-xs text-obsidian-500">Markdown docs</span>
+          {tab === 'overview' && (
+            <>
+              <div className="glass-card p-6">
+                <h2 className="mb-4 text-2xl font-semibold text-white">Overview</h2>
+                <MarkdownBlock content={listing.description} />
               </div>
-              <div className={headings.length ? 'grid gap-6 lg:grid-cols-[180px_1fr]' : ''}>
-                {headings.length > 0 && (
-                  <nav className="h-max rounded-2xl border border-white/10 bg-white/[0.025] p-3">
-                    <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-obsidian-500">Contents</div>
-                    <div className="space-y-1">
-                      {headings.slice(0, 8).map(heading => (
-                        <a
-                          key={`${heading.id}-${heading.text}`}
-                          className={clsx('block truncate rounded-lg px-2 py-1 text-xs text-obsidian-400 hover:bg-white/[0.04] hover:text-white', heading.depth > 2 && 'pl-4')}
-                          href={`#${heading.id}`}
-                        >
-                          {heading.text}
-                        </a>
-                      ))}
-                    </div>
-                  </nav>
+
+              {listing.readme && (
+                <div className="glass-card p-6">
+                  <div className="mb-5 flex items-center justify-between">
+                    <h2 className="text-2xl font-semibold text-white">Readme</h2>
+                    <span className="font-mono text-xs text-[#8B9DBE]">Markdown docs</span>
+                  </div>
+                  <div className={headings.length ? 'grid gap-6 lg:grid-cols-[180px_1fr]' : ''}>
+                    {headings.length > 0 && (
+                      <nav className="h-max rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3">
+                        <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[#8B9DBE]">Contents</div>
+                        <div className="space-y-1">
+                          {headings.slice(0, 8).map(heading => (
+                            <a
+                              key={`${heading.id}-${heading.text}`}
+                              className={clsx('block truncate rounded-lg px-2 py-1 text-xs text-[#8B9DBE] hover:bg-white/[0.04] hover:text-white', heading.depth > 2 && 'pl-4')}
+                              href={`#${heading.id}`}
+                            >
+                              {heading.text}
+                            </a>
+                          ))}
+                        </div>
+                      </nav>
+                    )}
+                    <MarkdownBlock content={listing.readme} />
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {tab === 'requirements' && (
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="glass-card p-6">
+                <h2 className="mb-4 text-2xl font-semibold text-white">Requirements</h2>
+                <div className="space-y-3">
+                  <div className="data-row rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
+                    <span className="text-[#8B9DBE]">Listing type</span>
+                    <span className="ml-auto font-mono text-xs text-white">{TYPE_LABELS[listing.listing_type]}</span>
+                  </div>
+                  <div className="data-row rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
+                    <span className="text-[#8B9DBE]">Category</span>
+                    <span className="ml-auto font-mono text-xs text-white">{listing.category.replace('_', ' ')}</span>
+                  </div>
+                  <div className="data-row rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
+                    <span className="text-[#8B9DBE]">Version</span>
+                    <span className="ml-auto font-mono text-xs text-white">v{listing.version}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="glass-card p-6">
+                <h3 className="font-semibold text-white">Tags</h3>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {listing.tags.map(tag => <span key={tag} className="badge badge-glass">#{tag}</span>)}
+                  {!listing.tags.length && <span className="text-sm text-[#8B9DBE]">No tags yet</span>}
+                </div>
+                <div className="mt-6">
+                  <h3 className="font-semibold text-white">Version history</h3>
+                  <div className="mt-3 space-y-2">
+                    {(listing.version_history?.length ? listing.version_history : [{ version: listing.version, note: 'Current published version', created_at: listing.published_at || listing.created_at }]).slice(0, 3).map((version, index) => (
+                      <div key={`${version.version}-${index}`} className="rounded-xl border border-white/[0.08] bg-white/[0.025] p-3">
+                        <div className="font-mono text-xs text-indigo-200">v{version.version}</div>
+                        <div className="mt-1 text-xs text-[#8B9DBE]">{version.note || (index === 0 ? 'Current version' : 'Previous version')}</div>
+                        {(version.published_at || version.created_at) && (
+                          <div className="mt-1 text-[11px] text-[#8B9DBE]">
+                            {formatDistanceToNow(new Date(version.published_at || version.created_at || ''), { addSuffix: true })}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {listing.source_url && (
+                  <a className="btn-secondary mt-5 inline-flex" href={listing.source_url} target="_blank" rel="noreferrer">
+                    Source URL <ExternalLink size={16} />
+                  </a>
                 )}
-                <MarkdownBlock content={listing.readme} />
               </div>
             </div>
           )}
 
-          <div className="card p-6">
-            <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-2xl font-semibold text-white">Reviews</h2>
-                <p className="mt-1 text-sm text-obsidian-500">Trust signals from founders who installed this kit.</p>
-              </div>
-              {installed && <ReviewForm listingId={listing.id} />}
-            </div>
-            <div className="grid gap-5 md:grid-cols-[200px_1fr]">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-center">
-                <div className="text-5xl font-semibold text-white">{(listing.rating_avg ?? 0).toFixed(1)}</div>
-                <div className="mt-2 flex justify-center gap-0.5 text-amber-300">
-                  {[...Array(5)].map((_, index) => <Star key={index} size={16} fill={index < Math.round(listing.rating_avg) ? 'currentColor' : 'none'} />)}
+          {tab === 'reviews' && (
+            <div className="glass-card p-6">
+              <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-2xl font-semibold text-white">Reviews</h2>
+                  <p className="mt-1 text-sm text-[#8B9DBE]">Trust signals from founders who installed this template.</p>
                 </div>
-                <p className="mt-2 text-xs text-obsidian-500">{listing.rating_count} reviews</p>
+                {installed && <ReviewForm listingId={listing.id} />}
               </div>
-              <div className="space-y-2">
-                {distribution.map(item => (
-                  <div key={item.score} className="flex items-center gap-3 text-sm text-obsidian-400">
-                    <span className="w-10">{item.score}★</span>
-                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-obsidian-800">
-                      <div className="h-full rounded-full bg-amber-300" style={{ width: `${item.percent}%` }} />
+              <div className="grid gap-5 md:grid-cols-[200px_1fr]">
+                <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-5 text-center">
+                  <div className="text-5xl font-semibold text-white">{(listing.rating_avg ?? 0).toFixed(1)}</div>
+                  <div className="mt-2 flex justify-center gap-0.5 text-amber-300">
+                    {[...Array(5)].map((_, index) => <Star key={index} size={16} fill={index < Math.round(listing.rating_avg) ? 'currentColor' : 'none'} />)}
+                  </div>
+                  <p className="mt-2 text-xs text-[#8B9DBE]">{listing.rating_count} reviews</p>
+                </div>
+                <div className="space-y-2">
+                  {distribution.map(item => (
+                    <div key={item.score} className="flex items-center gap-3 text-sm text-[#8B9DBE]">
+                      <span className="w-10">{item.score}★</span>
+                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-black/30">
+                        <div className="h-full rounded-full bg-amber-300" style={{ width: `${item.percent}%` }} />
+                      </div>
+                      <span className="w-8 text-right font-mono text-xs">{item.count}</span>
                     </div>
-                    <span className="w-8 text-right font-mono text-xs">{item.count}</span>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-6 space-y-3">
+                {(listing.reviews || []).map(review => (
+                  <div key={review.id} className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4">
+                    <div className="flex items-start gap-3">
+                      <AgentAvatar name={review.reviewer?.name || review.reviewer_user_id} size="sm" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-[#8B9DBE]">
+                          <span className="font-medium text-white">{review.reviewer?.name || 'Marketplace user'}</span>
+                          <span className="font-mono text-xs text-amber-300">{review.rating}★</span>
+                          <span>{formatDistanceToNow(new Date(review.created_at), { addSuffix: true })}</span>
+                        </div>
+                        <div className="mt-1 font-medium text-white">{review.title || 'Helpful review'}</div>
+                        {review.body && <p className="mt-2 text-sm leading-6 text-[#8B9DBE]">{review.body}</p>}
+                      </div>
+                    </div>
                   </div>
                 ))}
+                {!listing.reviews?.length && <p className="text-sm text-[#8B9DBE]">No reviews yet. Install it, try it, and leave the first signal.</p>}
               </div>
             </div>
-            <div className="mt-6 space-y-3">
-              {(listing.reviews || []).map(review => (
-                <div key={review.id} className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
-                  <div className="flex items-start gap-3">
-                    <AgentAvatar name={review.reviewer?.name || review.reviewer_user_id} size="sm" />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-obsidian-500">
-                        <span className="font-medium text-white">{review.reviewer?.name || 'Marketplace user'}</span>
-                        <span className="font-mono text-xs text-amber-300">{review.rating}★</span>
-                        <span>{formatDistanceToNow(new Date(review.created_at), { addSuffix: true })}</span>
-                      </div>
-                      <div className="mt-1 font-medium text-white">{review.title || 'Helpful review'}</div>
-                      {review.body && <p className="mt-2 text-sm leading-6 text-obsidian-400">{review.body}</p>}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {!listing.reviews?.length && <p className="text-sm text-obsidian-500">No reviews yet. Install it, try it, and leave the first signal.</p>}
-            </div>
-          </div>
+          )}
         </section>
 
         <aside className="space-y-4 lg:sticky lg:top-6 lg:h-max">
-          <div className="rounded-2xl border border-white/10 bg-obsidian-900 p-5 shadow-glow-sm">
+          <div className="glass-elevated p-5">
             <div className="mb-4 flex items-center gap-2">
-              <span className="badge-purple">{TYPE_LABELS[listing.listing_type]}</span>
-              <span className="badge-blue capitalize">{listing.category.replace('_', ' ')}</span>
+              <span className="badge badge-glass">{TYPE_LABELS[listing.listing_type]}</span>
+              <span className={clsx('badge capitalize', categoryTone(listing.category))}>{listing.category.replace('_', ' ')}</span>
             </div>
             {installed ? (
               <Link className="btn-secondary h-12 w-full justify-center text-emerald-200" to={`${installedPath}${installedResource ? `?installed=${installedResource}` : ''}`}>
                 ✓ Installed — View in {listing.listing_type === 'agent' ? 'My Team' : listing.listing_type === 'workflow' ? 'Workflows' : listing.listing_type === 'tool_config' ? 'Tools' : 'Eval Lab'}
               </Link>
             ) : (
-              <button className="btn-primary h-12 w-full" onClick={() => setInstalling(listing)}>
+              <button className="btn-primary btn-runner btn-lg w-full justify-center" onClick={() => setInstalling(listing)}>
                 Install to My Company <Download size={16} />
               </button>
             )}
             <div className="mt-5 grid grid-cols-3 gap-2 text-center">
-              <div className="rounded-xl bg-white/[0.03] p-3"><div className="font-mono text-sm text-white">{formatCount(listing.install_count)}</div><div className="mt-1 text-[11px] text-obsidian-500">installs</div></div>
-              <div className="rounded-xl bg-white/[0.03] p-3"><div className="font-mono text-sm text-white">{(listing.rating_avg ?? 0).toFixed(1)}</div><div className="mt-1 text-[11px] text-obsidian-500">rating</div></div>
-              <div className="rounded-xl bg-white/[0.03] p-3"><div className="font-mono text-sm text-white">{formatCount(listing.view_count)}</div><div className="mt-1 text-[11px] text-obsidian-500">views</div></div>
+              <div className="rounded-xl bg-white/[0.03] p-3"><div className="font-mono text-sm text-white">{formatCount(listing.install_count)}</div><div className="mt-1 text-[11px] text-[#8B9DBE]">installs</div></div>
+              <div className="rounded-xl bg-white/[0.03] p-3"><div className="font-mono text-sm text-white">{(listing.rating_avg ?? 0).toFixed(1)}</div><div className="mt-1 text-[11px] text-[#8B9DBE]">rating</div></div>
+              <div className="rounded-xl bg-white/[0.03] p-3"><div className="font-mono text-sm text-white">{formatCount(listing.view_count)}</div><div className="mt-1 text-[11px] text-[#8B9DBE]">views</div></div>
             </div>
           </div>
 
-          <div className="card p-5">
+          <div className="glass-card p-5">
             <h3 className="font-semibold text-white">Publisher</h3>
             <div className="mt-4 flex items-center gap-3">
               <AgentAvatar name={listing.publisher_org?.name || listing.publisher?.name || 'Community'} size="md" />
               <div>
                 <div className="text-sm font-medium text-white">{listing.publisher_org?.name || listing.publisher?.name || 'Community publisher'}</div>
-                <div className="text-xs text-obsidian-500">
+                <div className="text-xs text-[#8B9DBE]">
                   Trusted contributor · {listing.publisher_other_listing_count ?? 0} other listing{(listing.publisher_other_listing_count ?? 0) === 1 ? '' : 's'}
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="card p-5">
+          <div className="glass-card p-5">
             <h3 className="font-semibold text-white">Tags</h3>
             <div className="mt-3 flex flex-wrap gap-2">
-              {listing.tags.map(tag => <span key={tag} className="rounded-full bg-white/[0.04] px-2.5 py-1 text-xs text-obsidian-300">#{tag}</span>)}
-              {!listing.tags.length && <span className="text-sm text-obsidian-500">No tags yet</span>}
+              {listing.tags.map(tag => <span key={tag} className="badge badge-glass">#{tag}</span>)}
+              {!listing.tags.length && <span className="text-sm text-[#8B9DBE]">No tags yet</span>}
             </div>
           </div>
 
-          <div className="card p-5">
+          <div className="glass-card p-5">
             <h3 className="font-semibold text-white">Version history</h3>
             <div className="mt-3 space-y-2">
               {(listing.version_history?.length ? listing.version_history : [{ version: listing.version, note: 'Current published version', created_at: listing.published_at || listing.created_at }]).slice(0, 3).map((version, index) => (
-                <div key={`${version.version}-${index}`} className="rounded-xl border border-white/10 bg-white/[0.025] p-3">
-                  <div className="font-mono text-xs text-accent-200">v{version.version}</div>
-                  <div className="mt-1 text-xs text-obsidian-500">{version.note || (index === 0 ? 'Current version' : 'Previous version')}</div>
+                <div key={`${version.version}-${index}`} className="rounded-xl border border-white/[0.08] bg-white/[0.025] p-3">
+                  <div className="font-mono text-xs text-indigo-200">v{version.version}</div>
+                  <div className="mt-1 text-xs text-[#8B9DBE]">{version.note || (index === 0 ? 'Current version' : 'Previous version')}</div>
                   {(version.published_at || version.created_at) && (
-                    <div className="mt-1 text-[11px] text-obsidian-600">
+                    <div className="mt-1 text-[11px] text-[#8B9DBE]">
                       {formatDistanceToNow(new Date(version.published_at || version.created_at || ''), { addSuffix: true })}
                     </div>
                   )}
@@ -386,13 +477,13 @@ export function MarketplaceDetail() {
           </div>
 
           {listing.source_url && (
-            <a className="card flex items-center justify-between p-5 text-sm text-obsidian-300 hover:text-white" href={listing.source_url} target="_blank" rel="noreferrer">
+            <a className="glass-card flex items-center justify-between p-5 text-sm text-[#8B9DBE] hover:text-white" href={listing.source_url} target="_blank" rel="noreferrer">
               Source URL <ExternalLink size={16} />
             </a>
           )}
 
           <button
-            className="btn-ghost w-full justify-start text-obsidian-500"
+            className="btn-ghost w-full justify-start text-[#8B9DBE]"
             onClick={() => toast.info('Thanks. A marketplace moderator will review this listing.')}
           >
             <Flag size={15} /> Report listing

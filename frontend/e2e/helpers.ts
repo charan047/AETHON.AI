@@ -114,8 +114,8 @@ export async function loginHelper(
     },
   )
   await page.goto('/login')
-  await page.getByPlaceholder(/email/i).fill(email)
-  await page.getByPlaceholder(/password/i).fill(password)
+  await page.getByLabel(/^email$/i).fill(email)
+  await page.getByLabel(/^password$/i).fill(password)
   await page.locator('button[type="submit"]').click()
   await page.waitForFunction(() => {
     const path = window.location.pathname

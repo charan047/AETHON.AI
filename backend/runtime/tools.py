@@ -372,6 +372,16 @@ SPECIAL_TOOL_IDS = {
 }
 BUILTIN_TOOL_IDS = set(TOOL_REGISTRY.keys()) | SPECIAL_TOOL_IDS
 
+EXTERNAL_AGENT_TOOL_PREFIX = "agent:"
+
+
+def is_external_agent_tool(tool_id: str) -> bool:
+    return bool(tool_id) and tool_id.startswith(EXTERNAL_AGENT_TOOL_PREFIX)
+
+
+def is_builtin_tool_id(tool_id: str) -> bool:
+    return tool_id in BUILTIN_TOOL_IDS or is_external_agent_tool(tool_id)
+
 
 def get_tools(tool_ids: list[str], custom_tool_defs: list = None):
     """Return LangChain tool objects for the given IDs."""

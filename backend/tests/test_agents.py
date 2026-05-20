@@ -23,7 +23,7 @@ async def test_create_agent(authed_client):
     data = resp.json()
     assert data["name"] == "Test Agent"
     assert data["role"] == "tester"
-    assert "agent_communication" in data["tools"]
+    assert data["tools"] == []
     assert "id" in data
 
 

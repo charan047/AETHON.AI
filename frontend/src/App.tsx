@@ -5,6 +5,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { Toaster } from 'sonner'
 import { AlertTriangle } from 'lucide-react'
 import { dashboardApi, onboardingApi } from './api/client'
+import { initializeTheme } from './components/ui/ThemeToggle'
 import { AuthProvider } from './contexts/AuthContext'
 import { useAuth } from './contexts/AuthContext'
 import { WsProvider } from './contexts/WebSocketContext'
@@ -35,10 +36,36 @@ import { OnboardingWizard } from './pages/OnboardingWizard'
 import { Integrations } from './pages/Integrations'
 import { CompanyChat } from './pages/CompanyChat'
 import { DirectMessages } from './pages/DirectMessages'
+import { MessagesInbox } from './pages/MessagesInbox'
 import { ModelsPage } from './pages/ModelsPage'
 import { Clients } from './pages/Clients'
 import { ClientPortal } from './pages/ClientPortal'
+import { Missions } from './pages/Missions'
+import { MissionReport } from './pages/MissionReport'
+import { A2ATasks } from './pages/A2ATasks'
+import { ExternalAgents } from './pages/ExternalAgents'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
+
+const onboardingStatusStorageKey = (orgId: string) => `ai-company-os-onboarding-status:${orgId}`
+
+function readCachedOnboardingStatus(orgId: string | null | undefined) {
+  if (!orgId || typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(onboardingStatusStorageKey(orgId))
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function writeCachedOnboardingStatus(orgId: string | null | undefined, value: unknown) {
+  if (!orgId || typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(onboardingStatusStorageKey(orgId), JSON.stringify(value))
+  } catch {
+    // Ignore storage write failures.
+  }
+}
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -64,7 +91,7 @@ class ErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="grid min-h-screen place-items-center bg-obsidian-950 p-6 text-white">
+        <div className="grid min-h-screen place-items-center bg-base-bg p-6 text-white">
           <div className="max-w-md text-center">
             <div className="mb-6 flex justify-center">
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-red-400/20 bg-red-500/10 text-red-300">
@@ -85,7 +112,7 @@ class ErrorBoundary extends React.Component<
                 Reload page
               </button>
               <button
-                className="rounded-xl border border-white/10 bg-white/[0.04] px-6 py-2.5 text-sm text-white/70"
+                className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-6 py-2.5 text-sm text-white/70"
                 onClick={() => window.location.href = '/'}
               >
                 Go home
@@ -101,8 +128,8 @@ class ErrorBoundary extends React.Component<
 
 function OnboardingLoader() {
   return (
-    <div className="grid min-h-screen place-items-center bg-obsidian-950 text-slate-300">
-      <div className="rounded-2xl border border-white/10 bg-obsidian-900 px-6 py-5 text-center shadow-glow-sm">
+    <div className="grid min-h-screen place-items-center bg-base-bg text-slate-300">
+      <div className="rounded-2xl border border-white/[0.08] bg-base-surface px-6 py-5 text-center shadow-glow-sm">
         <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-slate-500">Loading agency workspace</p>
       </div>
@@ -112,11 +139,16 @@ function OnboardingLoader() {
 
 function useOnboardingStatus() {
   const { isAuthenticated, activeOrg, isLoading } = useAuth()
+  const cachedStatus = readCachedOnboardingStatus(activeOrg?.id)
   return useQuery({
     queryKey: ['onboarding-status'],
     queryFn: onboardingApi.status,
     enabled: isAuthenticated && !!activeOrg?.id && !isLoading,
     staleTime: 5_000,
+    initialData: cachedStatus ?? undefined,
+    placeholderData: previous => previous ?? cachedStatus ?? undefined,
+    refetchOnWindowFocus: false,
+    retry: 1,
   })
 }
 
@@ -125,7 +157,13 @@ function OnboardingGate({ children }: { children: ReactNode }) {
   const location = useLocation()
   const { data, isLoading } = useOnboardingStatus()
 
-  if (authLoading || (isAuthenticated && !activeOrg) || isLoading) return <OnboardingLoader />
+  React.useEffect(() => {
+    if (activeOrg?.id && data) {
+      writeCachedOnboardingStatus(activeOrg.id, data)
+    }
+  }, [activeOrg?.id, data])
+
+  if (authLoading || (isAuthenticated && !activeOrg) || (!data && isLoading)) return <OnboardingLoader />
 
   if (data && !data.onboarding_completed && location.pathname !== '/onboarding') {
     return <Navigate to="/onboarding" replace />
@@ -138,7 +176,13 @@ function OnboardingRoute() {
   const { isAuthenticated, activeOrg, isLoading: authLoading } = useAuth()
   const { data, isLoading } = useOnboardingStatus()
 
-  if (authLoading || (isAuthenticated && !activeOrg) || isLoading) return <OnboardingLoader />
+  React.useEffect(() => {
+    if (activeOrg?.id && data) {
+      writeCachedOnboardingStatus(activeOrg.id, data)
+    }
+  }, [activeOrg?.id, data])
+
+  if (authLoading || (isAuthenticated && !activeOrg) || (!data && isLoading)) return <OnboardingLoader />
   if (data?.onboarding_completed) return <Navigate to="/" replace />
 
   return <OnboardingWizard />
@@ -154,13 +198,16 @@ function DocumentTitleManager() {
     staleTime: 30_000,
   })
 
-  const company = data?.company_profile.name || 'Obsidian'
+  const company = data?.company_profile.name || 'Aethon'
   const pageTitle =
     location.pathname === '/' || location.pathname.startsWith('/dashboard') || location.pathname.startsWith('/company-os') ? 'Dashboard'
     : /^\/portal\/[^/]+/.test(location.pathname) ? 'Client Portal'
     : /^\/clients\/[^/]+/.test(location.pathname) ? 'Client Detail'
     : location.pathname.startsWith('/clients') ? 'Clients'
     : location.pathname.startsWith('/company-chat') ? 'Agency Chat'
+    : location.pathname.startsWith('/missions') ? 'Missions'
+    : location.pathname.startsWith('/a2a-tasks') ? 'A2A Tasks'
+    : location.pathname.startsWith('/settings/external-agents') ? 'External Agents'
     : location.pathname.startsWith('/agents') ? 'AI Team'
     : location.pathname.startsWith('/messages') ? 'Agent Messages'
     : location.pathname.startsWith('/workflows') ? 'Workflows'
@@ -187,97 +234,130 @@ function DocumentTitleManager() {
   return null
 }
 
+function AppFrame() {
+  const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
+
+  React.useEffect(() => {
+    initializeTheme()
+  }, [])
+
+  React.useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setCommandPaletteOpen(current => !current)
+      }
+      if (event.key === 'Escape') {
+        setCommandPaletteOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  return (
+    <>
+      <DocumentTitleManager />
+      <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+      <Toaster
+        position="bottom-right"
+        expand={false}
+        richColors={false}
+        toastOptions={{
+          style: {
+            background: '#0F0F0F',
+            border: '1px solid rgba(255,255,255,0.08)',
+            color: '#FFFFFF',
+            borderRadius: '12px',
+            fontSize: '14px',
+          },
+          classNames: {
+            success: '!border-l-4 !border-l-green-500',
+            error: '!border-l-4 !border-l-red-500',
+            info: '!border-l-4 !border-l-blue-500',
+            warning: '!border-l-4 !border-l-amber-500',
+          },
+        }}
+      />
+      <Routes>
+        <Route path="login" element={<Login />} />
+        <Route path="register" element={<Register />} />
+        <Route path="invite/:token" element={<AcceptInvite />} />
+        <Route path="portal/:token" element={<ClientPortal />} />
+        <Route path="marketplace" element={<Marketplace />} />
+        <Route path="marketplace/:slug" element={<MarketplaceDetail />} />
+        <Route
+          path="marketplace/publish"
+          element={
+            <ProtectedRoute>
+              <PublishListing />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="onboarding"
+          element={
+            <ProtectedRoute>
+              <OnboardingRoute />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          element={
+            <ProtectedRoute>
+              <OnboardingGate>
+                <Layout />
+              </OnboardingGate>
+            </ProtectedRoute>
+          }
+        >
+          <Route index element={<Dashboard />} />
+          <Route path="dashboard" element={<Navigate to="/" replace />} />
+          <Route path="company-os" element={<Navigate to="/" replace />} />
+          <Route path="company-chat" element={<CompanyChat />} />
+          <Route path="company-chat/:conversationId" element={<CompanyChat />} />
+          <Route path="clients" element={<Clients />} />
+          <Route path="clients/:clientId" element={<Clients />} />
+          <Route path="messages" element={<MessagesInbox />} />
+          <Route path="messages/:agentId" element={<DirectMessages />} />
+          <Route path="agents" element={<Agents />} />
+          <Route path="org-chart" element={<Navigate to="/settings/team" replace />} />
+          <Route path="workflows" element={<Workflows />} />
+          <Route path="missions" element={<Missions />} />
+          <Route path="missions/:id/report" element={<MissionReport />} />
+          <Route path="a2a-tasks" element={<A2ATasks />} />
+          <Route path="executions" element={<Navigate to="/monitoring" replace />} />
+          <Route path="executions/:executionId" element={<ExecutionPage />} />
+          <Route path="approvals" element={<Approvals />} />
+          <Route path="memory" element={<Memory />} />
+          <Route path="analytics" element={<Analytics />} />
+          <Route path="evals" element={<Evaluations />} />
+          <Route path="monitoring" element={<Monitoring />} />
+          <Route path="templates" element={<Navigate to="/marketplace" replace />} />
+          <Route path="chat/:workflowId" element={<WorkflowChat />} />
+          <Route path="tools" element={<Tools />} />
+          <Route path="integrations" element={<Integrations />} />
+          <Route path="integrations/oauth/callback" element={<Integrations />} />
+          <Route path="company" element={<Navigate to="/settings/org" replace />} />
+          <Route path="settings/models" element={<ModelsPage />} />
+          <Route path="settings/notifications" element={<NotificationsSettings />} />
+          <Route path="settings/external-agents" element={<ExternalAgents />} />
+          <Route path="settings/team" element={<TeamManagement />} />
+          <Route path="settings/org" element={<OrgSettings />} />
+        </Route>
+      </Routes>
+    </>
+  )
+}
+
 export default function App() {
   return (
     <AuthProvider>
       <WsProvider>
         <ErrorBoundary>
           <BrowserRouter>
-            <DocumentTitleManager />
-            <CommandPalette />
-            <Toaster
-              position="bottom-right"
-              expand={false}
-              richColors={false}
-              toastOptions={{
-                style: {
-                  background: '#0F1520',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  color: '#F0F4FF',
-                  borderRadius: '12px',
-                  fontSize: '14px',
-                },
-                classNames: {
-                  success: '!border-l-4 !border-l-emerald-500',
-                  error: '!border-l-4 !border-l-red-500',
-                  info: '!border-l-4 !border-l-blue-500',
-                  warning: '!border-l-4 !border-l-amber-500',
-                },
-              }}
-            />
-            <Routes>
-              <Route path="login" element={<Login />} />
-              <Route path="register" element={<Register />} />
-              <Route path="invite/:token" element={<AcceptInvite />} />
-              <Route path="portal/:token" element={<ClientPortal />} />
-              <Route path="marketplace" element={<Marketplace />} />
-              <Route path="marketplace/:slug" element={<MarketplaceDetail />} />
-              <Route
-                path="marketplace/publish"
-                element={
-                  <ProtectedRoute>
-                    <PublishListing />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="onboarding"
-                element={
-                  <ProtectedRoute>
-                    <OnboardingRoute />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                element={
-                  <ProtectedRoute>
-                    <OnboardingGate>
-                      <Layout />
-                    </OnboardingGate>
-                  </ProtectedRoute>
-                }
-              >
-                <Route index element={<Dashboard />} />
-                <Route path="dashboard" element={<Navigate to="/" replace />} />
-                <Route path="company-os" element={<Navigate to="/" replace />} />
-                <Route path="company-chat" element={<CompanyChat />} />
-                <Route path="company-chat/:conversationId" element={<CompanyChat />} />
-                <Route path="clients" element={<Clients />} />
-                <Route path="clients/:clientId" element={<Clients />} />
-                <Route path="messages" element={<DirectMessages />} />
-                <Route path="messages/:agentId" element={<DirectMessages />} />
-                <Route path="agents" element={<Agents />} />
-                <Route path="org-chart" element={<Navigate to="/settings/team" replace />} />
-                <Route path="workflows" element={<Workflows />} />
-                <Route path="executions" element={<Navigate to="/monitoring" replace />} />
-                <Route path="executions/:executionId" element={<ExecutionPage />} />
-                <Route path="approvals" element={<Approvals />} />
-                <Route path="memory" element={<Memory />} />
-                <Route path="analytics" element={<Analytics />} />
-                <Route path="evals" element={<Evaluations />} />
-                <Route path="monitoring" element={<Monitoring />} />
-                <Route path="templates" element={<Navigate to="/marketplace" replace />} />
-                <Route path="chat/:workflowId" element={<WorkflowChat />} />
-                <Route path="tools" element={<Tools />} />
-                <Route path="integrations" element={<Integrations />} />
-                <Route path="integrations/oauth/callback" element={<Integrations />} />
-                <Route path="company" element={<Navigate to="/settings/org" replace />} />
-                <Route path="settings/models" element={<ModelsPage />} />
-                <Route path="settings/notifications" element={<NotificationsSettings />} />
-                <Route path="settings/team" element={<TeamManagement />} />
-                <Route path="settings/org" element={<OrgSettings />} />
-              </Route>
-            </Routes>
+            <AppFrame />
           </BrowserRouter>
         </ErrorBoundary>
       </WsProvider>

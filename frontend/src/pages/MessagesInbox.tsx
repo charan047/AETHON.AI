@@ -1,336 +1,163 @@
-import { useEffect, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, CheckCircle2, Mail, Send, Sparkles } from 'lucide-react'
-import { agentsApi, messagesApi, organizationsApi } from '../api/client'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { MessageSquare } from 'lucide-react'
+import { clsx } from 'clsx'
+import { messagesApi } from '../api/client'
 import { EmptyState } from '../components/ui/EmptyState'
-import { MentionTextarea } from '../components/ui/MentionTextarea'
-import { useAuth } from '../contexts/AuthContext'
 import { useWebSocket } from '../contexts/WebSocketContext'
-import { toast } from '../lib/toast'
-import type { Agent, InboxMessage } from '../types'
-
-function priorityTone(priority: InboxMessage['priority']) {
-  switch (priority) {
-    case 'urgent':
-      return 'border-red-400/30 bg-red-500/10'
-    case 'high':
-      return 'border-amber-400/30 bg-amber-500/10'
-    case 'low':
-      return 'border-white/5 bg-white/[0.02]'
-    default:
-      return 'border-white/8 bg-white/[0.03]'
-  }
-}
+import type { InboxMessage } from '../types'
 
 function previewMessage(message: InboxMessage) {
   return message.message.length > 140 ? `${message.message.slice(0, 140)}…` : message.message
 }
 
+function relativeTime(iso?: string | null) {
+  if (!iso) return ''
+  const date = new Date(iso)
+  const diff = Date.now() - date.getTime()
+  const minutes = Math.max(0, Math.floor(diff / 60000))
+  if (minutes < 1) return 'now'
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function avatarTone(name: string) {
+  const palette = [
+    'from-indigo-500/80 to-violet-500/70',
+    'from-emerald-500/80 to-emerald-500/70',
+    'from-amber-500/80 to-red-500/70',
+    'from-sky-500/80 to-indigo-500/70',
+  ]
+  const index = [...name].reduce((acc, char) => acc + char.charCodeAt(0), 0) % palette.length
+  return palette[index]
+}
+
+type FilterKey = 'all' | 'unread' | 'agents'
+
 export function MessagesInbox() {
-  const auth = useAuth()
+  const navigate = useNavigate()
   const { lastEvent } = useWebSocket()
   const queryClient = useQueryClient()
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
-  const [reply, setReply] = useState('')
-  const [compose, setCompose] = useState('')
-  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
-  const [resolveOnReply, setResolveOnReply] = useState(true)
+  const [filter, setFilter] = useState<FilterKey>('all')
 
   const inboxQuery = useQuery({
     queryKey: ['ceo-inbox'],
     queryFn: () => messagesApi.ceoInbox(false),
     refetchInterval: 20_000,
   })
-  const agentsQuery = useQuery({
-    queryKey: ['agents', 'message-targets'],
-    queryFn: agentsApi.list,
-    staleTime: 30_000,
-  })
-  // Legacy thread query — MessagesInbox uses the ceo-inbox messages as the thread
-  // (DirectMessages.tsx is the new full implementation)
-  const threadQuery = useQuery({
-    queryKey: ['message-thread', selectedThreadId],
-    queryFn: async () => {
-      const result = await messagesApi.ceoInbox(false)
-      return result.messages.filter(m => m.thread_id === selectedThreadId)
-    },
-    enabled: Boolean(selectedThreadId),
-  })
-
-  useEffect(() => {
-    if (!selectedThreadId && inboxQuery.data?.messages?.length) {
-      setSelectedThreadId(inboxQuery.data.messages[0].thread_id || null)
-    }
-  }, [inboxQuery.data, selectedThreadId])
 
   useEffect(() => {
     if (lastEvent?.event === 'new_agent_message') {
       void queryClient.invalidateQueries({ queryKey: ['ceo-inbox'] })
-      if (selectedThreadId) {
-        void queryClient.invalidateQueries({ queryKey: ['message-thread', selectedThreadId] })
-      }
     }
-  }, [lastEvent, queryClient, selectedThreadId])
-
-  const markReadMutation = useMutation({
-    mutationFn: (id: string) => messagesApi.markRead(id),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['ceo-inbox'] }),
-  })
-
-  const respondMutation = useMutation({
-    mutationFn: () => messagesApi.ceoRespond({
-      thread_id: selectedThreadId!,
-      content: reply,
-      resolve: resolveOnReply,
-    }),
-    onSuccess: async () => {
-      setReply('')
-      toast.success(resolveOnReply ? 'Reply sent and thread resolved' : 'Reply sent')
-      await queryClient.invalidateQueries({ queryKey: ['ceo-inbox'] })
-      await queryClient.invalidateQueries({ queryKey: ['message-thread', selectedThreadId] })
-    },
-    onError: () => toast.error('Could not send reply'),
-  })
-
-  const sendMutation = useMutation({
-    mutationFn: (agentId: string) => messagesApi.ceoSend({
-      to_agent_id: agentId,
-      content: compose,
-      message_type: 'general',
-    }),
-    onSuccess: async data => {
-      setCompose('')
-      setSelectedAgent(null)
-      setSelectedThreadId(data.thread_id)
-      toast.success('Message sent')
-      await queryClient.invalidateQueries({ queryKey: ['ceo-inbox'] })
-      await queryClient.invalidateQueries({ queryKey: ['message-thread', data.thread_id] })
-    },
-    onError: () => toast.error('Could not send message'),
-  })
-
-  const retentionMutation = useMutation({
-    mutationFn: async (days: number | null) => {
-      const org = auth.activeOrg
-      if (!org) throw new Error('No active org')
-      const updated = await organizationsApi.update(org.id, { agent_message_retention_days: days })
-      await auth.refreshOrganizations(updated.id)
-      return updated
-    },
-    onSuccess: () => {
-      toast.success('Retention policy updated')
-      void queryClient.invalidateQueries({ queryKey: ['ceo-inbox'] })
-    },
-    onError: () => toast.error('Could not update retention'),
-  })
+  }, [lastEvent, queryClient])
 
   const inbox = inboxQuery.data?.messages || []
   const unreadCount = inboxQuery.data?.unread_count || 0
-  const thread = threadQuery.data || []
-  const agents = agentsQuery.data || []
 
-  const selectedInboxItem = inbox.find(item => item.thread_id === selectedThreadId) || null
+  const filtered = useMemo(() => {
+    if (filter === 'unread') return inbox.filter(item => !item.read_at)
+    if (filter === 'agents') return inbox.filter(item => Boolean(item.from_agent_id))
+    return inbox
+  }, [filter, inbox])
 
-  const sendNewMessage = () => {
-    const target = selectedAgent || agents.find(agent => {
-      const mentionRegex = /@([A-Za-z][A-Za-z\s\-']{0,40})/
-      const match = compose.match(mentionRegex)
-      if (!match) return false
-      const mention = match[1].trim().toLowerCase()
-      return [agent.name, agent.persona_name || ''].some(value => value.toLowerCase() === mention)
-    })
-    if (!target) {
-      toast.info('Mention an agent with @ or pick one from suggestions')
-      return
-    }
-    sendMutation.mutate(target.id)
-  }
+  const filterCounts = useMemo(() => ({
+    all: inbox.length,
+    unread: inbox.filter(item => !item.read_at).length,
+    agents: inbox.filter(item => Boolean(item.from_agent_id)).length,
+  }), [inbox])
 
-  if (inboxQuery.isLoading && agentsQuery.isLoading) {
-    return <div className="p-6 text-sm text-white/50">Loading executive inbox…</div>
-  }
+  const tabs: Array<{ key: FilterKey; label: string }> = [
+    { key: 'all', label: 'All' },
+    { key: 'unread', label: 'Unread' },
+    { key: 'agents', label: 'Agents' },
+  ]
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6 p-6">
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+    <div className="mx-auto max-w-5xl space-y-6 px-6 py-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="font-mono text-xs uppercase tracking-[0.24em] text-cyan-300">Executive inbox</p>
-          <h1 className="mt-2 text-4xl font-semibold tracking-[-0.04em] text-white">Agent Communication</h1>
-          <p className="mt-2 text-sm text-white/45">
-            Durable escalations, focused CEO replies, and structured agent coordination without turning every run into chat noise.
-          </p>
+          <h1 className="page-title">Messages</h1>
+          <p className="page-subtitle">Agent inbox and direct threads</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/70">
-            Unread {unreadCount}
-          </div>
-          <select
-            className="rounded-xl border border-white/10 bg-[#0F1520] px-3 py-2 text-sm text-white"
-            value={auth.activeOrg?.agent_message_retention_days ?? 0}
-            onChange={event => {
-              const value = Number(event.target.value)
-              retentionMutation.mutate(value === 0 ? null : value)
-            }}
-          >
-            <option value={7}>Keep 7 days</option>
-            <option value={30}>Keep 30 days</option>
-            <option value={45}>Keep 45 days</option>
-            <option value={0}>Keep forever</option>
-          </select>
-        </div>
+        <span className={clsx('badge', unreadCount > 0 ? 'badge-red' : 'badge-glass')}>
+          {unreadCount} unread
+        </span>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
-        <section className="rounded-3xl border border-white/8 bg-base-200/85 p-4 shadow-card">
-          <div className="mb-4 flex items-center gap-2 px-2">
-            <Mail size={16} className="text-accent-cyan" />
-            <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-white/70">CEO Inbox</h2>
-          </div>
+      <div className="flex flex-wrap items-center gap-5 border-b border-[var(--border)] pb-2">
+        {tabs.map(tab => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setFilter(tab.key)}
+            className={clsx(
+              'inline-flex items-center gap-2 border-b-2 pb-2 font-mono text-[11px] uppercase tracking-[0.10em] transition-colors',
+              filter === tab.key
+                ? 'border-indigo-400 text-indigo-300 font-semibold'
+                : 'border-transparent text-[var(--text-3)] hover:text-[var(--text-2)]',
+            )}
+          >
+            {tab.label}
+            {filterCounts[tab.key] > 0 ? (
+              <span className={clsx('badge px-1.5 py-0.5 font-mono text-[10px]', tab.key === 'unread' ? 'badge-red' : 'badge-glass')}>
+                {filterCounts[tab.key]}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </div>
 
-          {inbox.length === 0 ? (
+      <section className="glass-card overflow-hidden p-0">
+        {inboxQuery.isLoading ? (
+          <div className="px-5 py-10 text-sm text-[var(--text-3)]">Loading messages…</div>
+        ) : filtered.length === 0 ? (
+          <div className="p-8">
             <EmptyState
               icon="📭"
-              title="Inbox is clear"
-              description="Agents will only escalate blockers, review requests, and high-signal updates here."
+              title="No messages"
+              description="Agent escalations and direct messages will appear here."
             />
-          ) : (
-            <div className="space-y-3">
-              {inbox.map(message => (
+          </div>
+        ) : (
+          <div>
+            {filtered.map(message => {
+              const name = message.from_agent_persona || message.from_agent_name || 'Agent'
+              return (
                 <button
                   key={message.id}
                   type="button"
                   onClick={() => {
-                    setSelectedThreadId(message.thread_id || null)
-                    if (!message.read_at) {
-                      markReadMutation.mutate(message.id)
-                    }
+                    if (message.from_agent_id) navigate(`/messages/${message.from_agent_id}`)
                   }}
-                  className={`w-full rounded-2xl border p-4 text-left transition hover:border-accent-purple/30 ${priorityTone(message.priority)} ${selectedThreadId === message.thread_id ? 'ring-1 ring-accent-purple/40' : ''}`}
+                  className="data-row min-h-[44px] w-full text-left"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium text-white">
-                        {message.from_agent_persona || message.from_agent_name}
-                      </div>
-                      <div className="text-xs text-white/35">{message.message_type.replace('_', ' ')}</div>
-                    </div>
-                    {!message.read_at && (
-                      <span className="h-2.5 w-2.5 rounded-full bg-accent-green shadow-glow-green" />
-                    )}
+                  <div className={clsx('flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-[10px] font-bold text-white', avatarTone(name))}>
+                    {name.charAt(0).toUpperCase()}
                   </div>
-                  <p className="mt-3 text-sm leading-relaxed text-white/65">{previewMessage(message)}</p>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-white">{name}</div>
+                    <div className="truncate text-xs text-[#8B9DBE]">{previewMessage(message)}</div>
+                  </div>
+                  <div className="font-mono text-[11px] text-[#8B9DBE]">{relativeTime(message.created_at)}</div>
+                  {!message.read_at ? <span className="h-2 w-2 shrink-0 rounded-full bg-indigo-400" /> : null}
                 </button>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-3xl border border-white/8 bg-base-200/85 p-5 shadow-card">
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-xl font-semibold text-white">Thread</h2>
-                  <p className="text-sm text-white/40">
-                    {selectedInboxItem ? `Priority ${selectedInboxItem.priority}` : 'Select a thread to respond'}
-                  </p>
-                </div>
-                {selectedInboxItem?.is_resolved && (
-                  <div className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
-                    <CheckCircle2 size={14} />
-                    Resolved
-                  </div>
-                )}
-              </div>
-
-              {selectedThreadId && thread.length > 0 ? (
-                <div className="space-y-3">
-                  {thread.map(message => (
-                    <div
-                      key={message.id}
-                      className={`rounded-2xl border px-4 py-3 ${message.from_agent_id ? 'border-white/10 bg-white/[0.04]' : 'border-accent-purple/20 bg-accent-purple/10'}`}
-                    >
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <div className="text-sm font-medium text-white">
-                          {message.from_agent_id ? (message.from_agent_persona || message.from_agent_name) : 'CEO'}
-                        </div>
-                        <div className="text-xs text-white/35">{new Date(message.created_at).toLocaleString()}</div>
-                      </div>
-                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-white/75">{message.message}</p>
-                    </div>
-                  ))}
-
-                  <div className="rounded-2xl border border-white/8 bg-black/15 p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <div className="text-sm font-medium text-white">Reply</div>
-                      <label className="flex items-center gap-2 text-xs text-white/45">
-                        <input type="checkbox" checked={resolveOnReply} onChange={e => setResolveOnReply(e.target.checked)} />
-                        Resolve thread after sending
-                      </label>
-                    </div>
-                    <MentionTextarea
-                      value={reply}
-                      onChange={setReply}
-                      agents={agents}
-                      placeholder="Reply to this thread. Use @ to mention another agent if needed."
-                    />
-                    <div className="mt-3 flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => respondMutation.mutate()}
-                        disabled={!reply.trim() || respondMutation.isPending}
-                        className="inline-flex items-center gap-2 rounded-xl bg-accent-purple px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-purple/90 disabled:opacity-50"
-                      >
-                        <Send size={15} />
-                        {respondMutation.isPending ? 'Sending…' : 'Send reply'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <EmptyState
-                  icon="💬"
-                  title="Pick a thread"
-                  description="Escalations, blockers, and review requests appear here when an agent truly needs human input."
-                />
-              )}
-            </div>
-
-            <div className="rounded-2xl border border-white/8 bg-black/15 p-4">
-              <div className="mb-3 flex items-center gap-2">
-                <Sparkles size={16} className="text-accent-purple" />
-                <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-white/70">New CEO Message</h3>
-              </div>
-              {selectedAgent && (
-                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-accent-cyan/20 bg-accent-cyan/10 px-3 py-1 text-xs text-accent-cyan">
-                  To {selectedAgent.persona_name || selectedAgent.name}
-                </div>
-              )}
-              <MentionTextarea
-                value={compose}
-                onChange={setCompose}
-                agents={agents}
-                placeholder="Type @Maya or @Alex to start a conversation with an agent."
-                onMentionSelected={setSelectedAgent}
-              />
-              <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-400/15 bg-amber-500/10 p-3 text-xs text-amber-100/85">
-                <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                Agents should only use this channel for blockers, risk warnings, handoffs, or high-signal updates. Routine work stays in their normal execution flow.
-              </div>
-              <div className="mt-4 flex justify-end">
-                <button
-                  type="button"
-                  onClick={sendNewMessage}
-                  disabled={!compose.trim() || sendMutation.isPending}
-                  className="inline-flex items-center gap-2 rounded-xl bg-accent-cyan px-4 py-2 text-sm font-medium text-base-100 transition hover:bg-accent-cyan/90 disabled:opacity-50"
-                >
-                  <Send size={15} />
-                  {sendMutation.isPending ? 'Sending…' : 'Start thread'}
-                </button>
-              </div>
-            </div>
+              )
+            })}
           </div>
-        </section>
+        )}
+      </section>
+
+      <div className="glass-card flex items-center gap-3 px-4 py-3 text-sm text-[#8B9DBE]">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/12 text-indigo-300">
+          <MessageSquare size={16} />
+        </div>
+        <div>
+          Click any row to open the live direct-message thread with that agent.
+        </div>
       </div>
     </div>
   )

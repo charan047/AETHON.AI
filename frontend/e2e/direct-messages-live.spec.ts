@@ -161,7 +161,7 @@ test.describe('Direct Messages live replies', () => {
             content: 'OpenAI just launched ',
           })
         })
-      }, 120)
+      }, 220)
 
       setTimeout(() => {
         void page.evaluate(() => {
@@ -174,7 +174,7 @@ test.describe('Direct Messages live replies', () => {
             content: 'new enterprise tooling this week.',
           })
         })
-      }, 180)
+      }, 360)
 
       setTimeout(() => {
         threadMessages.push({
@@ -206,7 +206,7 @@ test.describe('Direct Messages live replies', () => {
             created_at: new Date().toISOString(),
           })
         })
-      }, 240)
+      }, 520)
     })
 
     await page.goto(`/messages/${agentId}`)
@@ -217,7 +217,7 @@ test.describe('Direct Messages live replies', () => {
     await composer.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+Enter`)
 
     await expect(page.getByText('What are the latest OpenAI updates?')).toBeVisible()
-    await expect(page.getByText(/Maya is typing/i)).toBeVisible()
+    await expect(page.getByText(/Maya is thinking/i)).toBeVisible()
     await expect(page.getByText('OpenAI just launched new enterprise tooling this week.')).toBeVisible()
   })
 })

@@ -1,28 +1,33 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
 import {
   Activity,
+  AlertTriangle,
   ArrowRight,
   Bot,
   Briefcase,
   CalendarDays,
-  CheckCircle2,
   Command,
+  FileText,
   PlayCircle,
   ShieldAlert,
-  Sparkles,
+  XCircle,
   Zap,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { motion, useReducedMotion } from 'framer-motion'
 import { useAgencyOverview } from '../hooks/useAgencyOverview'
+import { AnimatedNumber } from '../components/ui/AnimatedNumber'
 import { Skeleton } from '../components/ui/Skeleton'
-import { AgentAvatar } from '../components/ui/AgentAvatar'
-import { StatusDot } from '../components/ui/StatusDot'
 import { useAuth } from '../contexts/AuthContext'
 import { toast } from '../lib/toast'
-import type { AgencyOverviewActivity, AgencyOverviewAgent, AgencyOverviewApproval, AgencyOverviewClient } from '../types'
+import type {
+  AgencyOverviewActivity,
+  AgencyOverviewAgent,
+  AgencyOverviewAttentionItem,
+  AgencyOverviewClient,
+} from '../types'
 
 const COMPANY_CHAT_DRAFT_KEY = 'aethon-company-chat-draft'
 
@@ -45,18 +50,10 @@ function clientSubtitle(
 }
 
 function approvalTone(riskLevel: string) {
-  if (riskLevel === 'critical') return 'border-red-400/30 bg-red-500/10 text-red-200'
-  if (riskLevel === 'high') return 'border-amber-400/30 bg-amber-500/10 text-amber-200'
-  if (riskLevel === 'medium') return 'border-blue-400/30 bg-blue-500/10 text-blue-200'
-  return 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200'
-}
-
-function statusTone(status: string) {
-  if (status === 'completed') return 'text-emerald-300'
-  if (status === 'running') return 'text-blue-300'
-  if (status === 'failed') return 'text-red-300'
-  if (status === 'cancelled') return 'text-ink-secondary'
-  return 'text-amber-300'
+  if (riskLevel === 'critical') return 'border-signal-red bg-signal-red-bg text-signal-red'
+  if (riskLevel === 'high') return 'border-signal-amber bg-signal-amber-bg text-signal-amber'
+  if (riskLevel === 'medium') return 'border-signal-blue bg-signal-blue-bg text-signal-blue'
+  return 'border-signal-green bg-signal-green-bg text-signal-green'
 }
 
 function overviewMotion(prefersReducedMotion: boolean) {
@@ -69,65 +66,88 @@ function overviewMotion(prefersReducedMotion: boolean) {
       }
 }
 
+function statusBadge(status: string) {
+  if (status === 'completed') return { className: 'badge-emerald', label: 'done' }
+  if (status === 'running') return { className: 'badge-indigo', label: 'running' }
+  if (status === 'failed') return { className: 'badge-red', label: 'failed' }
+  if (status === 'pending_review') return { className: 'badge-amber', label: 'review' }
+  if (status === 'cancelled') return { className: 'badge-glass', label: 'stopped' }
+  return { className: 'badge-glass', label: status }
+}
+
 function StatCard({
   label,
   value,
   meta,
   icon: Icon,
   progress,
+  accent,
+  delayClass,
 }: {
   label: string
   value: number
   meta: string
   icon: typeof Briefcase
   progress: number
+  accent: 'indigo' | 'emerald' | 'amber' | 'violet'
+  delayClass: string
 }) {
+  const accentStyles = {
+    indigo: {
+      iconWrap: 'bg-indigo-500/15 text-indigo-300',
+      bar: 'bg-indigo-400',
+      hover: 'hover:border-indigo-500/15',
+    },
+    emerald: {
+      iconWrap: 'bg-emerald-500/15 text-emerald-300',
+      bar: 'bg-emerald-400',
+      hover: 'hover:border-emerald-500/15',
+    },
+    amber: {
+      iconWrap: 'bg-amber-500/15 text-amber-300',
+      bar: 'bg-amber-400',
+      hover: 'hover:border-amber-500/15',
+    },
+    violet: {
+      iconWrap: 'bg-violet-500/15 text-violet-300',
+      bar: 'bg-violet-300',
+      hover: 'hover:border-violet-500/15',
+    },
+  } as const
+  const styles = accentStyles[accent]
+
   return (
-    <div className="glass-card col-span-12 p-5 sm:col-span-6 xl:col-span-3">
+    <motion.div
+      whileHover={{ y: -2 }}
+      className={clsx('glass-card p-5', delayClass, styles.hover)}
+    >
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#4B5A73]">{label}</p>
-          <p className="mt-2 text-4xl font-extrabold tracking-tight text-white">{value.toLocaleString()}</p>
+          <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-[#4B5A73]">{label}</p>
+          <AnimatedNumber
+            value={value}
+            className="mt-2 block font-mono text-3xl font-extrabold tracking-tight text-white animate-number-flip"
+          />
           <p className="mt-1 text-xs text-[#8B9DBE]">{meta}</p>
         </div>
-        <div className="rounded-xl bg-blue-600/12 p-2.5">
-          <Icon size={20} className="text-blue-400" />
+        <div className={clsx('rounded-lg p-2.5', styles.iconWrap)}>
+          <Icon size={18} />
         </div>
       </div>
-      <div className="mt-4 h-0.5 rounded-full bg-white/[0.04]">
+      <div className="mt-4 h-1 overflow-hidden rounded-full bg-white/[0.04]">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-blue-600 to-emerald-400"
+          className={clsx('h-full origin-left rounded-full animate-bar-fill', styles.bar)}
           style={{ width: `${Math.max(8, Math.min(progress, 100))}%` }}
         />
       </div>
-    </div>
+    </motion.div>
   )
 }
 
-function SectionCard({
-  title,
-  subtitle,
-  action,
-  className,
-  children,
-}: {
-  title: string
-  subtitle: string
-  action?: ReactNode
-  className?: string
-  children: ReactNode
-}) {
+function StatusBadge({ status }: { status: string }) {
+  const config = statusBadge(status)
   return (
-    <section className={clsx('glass-card overflow-hidden p-5', className)}>
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-sm font-semibold uppercase tracking-[0.18em] text-white/70">{title}</div>
-          <div className="mt-2 text-sm text-[#8B9DBE]">{subtitle}</div>
-        </div>
-        {action}
-      </div>
-      <div className="mt-5">{children}</div>
-    </section>
+    <span className={clsx('badge font-mono uppercase', config.className)}>{config.label}</span>
   )
 }
 
@@ -139,6 +159,7 @@ function CommandBar({
   chips: string[]
 }) {
   const [value, setValue] = useState('')
+  const [focused, setFocused] = useState(false)
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -148,23 +169,32 @@ function CommandBar({
   }
 
   return (
-    <div className="glass-card col-span-12 overflow-hidden">
-      <div className="flex flex-col gap-3 p-4 md:flex-row md:items-center">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600/15">
-          <Zap size={18} className="text-blue-400" />
+    <div
+      className="glass-card col-span-12 overflow-hidden transition-all duration-150"
+      style={{
+        boxShadow: focused ? 'inset 0 1px 0 rgba(255,255,255,0.08), 0 0 0 1px rgba(99,102,241,0.14), 0 0 26px rgba(99,102,241,0.12)' : undefined,
+      }}
+    >
+      <div className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-500/15 text-indigo-300">
+          <Zap size={18} />
         </div>
         <form onSubmit={submit} className="flex min-w-0 flex-1 items-center gap-3">
-          <Command size={16} className="shrink-0 text-[#4B5A73]" />
+          <Command size={16} className="shrink-0 text-white/25" />
           <input
             value={value}
             onChange={event => setValue(event.target.value)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             onKeyDown={event => {
               if (event.key === 'Enter') submit(event)
             }}
-            className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-[#4B5A73]"
-            placeholder="Tell your agency what to do — @Maya run research for Acme, pause all agents, show status..."
+            className="min-w-0 flex-1 bg-transparent font-mono text-sm text-white outline-none placeholder:text-white/20"
+            placeholder="Type a command or @mention an agent..."
           />
-          <div className="hidden shrink-0 text-xs text-[#2D3748] md:block">↵ Enter</div>
+          <kbd className="hidden shrink-0 rounded-md border border-white/[0.08] bg-white/[0.03] px-2 py-1 font-mono text-[10px] text-white/35 md:block">
+            Cmd K
+          </kbd>
         </form>
       </div>
       <div className="flex flex-wrap gap-2 border-t border-white/[0.06] px-4 py-3">
@@ -173,7 +203,7 @@ function CommandBar({
             key={chip}
             type="button"
             onClick={() => onRun(chip)}
-            className="cursor-pointer rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-[#8B9DBE] transition-all duration-150 hover:bg-white/[0.05] hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+            className="cursor-pointer rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-white/55 transition-all duration-150 hover:bg-white/[0.05] hover:text-white focus:outline-none focus:ring-2 focus:ring-white/10"
           >
             {chip}
           </button>
@@ -186,20 +216,19 @@ function CommandBar({
 function DashboardSkeleton() {
   return (
     <div className="space-y-6 p-6">
-      <div className="space-y-3">
-        <Skeleton className="h-4 w-36" />
-        <Skeleton className="h-12 w-80" />
-        <Skeleton className="h-4 w-64" />
+      <div className="space-y-2">
+        <Skeleton className="h-3 w-28" />
+        <Skeleton className="h-10 w-72" />
       </div>
-      <div className="grid grid-cols-12 gap-4">
-        {Array.from({ length: 4 }).map((_, index) => (
-          <Skeleton key={index} className="col-span-12 h-36 rounded-2xl sm:col-span-6 xl:col-span-3" />
-        ))}
-        <Skeleton className="col-span-12 h-[360px] rounded-2xl xl:col-span-7" />
-        <Skeleton className="col-span-12 h-[360px] rounded-2xl xl:col-span-5" />
-        <Skeleton className="col-span-12 h-[280px] rounded-2xl xl:col-span-7" />
-        <Skeleton className="col-span-12 h-[280px] rounded-2xl xl:col-span-5" />
-        <Skeleton className="col-span-12 h-28 rounded-2xl" />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
+        <div className="space-y-6">
+          <Skeleton className="h-[240px] rounded-xl" />
+          <Skeleton className="h-[320px] rounded-xl" />
+        </div>
+        <div className="space-y-6">
+          <Skeleton className="h-[360px] rounded-xl" />
+          <Skeleton className="h-[92px] rounded-xl" />
+        </div>
       </div>
     </div>
   )
@@ -212,11 +241,7 @@ export function CommandCenter() {
   const { overview, suggestedClient, loading, isError, refetch } = useAgencyOverview()
 
   const firstName = auth.activeOrg?.name?.split(/\s+/)[0] || auth.email?.split('@')[0] || 'there'
-  const greeting = new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(new Date()).includes('AM')
-    ? 'Good morning'
-    : new Date().getHours() < 18
-      ? 'Good afternoon'
-      : 'Good evening'
+  const greeting = new Date().getHours() < 12 ? 'Good morning.' : 'Good evening.'
   const nowLabel = new Intl.DateTimeFormat(undefined, {
     weekday: 'long',
     month: 'short',
@@ -307,270 +332,142 @@ export function CommandCenter() {
     return <DashboardSkeleton />
   }
 
-  const activeAgents = overview.agents.working + overview.agents.idle
-  const statCards = [
-    {
-      label: 'Total Clients',
-      value: overview.clients.total,
-      meta: `${overview.clients.active} active accounts`,
-      icon: Briefcase,
-      progress: overview.clients.total ? (overview.clients.active / overview.clients.total) * 100 : 0,
-    },
-    {
-      label: 'Active Agents',
-      value: activeAgents,
-      meta: `${overview.agents.working} working now`,
-      icon: Bot,
-      progress: activeAgents ? (overview.agents.working / activeAgents) * 100 : 0,
-    },
-    {
-      label: 'Pending Approvals',
-      value: overview.approvals.pending,
-      meta: overview.approvals.pending ? `${overview.approvals.critical} higher-risk items` : 'All clear right now',
-      icon: ShieldAlert,
-      progress: Math.min(overview.approvals.pending * 15, 100),
-    },
-    {
-      label: 'Done Today',
-      value: overview.activity.completed_today,
-      meta: `${overview.activity.executions_today} started today`,
-      icon: CheckCircle2,
-      progress: overview.activity.executions_today ? (overview.activity.completed_today / overview.activity.executions_today) * 100 : 0,
-    },
-  ]
-
   return (
-    <motion.div {...overviewMotion(Boolean(prefersReducedMotion))} className="space-y-6 p-6">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <div>
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8B9DBE]">
-            <Sparkles size={12} className="text-blue-400" />
-            Executive overview
+    <div className="p-6">
+      <motion.div {...overviewMotion(Boolean(prefersReducedMotion))} className="space-y-6">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h1 className="text-4xl font-extrabold tracking-[-0.04em] text-white">{greeting}</h1>
+            <div className="mt-2 font-mono text-sm uppercase tracking-[0.14em] text-[#4B5A73]">{nowLabel}</div>
           </div>
-          <h1 className="mt-4 text-4xl font-extrabold tracking-[-0.05em] text-white md:text-5xl">
-            {greeting}, {firstName}
-          </h1>
-          <p className="mt-3 text-sm text-[#8B9DBE]">Here&apos;s what&apos;s happening in your agency.</p>
+          <div className="text-right text-xs text-[#8B9DBE]">{firstName}</div>
         </div>
-        <div className="inline-flex items-center gap-2 rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 text-sm text-[#8B9DBE]">
-          <CalendarDays size={16} className="text-blue-400" />
-          {nowLabel}
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Active Agents" value={overview.agents.total} meta={`${overview.agents.working} working now`} icon={Bot} progress={overview.agents.total ? (overview.agents.working / overview.agents.total) * 100 : 8} accent="indigo" delayClass="animate-d-0" />
+          <StatCard label="Clients" value={overview.clients.total} meta={`${overview.clients.active} active accounts`} icon={Briefcase} progress={overview.clients.total ? (overview.clients.active / overview.clients.total) * 100 : 8} accent="emerald" delayClass="animate-d-1" />
+          <StatCard label="Pending Reviews" value={overview.attention_count} meta={`${overview.approvals.pending} in approvals`} icon={ShieldAlert} progress={Math.min(Math.max(overview.attention_count * 14, 8), 100)} accent="amber" delayClass="animate-d-2" />
+          <StatCard label="Done Today" value={overview.activity.completed_today} meta={`${overview.activity.executions_today} total runs today`} icon={CalendarDays} progress={overview.activity.executions_today ? (overview.activity.completed_today / overview.activity.executions_today) * 100 : 8} accent="violet" delayClass="animate-d-3" />
         </div>
-      </div>
 
-      <div className="grid grid-cols-12 gap-4">
-        {statCards.map(card => (
-          <StatCard key={card.label} {...card} />
-        ))}
-
-        <SectionCard
-          title="Client Activity"
-          subtitle="Top accounts with movement across your agency today."
-          className="col-span-12 xl:col-span-7"
-          action={
-            <Link
-              to="/clients"
-              className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/[0.08] px-3 py-1.5 text-xs text-[#8B9DBE] transition duration-150 hover:bg-white/[0.05] hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-            >
-              View all
-              <ArrowRight size={13} />
-            </Link>
-          }
-        >
-          {overview.clients.list.length ? (
-            <div className="divide-y divide-white/[0.04]">
-              {overview.clients.list.map(client => {
-                const activity = recentByClient.get(client.id)
-                return (
-                  <button
-                    key={client.id}
-                    type="button"
-                    onClick={() => navigate(`/clients/${client.id}`)}
-                    className="group flex w-full cursor-pointer items-center gap-4 py-3 text-left transition duration-150 hover:translate-x-1 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                  >
-                    <div className="h-8 w-1 shrink-0 rounded-full" style={{ background: client.color }} />
-                    <div
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-bold"
-                      style={{ background: `${client.color}20`, color: client.color }}
-                    >
-                      {client.name.charAt(0)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-white">{client.name}</p>
-                      <p className="truncate text-xs text-[#8B9DBE]">{clientSubtitle(client, activity)}</p>
-                    </div>
-                    <div className="hidden text-xs text-[#4B5A73] md:block">{client.executions_today} runs</div>
-                    <div className="hidden text-xs text-[#4B5A73] lg:block">{relativeTime(activity?.started_at || client.last_activity)}</div>
-                    <ArrowRight size={14} className="shrink-0 text-[#2D3748] transition group-hover:text-[#4B5A73]" />
-                  </button>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-white/[0.08] bg-white/[0.02] px-5 py-10 text-center">
-              <div className="text-base font-semibold text-white">No clients yet.</div>
-              <Link to="/clients" className="mt-3 inline-flex items-center gap-2 text-sm text-blue-300 transition hover:text-white">
-                Add your first client
-                <ArrowRight size={14} />
-              </Link>
-            </div>
-          )}
-        </SectionCard>
-
-        <SectionCard
-          title="Agent Team"
-          subtitle="Who is active, what they&apos;re handling, and where they&apos;re deployed."
-          className="col-span-12 xl:col-span-5"
-          action={
-            <Link
-              to="/agents"
-              className="inline-flex cursor-pointer items-center gap-2 text-xs text-blue-300 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-            >
-              View all agents
-              <ArrowRight size={13} />
-            </Link>
-          }
-        >
-          <div className="space-y-3">
-            {overview.agents.list.map((agent: AgencyOverviewAgent) => (
-              <button
-                key={agent.id}
-                type="button"
-                onClick={() => navigate(`/agents?agent=${agent.id}`)}
-                className="group flex w-full cursor-pointer items-start gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-left transition duration-150 hover:-translate-y-[1px] hover:border-blue-500/20 hover:bg-white/[0.04] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-              >
-                <AgentAvatar
-                  name={agent.persona_name || agent.name}
-                  size="md"
-                  running={agent.current_status === 'working'}
-                  color={agent.client_color ? `linear-gradient(135deg, ${agent.client_color}, #2563EB)` : undefined}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <div className="truncate text-sm font-semibold text-white">{agent.persona_name || agent.name}</div>
-                    <StatusDot
-                      status={agent.current_status === 'working' ? 'working' : agent.current_status === 'waiting_approval' ? 'waiting_approval' : 'idle'}
-                      size="sm"
-                    />
-                  </div>
-                  <div className="mt-1 truncate text-xs text-[#4B5A73]">
-                    {agent.role_slug || agent.role}
-                    {agent.client_name ? ` · ${agent.client_name}` : ' · Internal'}
-                  </div>
-                  <div className="mt-2 truncate text-xs text-[#8B9DBE]">
-                    {agent.current_status === 'working'
-                      ? agent.current_task_summary || 'Working on a client deliverable'
-                      : agent.current_status === 'waiting_approval'
-                        ? agent.current_task_summary || 'Waiting for approval'
-                        : `Completed ${agent.tasks_completed} tasks`}
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </SectionCard>
-
-        <SectionCard
-          title="Recent Work"
-          subtitle="A cross-client view of what your AI team finished, started, or escalated."
-          className="col-span-12 xl:col-span-7"
-          action={
-            <Link
-              to="/monitoring"
-              className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/[0.08] px-3 py-1.5 text-xs text-[#8B9DBE] transition duration-150 hover:bg-white/[0.05] hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-            >
-              Open executions
-              <ArrowRight size={13} />
-            </Link>
-          }
-        >
-          {overview.activity.recent.length ? (
-            <div className="space-y-3">
-              {overview.activity.recent.map((item: AgencyOverviewActivity) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => navigate(`/executions/${item.id}`)}
-                  className="group flex w-full cursor-pointer items-start gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] px-4 py-4 text-left transition duration-150 hover:-translate-y-[1px] hover:border-blue-500/20 hover:bg-white/[0.04] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                >
-                  <div className={clsx('mt-0.5 shrink-0', statusTone(item.status))}>
-                    {item.status === 'completed' ? <CheckCircle2 size={17} /> : item.status === 'running' ? <PlayCircle size={17} /> : <Activity size={17} />}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-semibold text-white">{item.agent_name}</span>
-                      {item.client_name && (
-                        <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-[11px] text-[#8B9DBE]">
-                          {item.client_name}
-                        </span>
-                      )}
-                      <span className={clsx('text-[11px] uppercase tracking-[0.14em]', statusTone(item.status))}>
-                        {item.status}
-                      </span>
-                    </div>
-                    <div className="mt-1 truncate text-sm text-[#8B9DBE]">{item.input_preview}</div>
-                  </div>
-                  <div className="shrink-0 text-xs text-[#4B5A73]">{relativeTime(item.started_at)}</div>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-white/[0.08] bg-white/[0.02] px-5 py-10 text-center">
-              <div className="text-base font-semibold text-white">No recent work yet.</div>
-              <div className="mt-2 text-sm text-[#8B9DBE]">Recent executions will appear here once your team starts running client work.</div>
-            </div>
-          )}
-        </SectionCard>
-
-        <SectionCard
-          title="Approvals"
-          subtitle="Human decisions waiting before work can safely continue."
-          className="col-span-12 xl:col-span-5"
-          action={
-            <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-xs text-[#8B9DBE]">
-              {overview.approvals.pending} pending
-            </span>
-          }
-        >
-          {overview.approvals.list.length ? (
-            <div className="space-y-3">
-              {overview.approvals.list.map((approval: AgencyOverviewApproval) => (
-                <button
-                  key={`${approval.type}-${approval.id}`}
-                  type="button"
-                  onClick={() => navigate('/approvals')}
-                  className="group flex w-full cursor-pointer items-start gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] px-4 py-4 text-left transition duration-150 hover:-translate-y-[1px] hover:border-blue-500/20 hover:bg-white/[0.04] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                >
-                  <div className="rounded-xl bg-blue-600/10 p-2">
-                    <ShieldAlert size={15} className="text-blue-400" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="truncate text-sm font-semibold text-white">{approval.title}</span>
-                      <span className={clsx('rounded-full border px-2 py-0.5 text-[11px] uppercase tracking-[0.12em]', approvalTone(approval.risk_level))}>
-                        {approval.risk_level}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs text-[#8B9DBE]">
-                      {approval.agent_name} · {relativeTime(approval.created_at)}
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-emerald-400/20 bg-emerald-500/[0.06] px-5 py-10 text-center">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-emerald-400/20 bg-emerald-500/10 text-emerald-300">
-                <CheckCircle2 size={22} />
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,1fr)]">
+          <div className="space-y-6">
+            <section className="glass-card overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-3">
+                <div className="section-title mb-0 border-none pb-0">NEEDS ATTENTION</div>
+                {overview.attention_count > 0 ? (
+                  <span className="rounded-md bg-red-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-red-400">
+                    {overview.attention_count}
+                  </span>
+                ) : null}
               </div>
-              <div className="mt-4 text-base font-semibold text-white">All clear</div>
-              <div className="mt-2 text-sm text-[#8B9DBE]">No pending approvals are blocking delivery right now.</div>
-            </div>
-          )}
-        </SectionCard>
+              {overview.needs_attention.length ? (
+                <div>
+                  {overview.needs_attention.map((item: AgencyOverviewAttentionItem) => (
+                    <button
+                      key={`${item.type}-${item.approval_id || item.execution_id || item.url}`}
+                      type="button"
+                      onClick={() => navigate(item.url)}
+                      className={clsx(
+                        'data-row w-full text-left',
+                        item.type === 'approval_request'
+                          ? 'data-row-red'
+                          : item.type === 'pending_review'
+                            ? 'data-row-amber'
+                            : 'data-row-indigo',
+                      )}
+                    >
+                      <span className={clsx('status-dot', item.urgency === 'critical' ? 'dot-red' : item.urgency === 'high' ? 'dot-amber' : item.type === 'pending_review' ? 'dot-amber' : 'dot-blue')} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-white">{item.title}</div>
+                        <div className="truncate text-xs text-[#8B9DBE]">{item.subtitle}</div>
+                      </div>
+                      <div className="font-mono text-[11px] text-[#4B5A73]">
+                        {item.age_minutes >= 60 ? `${Math.floor(item.age_minutes / 60)}h` : `${Math.max(item.age_minutes, 0)}m`}
+                      </div>
+                      <span className={clsx('badge font-mono uppercase', item.urgency === 'critical' ? 'badge-red' : item.urgency === 'high' ? 'badge-amber' : 'badge-indigo')}>
+                        {item.urgency}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="data-row cursor-default">
+                  <span className="status-dot dot-green" />
+                  <span className="text-sm text-[#8B9DBE]">All clear — nothing needs your attention</span>
+                </div>
+              )}
+            </section>
 
-        <CommandBar onRun={executeCommand} chips={chips} />
-      </div>
-    </motion.div>
+            <section className="glass-card overflow-hidden">
+              <div className="px-5 py-3">
+                <div className="section-title mb-0 border-none pb-0">RECENT</div>
+              </div>
+              {overview.activity.recent.length ? (
+                <div>
+                  {overview.activity.recent.slice(0, 8).map((item: AgencyOverviewActivity) => {
+                    const label = item.agent_name || (item as AgencyOverviewActivity & { workflow_name?: string }).workflow_name || 'Execution'
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => navigate(`/executions/${item.id}`)}
+                        className="data-row w-full text-left"
+                      >
+                        <span className={clsx('status-dot', item.status === 'completed' ? 'dot-green' : item.status === 'running' ? 'dot-blue dot-live' : item.status === 'pending_review' ? 'dot-amber' : 'dot-red')} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-semibold text-white">{label}</div>
+                          <div className="truncate text-xs text-[#8B9DBE]">
+                            {item.client_name || 'Internal'} · {item.input_preview}
+                          </div>
+                        </div>
+                        <div className="font-mono text-[11px] text-[#4B5A73]">{relativeTime(item.started_at)}</div>
+                        <StatusBadge status={item.status} />
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="data-row cursor-default">
+                  <span className="status-dot dot-muted" />
+                  <span className="text-sm text-[#8B9DBE]">No recent work yet.</span>
+                </div>
+              )}
+            </section>
+          </div>
+
+          <div className="flex min-h-0 flex-col gap-6">
+            <section className="glass-card overflow-hidden">
+              <div className="px-5 py-3">
+                <div className="section-title mb-0 border-none pb-0">TEAM</div>
+              </div>
+              <div>
+                {overview.agents.list.map((agent: AgencyOverviewAgent) => (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    onClick={() => navigate(`/agents?agent=${agent.id}`)}
+                    className="data-row w-full text-left"
+                  >
+                    <span className={clsx('status-dot', agent.current_status === 'working' ? 'dot-green dot-live' : agent.current_status === 'waiting_approval' ? 'dot-amber' : 'dot-muted')} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-white">{agent.persona_name || agent.name}</div>
+                      <div className="truncate text-xs text-[#8B9DBE]">{agent.role_slug || agent.role}</div>
+                    </div>
+                    <div className="text-right font-mono text-[11px] text-[#8B9DBE]">
+                      trust {(agent.trust_score ?? 50).toFixed(0)}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <div className="sticky bottom-4 z-10 pt-2">
+              <CommandBar onRun={executeCommand} chips={chips} />
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    </div>
   )
 }

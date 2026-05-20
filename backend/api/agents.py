@@ -14,7 +14,7 @@ import logging
 import re
 
 from database import get_db
-from database.models import Agent, AgentMemoryConfig, AgentContract, AgentRole, AgentTrustScore, AuditAction, Client, CustomTool, Organization
+from database.models import Agent, AgentMemoryConfig, AgentMemoryEntry, AgentContract, AgentRole, AgentTrustScore, AuditAction, Client, CustomTool, Organization
 from config import AVAILABLE_MODELS, AVAILABLE_TOOLS, settings
 from services import audit_log_service
 from services.agent_naming_service import agent_naming_service
@@ -183,6 +183,24 @@ class AgentMemoryConfigResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AgentPreferenceCreate(BaseModel):
+    preference: str = Field(..., min_length=5, max_length=500)
+
+
+class AgentPreferenceResponse(BaseModel):
+    id: str
+    agent_id: str
+    org_id: str
+    content_preview: Optional[str] = None
+    memory_type: str
+    importance_score: float
+    always_inject: bool
+    source: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class LongTaskStartRequest(BaseModel):
     task: str = Field(..., min_length=1)
     max_duration_hours: int = Field(default=4, ge=1, le=24)
@@ -252,7 +270,9 @@ async def _initialize_agent_identity(
         if existing_contract and existing_trust:
             return
 
-        allowed_tools: list = []
+        agent = await db.scalar(select(Agent).where(Agent.id == agent_id))
+        agent_tools = list(agent.tools or []) if agent else []
+        allowed_tools: list | None = None
         autonomy_level = "supervised"
         max_cost_cents = 100
 
@@ -261,8 +281,13 @@ async def _initialize_agent_identity(
                 select(AgentRole).where(AgentRole.slug == role_slug)
             )
             if role:
-                allowed_tools = role.default_tools or []
+                allowed_tools = list(dict.fromkeys([*(role.default_tools or []), *agent_tools]))
                 autonomy_level = role.default_autonomy_level or "supervised"
+        elif agent_tools:
+            allowed_tools = list(dict.fromkeys(agent_tools))
+
+        if allowed_tools is None:
+            allowed_tools = []
 
         if not existing_contract:
             contract = AgentContract(
@@ -339,7 +364,7 @@ async def create_agent(
             else:
                 raise
     payload["system_prompt"] = sanitize_text(payload["system_prompt"], max_length=50000)
-    payload["tools"] = list(dict.fromkeys([*(payload.get("tools") or []), "agent_communication"]))
+    payload["tools"] = list(dict.fromkeys(payload.get("tools") or []))
     agent = Agent(
         id=str(uuid4()),
         org_id=ctx.org.id,
@@ -470,6 +495,77 @@ async def update_agent_memory_config(
     return memory_config
 
 
+@router.get("/{agent_id}/preferences", response_model=List[AgentPreferenceResponse])
+async def list_agent_preferences(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await get_or_create_memory_config(agent_id, db, ctx.org.id)
+    result = await db.execute(
+        select(AgentMemoryEntry)
+        .where(
+            AgentMemoryEntry.agent_id == agent_id,
+            AgentMemoryEntry.org_id == ctx.org.id,
+            AgentMemoryEntry.always_inject == True,
+            AgentMemoryEntry.memory_type == "ceo_preference",
+        )
+        .order_by(AgentMemoryEntry.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/{agent_id}/preferences", response_model=AgentPreferenceResponse, status_code=201)
+async def create_agent_preference(
+    agent_id: str,
+    data: AgentPreferenceCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await get_or_create_memory_config(agent_id, db, ctx.org.id)
+    preference = AgentMemoryEntry(
+        id=str(uuid4()),
+        agent_id=agent_id,
+        org_id=ctx.org.id,
+        mem0_memory_id=f"local:{uuid4()}",
+        content_preview=sanitize_text(data.preference, max_length=500),
+        memory_type="ceo_preference",
+        importance_score=1.0,
+        always_inject=True,
+        source="manual",
+        tags=["ceo_preference", "manual"],
+    )
+    db.add(preference)
+    await db.commit()
+    await db.refresh(preference)
+    return preference
+
+
+@router.delete("/{agent_id}/preferences/{memory_id}", status_code=204)
+async def delete_agent_preference(
+    agent_id: str,
+    memory_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await get_or_create_memory_config(agent_id, db, ctx.org.id)
+    preference = await db.scalar(
+        select(AgentMemoryEntry).where(
+            AgentMemoryEntry.id == memory_id,
+            AgentMemoryEntry.agent_id == agent_id,
+            AgentMemoryEntry.org_id == ctx.org.id,
+            AgentMemoryEntry.always_inject == True,
+        )
+    )
+    if not preference:
+        raise HTTPException(status_code=404, detail="Preference not found")
+    await db.delete(preference)
+    await db.commit()
+    return None
+
+
 @router.get("/{agent_id}", response_model=AgentResponse)
 async def get_agent(agent_id: str, db: AsyncSession = Depends(get_db), ctx: OrgContext = Depends(get_org_context)):
     result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.org_id == ctx.org.id))
@@ -499,11 +595,16 @@ async def update_agent(
     if "system_prompt" in updates:
         updates["system_prompt"] = sanitize_text(updates["system_prompt"], max_length=50000)
     if "tools" in updates:
-        updates["tools"] = list(dict.fromkeys([*(updates.get("tools") or []), "agent_communication"]))
+        updates["tools"] = list(dict.fromkeys(updates.get("tools") or []))
     for field, value in updates.items():
         setattr(agent, field, value)
     agent.updated_at = datetime.utcnow()
     await db.commit()
+    if "tools" in updates:
+        contract = await db.scalar(select(AgentContract).where(AgentContract.agent_id == agent.id))
+        if contract:
+            contract.allowed_tools = list(agent.tools or [])
+            await db.commit()
     await db.refresh(agent)
     return agent
 

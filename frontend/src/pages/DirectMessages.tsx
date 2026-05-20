@@ -1,29 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { formatDistanceToNow, format, isToday, isYesterday, parseISO } from 'date-fns'
 import { clsx } from 'clsx'
-import {
-  AlertCircle,
-  CheckCircle2,
-  ChevronDown,
-  Clock,
-  MoreHorizontal,
-  Send,
-  X,
-  Zap,
-} from 'lucide-react'
+import { ChevronDown, Clock, MoreHorizontal, Send, X } from 'lucide-react'
 import { toast as sonnerToast } from 'sonner'
 import { agentsApi, messagesApi } from '../api/client'
 import { MentionTextarea } from '../components/ui/MentionTextarea'
-import { useAuth } from '../contexts/AuthContext'
 import { useWebSocket } from '../contexts/WebSocketContext'
 import { toast } from '../lib/toast'
 import type { Agent, ConversationSummary, DirectMessage } from '../types'
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function relativeTime(iso: string | null | undefined): string {
   if (!iso) return ''
@@ -49,11 +35,16 @@ function dayLabel(iso: string): string {
 }
 
 function dayKey(iso: string): string {
-  try { return iso.slice(0, 10) } catch { return '' }
+  try {
+    return iso.slice(0, 10)
+  } catch {
+    return ''
+  }
 }
 
 function avatarInitial(name: string | null | undefined): string {
-  return (name || '?')[0].toUpperCase()
+  const safeName = (name || '').trim()
+  return safeName ? safeName.charAt(0).toUpperCase() : '?'
 }
 
 const FALLBACK_ROLE_COLORS = ['#A78BFA', '#60A5FA', '#34D399', '#F59E0B', '#F87171', '#38BDF8']
@@ -61,47 +52,6 @@ const FALLBACK_ROLE_COLORS = ['#A78BFA', '#60A5FA', '#34D399', '#F59E0B', '#F871
 function fallbackRoleColor(seed: string) {
   const index = [...seed].reduce((acc, char) => acc + char.charCodeAt(0), 0) % FALLBACK_ROLE_COLORS.length
   return FALLBACK_ROLE_COLORS[index]
-}
-
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
-
-function AgentAvatar({
-  name,
-  color,
-  size = 40,
-  isOnline = false,
-  className,
-}: {
-  name: string | null | undefined
-  color: string
-  size?: number
-  isOnline?: boolean
-  className?: string
-}) {
-  return (
-    <div className={clsx('relative shrink-0', className)} style={{ width: size, height: size }}>
-      <div
-        className="flex items-center justify-center rounded-full font-semibold text-white"
-        style={{
-          width: size,
-          height: size,
-          background: `linear-gradient(135deg, ${color}cc, ${color}66)`,
-          border: `1.5px solid ${color}44`,
-          fontSize: size * 0.38,
-        }}
-      >
-        {avatarInitial(name)}
-      </div>
-      {isOnline && (
-        <span
-          className="absolute bottom-0 right-0 rounded-full border-2 border-[#0a0f1a] bg-emerald-400"
-          style={{ width: size * 0.28, height: size * 0.28 }}
-        />
-      )}
-    </div>
-  )
 }
 
 function ScheduledReplyBubble({
@@ -149,17 +99,20 @@ function SchedulePopover({
     { label: '1 hour', minutes: 60 },
     { label: '2 hours', minutes: 120 },
     { label: '4 hours', minutes: 240 },
-    { label: 'Tomorrow morning', minutes: 60 * 16 }, // ~16h
+    { label: 'Tomorrow morning', minutes: 60 * 16 },
   ]
   return (
-    <div className="absolute bottom-full mb-2 left-0 z-30 w-56 rounded-2xl border border-white/10 bg-[#0f1520]/95 p-2 shadow-2xl backdrop-blur-xl">
+    <div className="absolute bottom-full mb-2 left-0 z-30 w-56 rounded-2xl border border-white/[0.08] bg-[#0f1520]/95 p-2 shadow-2xl backdrop-blur-xl">
       <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-widest text-white/30">
         Ask for follow-up in…
       </div>
       {options.map(opt => (
         <button
           key={opt.minutes}
-          onClick={() => { onSelect(opt.minutes); onClose() }}
+          onClick={() => {
+            onSelect(opt.minutes)
+            onClose()
+          }}
           className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-white/80 transition hover:bg-white/5 hover:text-white"
         >
           <Clock size={13} className="text-amber-400" />
@@ -176,14 +129,9 @@ function SchedulePopover({
   )
 }
 
-// ---------------------------------------------------------------------------
-// Main component
-// ---------------------------------------------------------------------------
-
 export function DirectMessages() {
   const { agentId: paramAgentId } = useParams<{ agentId?: string }>()
   const navigate = useNavigate()
-  const auth = useAuth()
   const { lastEvent } = useWebSocket()
   const queryClient = useQueryClient()
 
@@ -192,7 +140,6 @@ export function DirectMessages() {
   const [scheduleMins, setScheduleMins] = useState<number | null>(null)
   const [showSchedule, setShowSchedule] = useState(false)
   const [showRetention, setShowRetention] = useState(false)
-  const [showTeamConvs, setShowTeamConvs] = useState(false)
   const [optimisticMessages, setOptimisticMessages] = useState<DirectMessage[]>([])
   const [liveAgentReply, setLiveAgentReply] = useState<DirectMessage | null>(null)
   const [newMsgBanner, setNewMsgBanner] = useState(false)
@@ -226,8 +173,6 @@ export function DirectMessages() {
     })
   }, [])
 
-  // ── Queries ──────────────────────────────────────────────────────────────
-
   const convsQuery = useQuery({
     queryKey: ['dm-conversations'],
     queryFn: messagesApi.conversations,
@@ -248,19 +193,11 @@ export function DirectMessages() {
     staleTime: 0,
   })
 
-  const teamConvsQuery = useQuery({
-    queryKey: ['team-conversations'],
-    queryFn: () => messagesApi.teamConversations(20),
-    enabled: showTeamConvs,
-    staleTime: 60_000,
-  })
-
-  // ── Sync URL param → activeAgentId ────────────────────────────────────
   useEffect(() => {
     if (paramAgentId && paramAgentId !== activeAgentId) {
       setActiveAgentId(paramAgentId)
     }
-  }, [paramAgentId]) // eslint-disable-line
+  }, [paramAgentId, activeAgentId])
 
   const fallbackConversations: ConversationSummary[] = (fallbackAgentsQuery.data ?? [])
     .filter(agent => agent.is_active)
@@ -282,7 +219,6 @@ export function DirectMessages() {
     ? (convsQuery.data?.conversations ?? [])
     : fallbackConversations
 
-  // Auto-select first conversation if none chosen
   useEffect(() => {
     if (!activeAgentId && conversations.length) {
       const first = conversations[0]
@@ -291,7 +227,6 @@ export function DirectMessages() {
     }
   }, [conversations, activeAgentId, navigate])
 
-  // Clear optimistic messages when real thread loads
   useEffect(() => {
     if (threadQuery.data) setOptimisticMessages([])
   }, [threadQuery.data])
@@ -300,7 +235,6 @@ export function DirectMessages() {
     setLiveAgentReply(null)
   }, [activeAgentId])
 
-  // ── Scroll tracking ───────────────────────────────────────────────────
   const handleFeedScroll = useCallback(() => {
     const el = feedRef.current
     if (!el) return
@@ -315,16 +249,14 @@ export function DirectMessages() {
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
   }, [])
 
-  // Auto-scroll on new messages if near bottom
   useEffect(() => {
     if (isNearBottomRef.current) {
       scrollToBottom()
     } else {
       setNewMsgBanner(true)
     }
-  }, [threadQuery.data?.messages?.length, optimisticMessages.length, scrollToBottom])
+  }, [threadQuery.data?.messages?.length, optimisticMessages.length, liveAgentReply?.content, scrollToBottom])
 
-  // ── WebSocket handler ────────────────────────────────────────────────
   useEffect(() => {
     if (!lastEvent?.event) return
     const ev = lastEvent as {
@@ -384,7 +316,6 @@ export function DirectMessages() {
 
     if (ev.event !== 'new_direct_message') return
 
-    // Invalidate conversations list always
     void queryClient.invalidateQueries({ queryKey: ['dm-conversations'] })
 
     if (ev.thread_agent_id === activeAgentId) {
@@ -417,7 +348,6 @@ export function DirectMessages() {
       }
       void queryClient.invalidateQueries({ queryKey: ['dm-thread', activeAgentId] })
     } else if (ev.sender_type === 'agent') {
-      // Different thread — show toast with action
       const agentName = ev.persona_name || 'Your agent'
       sonnerToast(`${agentName} sent you a message`, {
         action: {
@@ -433,8 +363,6 @@ export function DirectMessages() {
     }
   }, [lastEvent, activeAgentId, queryClient, navigate, appendThreadMessage, dropMatchingOptimisticMessage, threadQuery.data?.agent?.name, threadQuery.data?.agent?.persona_name])
 
-  // ── Mutations ─────────────────────────────────────────────────────────
-
   const sendMutation = useMutation({
     mutationFn: (content: string) =>
       messagesApi.send({
@@ -442,8 +370,7 @@ export function DirectMessages() {
         content,
         schedule_reply_in_minutes: scheduleMins ?? undefined,
       }),
-    onMutate: (content) => {
-      // Optimistic message
+    onMutate: content => {
       const optimistic: DirectMessage = {
         id: `optimistic-${Date.now()}`,
         content,
@@ -489,14 +416,11 @@ export function DirectMessages() {
     onSuccess: () => toast.success('Retention policy updated'),
   })
 
-  // ── Derived state ─────────────────────────────────────────────────────
-
   const activeConv = conversations.find(c => c.agent_id === activeAgentId)
   const threadAgent = threadQuery.data?.agent
   const rawMessages = threadQuery.data?.messages ?? []
   const allMessages = [...rawMessages, ...optimisticMessages, ...(liveAgentReply ? [liveAgentReply] : [])]
 
-  // Group messages by day
   type DayGroup = { key: string; label: string; messages: DirectMessage[] }
   const dayGroups: DayGroup[] = []
   for (const msg of allMessages) {
@@ -510,18 +434,9 @@ export function DirectMessages() {
     }
   }
 
-  // ── Handlers ──────────────────────────────────────────────────────────
-
   const handleSend = () => {
     if (!compose.trim() || !activeAgentId) return
     sendMutation.mutate(compose.trim())
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-      e.preventDefault()
-      handleSend()
-    }
   }
 
   const handleSelectAgent = (agentId: string) => {
@@ -530,149 +445,90 @@ export function DirectMessages() {
     navigate(`/messages/${agentId}`)
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────
-
   return (
-    <div className="flex h-full overflow-hidden bg-[#080d16]">
-
-      {/* ── LEFT SIDEBAR ─────────────────────────────────────────────── */}
-      <aside className="flex w-72 shrink-0 flex-col border-r border-white/[0.06] bg-[#0a0f1a]">
-
-        {/* Sidebar header */}
-        <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-4">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-white">Messages</h2>
-            {(convsQuery.data?.total_unread ?? 0) > 0 && (
-              <span className="rounded-full bg-accent-cyan px-1.5 py-0.5 text-[10px] font-bold text-base-100 shadow-glow-cyan">
-                {convsQuery.data!.total_unread}
-              </span>
-            )}
-          </div>
+    <div className="flex h-full overflow-hidden bg-transparent">
+      <aside
+        className="flex w-[240px] shrink-0 flex-col"
+        style={{
+          background: 'rgba(5,9,20,0.88)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+          borderRight: '1px solid rgba(255,255,255,0.07)',
+        }}
+      >
+        <div className="px-3 pb-1 pt-4 font-mono text-[9px] font-semibold uppercase tracking-[0.22em]" style={{ color: 'rgba(255,255,255,0.18)' }}>
+          Agents
         </div>
 
-        {/* Conversation list */}
-        <div className="min-h-0 flex-1 overflow-y-auto py-2">
-          {convsQuery.isError && (
+        <div className="min-h-0 flex-1 overflow-y-auto py-1">
+          {convsQuery.isError ? (
             <div className="mx-3 mb-2 rounded-2xl border border-amber-400/15 bg-amber-500/10 px-3 py-2 text-xs text-amber-200/80">
-              Conversation summaries failed to load. Showing your active agents so you can still message them.
+              Showing active agents while thread summaries reconnect.
             </div>
-          )}
-          {conversations.length === 0 && !convsQuery.isLoading && (
+          ) : null}
+          {conversations.length === 0 && !convsQuery.isLoading ? (
             <div className="px-4 py-8 text-center text-sm text-white/30">
               No agents yet. Hire your first teammate to start messaging.
             </div>
-          )}
+          ) : null}
           {conversations.map(conv => (
             <button
               key={conv.agent_id}
               onClick={() => handleSelectAgent(conv.agent_id)}
               className={clsx(
-                'flex w-full items-start gap-3 px-3 py-3 text-left transition-all',
+                'data-row relative min-h-[44px] w-full rounded-xl px-3 py-2.5 text-left transition-all',
                 activeAgentId === conv.agent_id
-                  ? 'bg-accent-purple/10 border-l-2 border-l-accent-purple'
-                  : 'border-l-2 border-l-transparent hover:bg-white/[0.03]',
+                  ? 'bg-indigo-500/[0.08] border-l-2 border-indigo-500'
+                  : 'hover:bg-white/[0.04]',
               )}
             >
-              <AgentAvatar
-                name={conv.persona_name || conv.agent_name}
-                color={conv.role_color}
-                size={40}
-                isOnline={conv.is_online}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-1">
-                  <span className="truncate text-sm font-medium text-white">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-[10px] font-bold text-white"
+                  style={{
+                    background: `linear-gradient(135deg, ${conv.role_color}cc, ${conv.role_color}88)`,
+                  }}
+                >
+                  {avatarInitial(conv.persona_name || conv.agent_name)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold text-white">
                     {conv.persona_name || conv.agent_name}
-                  </span>
-                  <span className="shrink-0 text-[10px] text-white/30">
-                    {relativeTime(conv.last_message_at)}
-                  </span>
+                  </div>
+                  <div className="truncate text-xs text-[#8B9DBE]">
+                    {conv.role_slug || conv.current_status || 'Agent'}
+                  </div>
                 </div>
-                <div className="flex items-center justify-between gap-1 mt-0.5">
-                  <p className="truncate text-xs text-white/40 leading-snug">
-                    {conv.last_message
-                      ? (conv.last_sender_type === 'ceo' ? 'You: ' : '') + conv.last_message
-                      : <span className="italic">No messages yet</span>}
-                  </p>
-                  {conv.unread_count > 0 && (
-                    <span className="ml-1 shrink-0 rounded-full bg-accent-red px-1.5 py-0.5 text-[10px] font-bold text-white">
-                      {conv.unread_count}
-                    </span>
-                  )}
-                </div>
+                {conv.unread_count > 0 ? <span className="h-2 w-2 shrink-0 rounded-full bg-indigo-400" /> : null}
               </div>
             </button>
           ))}
         </div>
-
-        {/* Team conversations toggle */}
-        <div className="border-t border-white/[0.06] px-3 py-2">
-          <button
-            onClick={() => setShowTeamConvs(v => !v)}
-            className="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-xs text-white/40 transition hover:bg-white/[0.03] hover:text-white/70"
-          >
-            <Zap size={12} />
-            Team conversations
-            <ChevronDown size={12} className={clsx('ml-auto transition', showTeamConvs && 'rotate-180')} />
-          </button>
-          {showTeamConvs && (
-            <div className="mt-1 space-y-1">
-              {teamConvsQuery.data?.conversations?.length === 0 && (
-                <p className="px-2 py-2 text-xs text-white/25 italic">No team messages in last 24h</p>
-              )}
-              {teamConvsQuery.data?.conversations?.map((tc, i) => (
-                <div key={i} className="rounded-xl bg-white/[0.02] px-3 py-2 text-xs text-white/50">
-                  <span className="font-medium text-white/70">
-                    {tc.from_agent.persona_name || tc.from_agent.name}
-                  </span>
-                  {' → '}
-                  <span className="font-medium text-white/70">
-                    {tc.to_agent.persona_name || tc.to_agent.name}
-                  </span>
-                  <p className="mt-0.5 truncate text-white/35">{tc.content_preview}</p>
-                  <p className="mt-0.5 text-[10px] text-white/20">{relativeTime(tc.created_at)}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
       </aside>
 
-      {/* ── RIGHT PANEL ──────────────────────────────────────────────────── */}
       {activeAgentId && (activeConv || threadAgent) ? (
         <div className="flex min-w-0 flex-1 flex-col">
-
-          {/* Thread header */}
-          <div className="flex items-center gap-4 border-b border-white/[0.06] bg-[#0a0f1a]/80 px-6 py-4 backdrop-blur-sm">
-            <AgentAvatar
-              name={threadAgent?.persona_name || activeConv?.persona_name || threadAgent?.name || activeConv?.agent_name}
-              color={threadAgent?.role_color || activeConv?.role_color || '#A78BFA'}
-              size={48}
-              isOnline={activeConv?.is_online}
-            />
+          <div className="flex items-center gap-4 border-b border-white/[0.06] bg-[rgba(8,13,26,0.82)] px-6 py-4 backdrop-blur-sm">
+            <div
+              className="flex h-10 w-10 items-center justify-center rounded-xl text-sm font-bold text-white"
+              style={{
+                background: `linear-gradient(135deg, ${(threadAgent as any)?.role_color || activeConv?.role_color || '#A78BFA'}cc, ${(threadAgent as any)?.role_color || activeConv?.role_color || '#A78BFA'}88)`,
+              }}
+            >
+              {avatarInitial(threadAgent?.persona_name || activeConv?.persona_name || threadAgent?.name || activeConv?.agent_name)}
+            </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-semibold text-white">
                   {threadAgent?.persona_name || activeConv?.persona_name || threadAgent?.name || activeConv?.agent_name}
                 </h2>
-                {activeConv?.is_online && (
-                  <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
-                    Working
-                  </span>
-                )}
+                <span className={clsx('status-dot', activeConv?.is_online ? 'dot-live dot-green' : 'dot-muted')} />
               </div>
-              {(threadAgent?.current_task_summary || activeConv?.current_status) && (
-                <p className="mt-0.5 truncate text-xs text-white/40">
-                  {threadAgent?.current_task_summary
-                    ? `Currently: ${threadAgent.current_task_summary}`
-                    : activeConv?.current_status !== 'idle'
-                    ? `Status: ${activeConv?.current_status}`
-                    : null}
-                </p>
-              )}
+              <p className="mt-0.5 truncate text-xs text-[#8B9DBE]">
+                {(threadAgent as any)?.role || activeConv?.role_slug || activeConv?.current_status || 'Agent'}
+              </p>
             </div>
 
-            {/* Three-dot menu */}
             <div className="relative">
               <button
                 onClick={() => setShowRetention(v => !v)}
@@ -680,8 +536,8 @@ export function DirectMessages() {
               >
                 <MoreHorizontal size={16} />
               </button>
-              {showRetention && (
-                <div className="absolute right-0 top-10 z-30 w-52 rounded-2xl border border-white/10 bg-[#0f1520]/95 p-3 shadow-2xl backdrop-blur-xl">
+              {showRetention ? (
+                <div className="absolute right-0 top-10 z-30 w-52 rounded-2xl border border-white/[0.08] bg-[#0f1520]/95 p-3 shadow-2xl backdrop-blur-xl">
                   <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-white/30">
                     Message history
                   </p>
@@ -703,40 +559,38 @@ export function DirectMessages() {
                     </button>
                   ))}
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
 
-          {/* Message feed */}
           <div
             ref={feedRef}
             onScroll={handleFeedScroll}
             className="relative min-h-0 flex-1 space-y-1 overflow-y-auto px-4 py-4"
           >
-            {threadQuery.isLoading && (
+            {threadQuery.isLoading ? (
               <div className="flex h-full items-center justify-center text-sm text-white/30">
                 Loading messages…
               </div>
-            )}
+            ) : null}
 
-            {!threadQuery.isLoading && allMessages.length === 0 && (
+            {!threadQuery.isLoading && allMessages.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <div
-                  className="flex h-16 w-16 items-center justify-center rounded-full text-2xl"
-                  style={{ background: `${activeConv?.role_color ?? '#A78BFA'}22` }}
+                  className="flex h-16 w-16 items-center justify-center rounded-2xl text-2xl text-white"
+                  style={{ background: `linear-gradient(135deg, ${(activeConv?.role_color ?? '#A78BFA')}55, ${(activeConv?.role_color ?? '#A78BFA')}22)` }}
                 >
                   {avatarInitial(activeConv?.persona_name || activeConv?.agent_name)}
                 </div>
                 <p className="text-sm font-medium text-white/60">
                   Say hi to {activeConv?.persona_name || activeConv?.agent_name}
                 </p>
-                <p className="text-xs text-white/30">They'll reply within a few seconds.</p>
+                <p className="text-xs text-white/30">They&apos;ll reply within a few seconds.</p>
               </div>
-            )}
+            ) : null}
 
             {dayGroups.map(group => (
               <div key={group.key}>
-                {/* Day separator */}
                 <div className="my-4 flex items-center gap-3">
                   <div className="h-px flex-1 bg-white/[0.06]" />
                   <span className="text-[10px] font-medium uppercase tracking-widest text-white/25">
@@ -749,59 +603,64 @@ export function DirectMessages() {
                   const isOptimistic = msg.id.startsWith('optimistic-')
                   const isCeo = msg.sender_type === 'ceo'
                   const agentForMsg = activeConv ?? null
-
-                  // Check if previous message in day group was same sender (stack)
                   const prevMsg = group.messages[idx - 1]
-                  const stacked = prevMsg && prevMsg.sender_type === msg.sender_type
+                  const stacked = Boolean(prevMsg && prevMsg.sender_type === msg.sender_type)
 
                   if (isCeo) {
                     return (
                       <div key={msg.id} className={clsx('flex flex-col items-end', stacked ? 'mt-0.5' : 'mt-3')}>
                         <div
-                          className={clsx(
-                            'max-w-[68%] rounded-2xl rounded-tr-md px-4 py-3 text-sm leading-relaxed text-white',
-                            isOptimistic
-                              ? 'bg-accent-purple/50'
-                              : 'bg-accent-purple/80',
-                          )}
+                          className={clsx('max-w-[72%] rounded-[18px] rounded-br-[4px] px-4 py-3 text-sm leading-relaxed text-white', isOptimistic && 'opacity-80')}
+                          style={{
+                            background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                            boxShadow: '0 2px 8px rgba(99,102,241,0.35), inset 0 1px 0 rgba(255,255,255,0.15)',
+                          }}
                         >
                           {msg.content}
                         </div>
-                        {!stacked && (
+                        {!stacked ? (
                           <span className="mt-1 text-[10px] text-white/25">
                             You · {msg.created_at ? format(parseISO(msg.created_at), 'h:mm a') : ''}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     )
                   }
 
-                  // Agent message (left aligned)
                   return (
                     <div key={msg.id} className={clsx('flex items-end gap-2.5', stacked ? 'mt-0.5' : 'mt-3')}>
                       {!stacked ? (
-                        <AgentAvatar
-                          name={agentForMsg?.persona_name || agentForMsg?.agent_name}
-                          color={agentForMsg?.role_color ?? '#A78BFA'}
-                          size={32}
-                        />
+                        <div
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-[10px] font-bold text-white"
+                          style={{
+                            background: `linear-gradient(135deg, ${(agentForMsg?.role_color ?? '#A78BFA')}cc, ${(agentForMsg?.role_color ?? '#A78BFA')}88)`,
+                          }}
+                        >
+                          {avatarInitial(agentForMsg?.persona_name || agentForMsg?.agent_name)}
+                        </div>
                       ) : (
                         <div className="w-8 shrink-0" />
                       )}
-                      <div className="min-w-0 max-w-[68%]">
-                        <div className="rounded-2xl rounded-tl-md border border-white/[0.07] bg-white/[0.05] px-4 py-3 text-sm leading-relaxed text-white/90">
-                          {msg.content || (
-                            <span className="inline-flex items-center gap-2 text-white/55">
-                              <span className="h-2 w-2 rounded-full bg-accent-cyan animate-pulse" />
-                              {msg.sender_name} is typing…
-                            </span>
+                      <div className="min-w-0 max-w-[80%]">
+                        <div className="glass-card rounded-[18px] rounded-bl-[4px] px-4 py-3 text-sm leading-relaxed text-white/90">
+                          {msg.content ? (
+                            msg.content
+                          ) : (
+                            <div className="flex items-center gap-2 text-white/55">
+                              <div className="flex gap-1">
+                                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-300" />
+                                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-300 [animation-delay:150ms]" />
+                                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-300 [animation-delay:300ms]" />
+                              </div>
+                              <span className="text-xs text-[#8B9DBE]">{msg.sender_name} is thinking...</span>
+                            </div>
                           )}
                         </div>
-                        {!stacked && (
+                        {!stacked ? (
                           <span className="mt-1 block text-[10px] text-white/25">
                             {msg.sender_name} · {msg.created_at ? format(parseISO(msg.created_at), 'h:mm a') : ''}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   )
@@ -809,7 +668,6 @@ export function DirectMessages() {
               </div>
             ))}
 
-            {/* Scheduled reply indicators */}
             {rawMessages.filter(m => m.scheduled_reply_at && m.scheduled_reply_job_id).map(msg => (
               <ScheduledReplyBubble
                 key={`scheduled-${msg.id}`}
@@ -819,122 +677,102 @@ export function DirectMessages() {
             ))}
           </div>
 
-          {/* New message banner */}
-          {newMsgBanner && (
+          {newMsgBanner ? (
             <button
-              onClick={() => { scrollToBottom(); setNewMsgBanner(false) }}
-              className="absolute bottom-28 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-full border border-white/10 bg-[#0f1520]/95 px-4 py-2 text-xs font-medium text-white shadow-2xl backdrop-blur-xl transition hover:bg-white/10"
+              onClick={() => {
+                scrollToBottom()
+                setNewMsgBanner(false)
+              }}
+              className="absolute bottom-28 left-1/2 -translate-x-1/2 rounded-full border border-white/[0.08] bg-[#0f1520]/95 px-4 py-2 text-xs font-medium text-white shadow-2xl backdrop-blur-xl transition hover:bg-white/10"
             >
               New message ↓
             </button>
-          )}
+          ) : null}
 
-          {/* Input bar */}
-          <div className="border-t border-white/[0.06] bg-[#0a0f1a]/80 px-4 py-4 backdrop-blur-sm">
-            <div className="relative flex gap-3">
-              <AgentAvatar
-                name="You"
-                color="#6C63FF"
-                size={32}
-                className="mt-1"
+          <div className="border-t border-white/[0.06] bg-[rgba(8,13,26,0.82)] px-4 py-4 backdrop-blur-sm">
+            <div className="relative">
+              <MentionTextarea
+                value={compose}
+                onChange={setCompose}
+                agents={conversations.map(c => ({
+                  id: c.agent_id,
+                  name: c.agent_name,
+                  persona_name: c.persona_name,
+                  role: c.role_slug ?? '',
+                  role_slug: c.role_slug,
+                } as Agent))}
+                placeholder={`Message ${activeConv?.persona_name || activeConv?.agent_name || 'agent'}…`}
+                rows={3}
+                minHeightClassName="min-h-[80px] max-h-[160px]"
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    handleSend()
+                  }
+                }}
+                className="min-h-[80px] max-h-[160px] rounded-2xl border-white/[0.08] bg-white/[0.04] !py-3.5 text-sm placeholder:text-white/25 focus:border-indigo-500/30"
               />
-              <div className="relative min-w-0 flex-1">
-                <MentionTextarea
-                  value={compose}
-                  onChange={setCompose}
-                  agents={conversations.map(c => ({
-                    id: c.agent_id,
-                    name: c.agent_name,
-                    persona_name: c.persona_name,
-                    role: c.role_slug ?? '',
-                    role_slug: c.role_slug,
-                  } as Agent))}
-                  placeholder={`Message ${activeConv?.persona_name || activeConv?.agent_name || 'agent'}… (⌘↵ to send)`}
-                  rows={2}
-                  minHeightClassName="min-h-[52px]"
-                  onKeyDown={handleKeyDown}
-                  className="rounded-2xl border-white/[0.08] bg-white/[0.04] !py-3.5 text-sm placeholder:text-white/25 focus:border-accent-purple/30"
-                />
 
-                {/* Schedule reply button */}
-                <div className="relative mt-2 flex items-center justify-between">
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <div className="relative flex items-center gap-3 text-[11px] text-white/30">
+                  <span>Enter to send · Shift+Enter for newline</span>
                   <div className="relative">
                     <button
                       onClick={() => setShowSchedule(v => !v)}
-                      className={clsx(
-                        'flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs transition',
-                        scheduleMins
-                          ? 'bg-amber-500/20 text-amber-300'
-                          : 'text-white/30 hover:bg-white/[0.04] hover:text-white/60',
-                      )}
+                      className="btn-ghost px-2 py-1 text-xs"
                     >
-                      <Clock size={11} />
-                      {scheduleMins
-                        ? `Follow-up in ${scheduleMins < 60 ? scheduleMins + 'm' : scheduleMins / 60 + 'h'}`
-                        : 'Ask for follow-up…'}
-                      {scheduleMins && (
-                        <button
-                          onClick={e => { e.stopPropagation(); setScheduleMins(null) }}
-                          className="ml-1 rounded-full text-amber-400/60 hover:text-amber-200"
-                        >
-                          <X size={11} />
-                        </button>
-                      )}
+                      Scheduled reply
                     </button>
-                    {showSchedule && (
+                    {showSchedule ? (
                       <SchedulePopover
                         onSelect={setScheduleMins}
                         onClose={() => setShowSchedule(false)}
                       />
-                    )}
+                    ) : null}
                   </div>
-                  <p className="text-[10px] text-white/20">Use @ to mention agents</p>
+                  {scheduleMins ? (
+                    <button
+                      onClick={() => setScheduleMins(null)}
+                      className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-1 text-[10px] text-amber-300"
+                    >
+                      <Clock size={10} />
+                      {scheduleMins < 60 ? `${scheduleMins}m` : `${scheduleMins / 60}h`}
+                      <X size={10} />
+                    </button>
+                  ) : null}
                 </div>
-              </div>
 
-              <button
-                onClick={handleSend}
-                disabled={!compose.trim() || sendMutation.isPending}
-                className={clsx(
-                  'mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition',
-                  compose.trim()
-                    ? 'bg-accent-purple text-white shadow-glow-purple hover:bg-accent-purple/80'
-                    : 'bg-white/[0.04] text-white/20 cursor-not-allowed',
-                )}
-              >
-                <Send size={15} />
-              </button>
+                <button
+                  onClick={handleSend}
+                  disabled={!compose.trim() || sendMutation.isPending}
+                  className={clsx(
+                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition',
+                    compose.trim()
+                      ? 'bg-gradient-to-br from-indigo-500 to-indigo-700 text-white shadow-btn-primary'
+                      : 'cursor-not-allowed bg-white/[0.04] text-white/20',
+                  )}
+                >
+                  <Send size={15} />
+                </button>
+              </div>
             </div>
           </div>
         </div>
       ) : (
-        /* Empty state */
         <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
           {convsQuery.isLoading ? (
             <p className="text-sm text-white/30">Loading…</p>
           ) : (
-            <>
-              <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-8">
-                <p className="text-lg font-semibold text-white/60">
-                  {conversations.length > 0 ? 'Pick a teammate to start a direct conversation.' : 'Your team is quiet right now.'}
-                </p>
-                <p className="mt-1 text-sm text-white/30">
-                  {conversations.length > 0
-                    ? 'Direct Messages is separate from Company Chat. Choose any agent on the left and you’ll get a real DM thread with a reply box.'
-                    : 'Send a message or run a workflow to get things going.'}
-                </p>
-                <div className="mt-4 flex gap-3 justify-center">
-                  {conversations[0] && (
-                    <button
-                      onClick={() => handleSelectAgent(conversations[0].agent_id)}
-                      className="rounded-xl bg-accent-purple/20 px-4 py-2 text-sm font-medium text-accent-purple transition hover:bg-accent-purple/30"
-                    >
-                      Message {conversations[0].persona_name || conversations[0].agent_name}
-                    </button>
-                  )}
-                </div>
-              </div>
-            </>
+            <div className="rounded-2xl border border-white/[0.06] border-dashed bg-white/[0.02] p-8">
+              <p className="text-lg font-semibold text-white/60">
+                {conversations.length > 0 ? 'Pick a teammate to start a direct conversation.' : 'Your team is quiet right now.'}
+              </p>
+              <p className="mt-1 text-sm text-white/30">
+                {conversations.length > 0
+                  ? 'Choose any agent on the left and you’ll get a real DM thread with a reply box.'
+                  : 'Send a message or run a workflow to get things going.'}
+              </p>
+            </div>
           )}
         </div>
       )}

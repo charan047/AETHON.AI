@@ -66,6 +66,56 @@ async def test_workflow_version_created_on_update(authed_client, test_workflow):
 
 
 @pytest.mark.asyncio
+async def test_workflow_update_persists_requires_review(authed_client, db, test_workflow):
+    response = await authed_client.put(
+        f"/api/workflows/{test_workflow.id}",
+        json={"requires_review": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requires_review"] is True
+
+    refreshed = await db.scalar(select(Workflow).where(Workflow.id == test_workflow.id))
+    assert refreshed is not None
+    assert refreshed.requires_review is True
+
+
+@pytest.mark.asyncio
+async def test_workflow_update_persists_input_variables(authed_client, db, test_workflow):
+    variables = [
+        {
+            "name": "client_name",
+            "label": "Client Name",
+            "type": "text",
+            "required": True,
+            "default": "",
+        },
+        {
+            "name": "tone",
+            "label": "Tone",
+            "type": "select",
+            "options": ["formal", "casual"],
+            "required": False,
+            "default": "casual",
+        },
+    ]
+
+    response = await authed_client.put(
+        f"/api/workflows/{test_workflow.id}",
+        json={"input_variables": variables},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["input_variables"] == variables
+
+    refreshed = await db.scalar(select(Workflow).where(Workflow.id == test_workflow.id))
+    assert refreshed is not None
+    assert refreshed.input_variables == variables
+
+
+@pytest.mark.asyncio
 async def test_workflow_rollback_restores_previous_state(authed_client, test_workflow):
     create_response = await authed_client.post(
         "/api/workflows",

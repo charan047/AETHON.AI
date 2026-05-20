@@ -32,6 +32,8 @@ class IntegrationResponse(BaseModel):
     integration_type: str
     name: str
     connected_account: str | None = None
+    needs_reauth: bool = False
+    reauth_reason: str | None = None
     is_active: bool
     last_tested_at: datetime | None
     last_test_result: str | None
@@ -67,6 +69,7 @@ _GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/drive.file",
 ]
 _SLACK_SCOPES = ["chat:write", "channels:read", "im:read", "im:write"]
 
@@ -74,6 +77,8 @@ _SLACK_SCOPES = ["chat:write", "channels:read", "im:read", "im:write"]
 def _safe_response(integration: UserIntegration) -> IntegrationResponse:
     default_repo = None
     connected_account = None
+    needs_reauth = False
+    reauth_reason = None
     if integration.integration_type == IntegrationType.github:
         try:
             default_repo = decrypt_config(integration.config).get("default_repo")
@@ -83,6 +88,15 @@ def _safe_response(integration: UserIntegration) -> IntegrationResponse:
         try:
             config = decrypt_config(integration.config)
             connected_account = config.get("email") or config.get("workspace") or config.get("workspace_url")
+            if integration.integration_type == IntegrationType.gmail:
+                granted_scopes = config.get("granted_scopes")
+                if granted_scopes is None:
+                    granted_scopes = config.get("scopes")
+                if isinstance(granted_scopes, str):
+                    granted_scopes = granted_scopes.split()
+                if not granted_scopes or "https://www.googleapis.com/auth/drive.file" not in granted_scopes:
+                    needs_reauth = True
+                    reauth_reason = "Google Docs delivery requires updated permissions"
         except Exception:
             connected_account = None
     return IntegrationResponse(
@@ -90,6 +104,8 @@ def _safe_response(integration: UserIntegration) -> IntegrationResponse:
         integration_type=integration.integration_type.value,
         name=integration.name,
         connected_account=connected_account,
+        needs_reauth=needs_reauth,
+        reauth_reason=reauth_reason,
         is_active=integration.is_active,
         last_tested_at=integration.last_tested_at,
         last_test_result=integration.last_test_result,
@@ -402,6 +418,7 @@ async def refresh_gmail_oauth_tokens(
         config["refresh_token"] = payload["refresh_token"]
     if payload.get("scope"):
         config["scopes"] = payload["scope"].split()
+        config["granted_scopes"] = payload["scope"]
     config["token_expires_at"] = _oauth_expiry_iso(payload.get("expires_in"))
     integration.config = encrypt_config(config)
     integration.last_tested_at = datetime.now(timezone.utc)
@@ -499,6 +516,7 @@ async def oauth_callback(
                 "access_token": token_payload["access_token"],
                 "refresh_token": token_payload.get("refresh_token"),
                 "scopes": token_payload.get("scope", "").split(),
+                "granted_scopes": token_payload.get("scope", ""),
                 "token_type": token_payload.get("token_type", "Bearer"),
                 "token_expires_at": _oauth_expiry_iso(token_payload.get("expires_in")),
                 "email": profile["emailAddress"],

@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { Activity, Search, Trash2, Wifi, WifiOff, X } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
+import { AnimatePresence, motion } from 'framer-motion'
+import { CheckCircle2, FileDown, FileText, RotateCcw, Wifi, WifiOff, X } from 'lucide-react'
 import { clsx } from 'clsx'
-import { monitoringApi } from '../api/client'
+import { executionsApi, extractApiError, monitoringApi } from '../api/client'
 import { ExecutionLiveView } from '../components/execution/ExecutionLiveView'
+import { PageShell } from '../components/Layout/PageShell'
 import { EmptyState } from '../components/ui/EmptyState'
 import { ExecutionRowSkeleton } from '../components/ui/Skeleton'
 import { useWebSocket } from '../hooks/useWebSocket'
+import { toast } from '../lib/toast'
 import type { WsEvent } from '../types'
 
 type MonitoringEvent = WsEvent & {
@@ -18,7 +21,7 @@ const EVENT_BADGES: Record<string, string> = {
   execution_start: 'bg-blue-900/40 text-blue-400 border-blue-900/60',
   execution_complete: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
   execution_error: 'bg-red-900/40 text-red-400 border-red-900/60',
-  thought: 'bg-cyan-900/30 text-cyan-300 border-cyan-900/50',
+  thought: 'bg-emerald-900/30 text-emerald-300 border-emerald-900/50',
   action: 'bg-amber-900/40 text-amber-400 border-amber-900/60',
   observation: 'bg-slate-800 text-slate-400 border-slate-700',
   final_answer: 'bg-blue-900/40 text-blue-300 border-blue-900/60',
@@ -28,7 +31,7 @@ const EVENT_BADGES: Record<string, string> = {
   tool_call: 'bg-amber-900/40 text-amber-400 border-amber-900/60',
   tool_result: 'bg-amber-900/30 text-amber-300 border-amber-900/50',
   stream_chunk: 'bg-slate-800 text-slate-400 border-slate-700',
-  telegram_message: 'bg-cyan-900/40 text-cyan-400 border-cyan-900/60',
+  telegram_message: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
   workflow_plan: 'bg-blue-900/40 text-blue-400 border-blue-900/60',
   ws_connected: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
   ws_disconnected: 'bg-slate-800 text-slate-400 border-slate-700',
@@ -36,21 +39,22 @@ const EVENT_BADGES: Record<string, string> = {
   hitl_approved: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
   hitl_rejected: 'bg-red-900/40 text-red-400 border-red-900/60',
   hitl_timed_out: 'bg-slate-800 text-slate-400 border-slate-700',
+  execution_pending_review: 'bg-amber-900/40 text-amber-400 border-amber-900/60',
   agent_retry: 'bg-yellow-900/40 text-yellow-400 border-yellow-900/60',
   agent_retry_succeeded: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
   agent_retry_exhausted: 'bg-red-900/40 text-red-400 border-red-900/60',
   workflow_paused: 'bg-amber-900/40 text-amber-400 border-amber-900/60',
-  workflow_resumed: 'bg-cyan-900/40 text-cyan-400 border-cyan-900/60',
+  workflow_resumed: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
   workflow_rejected: 'bg-red-900/40 text-red-400 border-red-900/60',
   workflow_timed_out: 'bg-slate-800 text-slate-400 border-slate-700',
-  workflow_scheduled_trigger: 'bg-cyan-900/40 text-cyan-400 border-cyan-900/60',
-  workflow_webhook_trigger: 'bg-cyan-900/40 text-cyan-400 border-cyan-900/60',
+  workflow_scheduled_trigger: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
+  workflow_webhook_trigger: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
   workflow_rolled_back: 'bg-blue-900/40 text-blue-300 border-blue-900/60',
   parallel_group_started: 'bg-fuchsia-900/40 text-fuchsia-400 border-fuchsia-900/60',
   parallel_group_completed: 'bg-fuchsia-900/40 text-fuchsia-400 border-fuchsia-900/60',
   parallel_group_done: 'bg-fuchsia-900/40 text-fuchsia-400 border-fuchsia-900/60',
   condition_evaluated: 'bg-blue-900/40 text-blue-400 border-blue-900/60',
-  in_app_notification: 'bg-cyan-900/40 text-cyan-400 border-cyan-900/60',
+  in_app_notification: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
   budget_warning: 'bg-amber-900/40 text-amber-400 border-amber-900/60',
   budget_exceeded: 'bg-red-900/40 text-red-400 border-red-900/60',
 }
@@ -92,6 +96,8 @@ function eventContent(event: MonitoringEvent): string {
       return `Approval ${event.approval_id || ''} rejected`
     case 'hitl_timed_out':
       return `Approval ${event.approval_id || ''} timed out`
+    case 'execution_pending_review':
+      return `Waiting for review: ${event.workflow_name || event.execution_id || 'execution'}`
     case 'agent_retry':
       return `${event.agent_name || event.agent || 'Agent'} retrying attempt ${event.attempt}/${event.max_retries}`
     case 'agent_retry_succeeded':
@@ -183,7 +189,7 @@ function LogEntry({
           {eventContent(event)}
         </span>
         {hasExecution ? (
-          <span className="flex-shrink-0 text-xs text-accent-300/70 group-hover:text-accent-300">
+          <span className="flex-shrink-0 text-xs text-indigo-300/70 group-hover:text-indigo-300">
             Open →
           </span>
         ) : (
@@ -201,12 +207,64 @@ function LogEntry({
   )
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  completed: 'done',
+  failed: 'failed',
+  cancelled: 'stopped',
+  running: 'running',
+  pending: 'running',
+  pending_review: 'review',
+  waiting_approval: 'review',
+  rejected: 'failed',
+  timed_out: 'failed',
+}
+
+function formatDuration(durationSeconds?: number | null) {
+  if (!durationSeconds || durationSeconds <= 0) return '—'
+  if (durationSeconds < 60) return `${durationSeconds}s`
+  const minutes = Math.floor(durationSeconds / 60)
+  const seconds = durationSeconds % 60
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`
+}
+
+function formatRelativeTime(timestamp?: string | null) {
+  if (!timestamp) return '—'
+  const deltaSeconds = Math.max(1, Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000))
+  if (deltaSeconds < 60) return `${deltaSeconds}s ago`
+  if (deltaSeconds < 3600) return `${Math.floor(deltaSeconds / 60)}m ago`
+  if (deltaSeconds < 86400) return `${Math.floor(deltaSeconds / 3600)}h ago`
+  return `${Math.floor(deltaSeconds / 86400)}d ago`
+}
+
+function statusDotClass(status: string) {
+  if (status === 'running' || status === 'pending') return 'dot-blue dot-live'
+  if (status === 'pending_review' || status === 'waiting_approval') return 'dot-amber dot-live'
+  if (status === 'completed') return 'dot-emerald'
+  return 'dot-red'
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const badgeClass =
+    status === 'completed'
+      ? 'badge-emerald'
+      : status === 'running' || status === 'pending'
+        ? 'badge-indigo'
+        : status === 'pending_review' || status === 'waiting_approval'
+          ? 'badge-amber'
+          : 'badge-red'
+
+  return (
+    <span className={clsx('badge font-mono text-[10px] uppercase tracking-[0.08em]', badgeClass)}>
+      {STATUS_LABELS[status] || status}
+    </span>
+  )
+}
+
 export function Monitoring() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { events, connected, clearEvents } = useWebSocket()
-  const [filter, setFilter] = useState('')
-  const [typeFilter, setTypeFilter] = useState('all')
-  const [autoScroll, setAutoScroll] = useState(true)
+  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'review' | 'done' | 'failed'>('all')
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -219,6 +277,12 @@ export function Monitoring() {
     queryKey: ['recent-executions'],
     queryFn: () => monitoringApi.recentExecutions(20),
     refetchInterval: 5000,
+  })
+  const selectedExecutionQuery = useQuery({
+    queryKey: ['execution', selectedExecutionId],
+    queryFn: () => executionsApi.get(selectedExecutionId!),
+    enabled: Boolean(selectedExecutionId),
+    refetchInterval: 3000,
   })
   const logsQuery = useQuery<MonitoringEvent[]>({
     queryKey: ['monitoring-logs'],
@@ -251,44 +315,25 @@ export function Monitoring() {
     })
   }, [events, logsQuery.data])
 
-  useEffect(() => {
-    if (autoScroll && logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight
+  const filteredExecutions = useMemo(() => {
+    const executions = recentQuery.data || []
+    if (statusFilter === 'all') return executions
+    if (statusFilter === 'running') return executions.filter((execution: any) => ['running', 'pending'].includes(execution.status))
+    if (statusFilter === 'review') return executions.filter((execution: any) => ['pending_review', 'waiting_approval'].includes(execution.status))
+    if (statusFilter === 'done') return executions.filter((execution: any) => execution.status === 'completed')
+    return executions.filter((execution: any) => ['failed', 'cancelled', 'timed_out', 'rejected'].includes(execution.status))
+  }, [recentQuery.data, statusFilter])
+
+  const filterCounts = useMemo(() => {
+    const executions = recentQuery.data || []
+    return {
+      all: executions.length,
+      running: executions.filter((execution: any) => ['running', 'pending'].includes(execution.status)).length,
+      review: executions.filter((execution: any) => ['pending_review', 'waiting_approval'].includes(execution.status)).length,
+      done: executions.filter((execution: any) => execution.status === 'completed').length,
+      failed: executions.filter((execution: any) => ['failed', 'cancelled', 'timed_out', 'rejected'].includes(execution.status)).length,
     }
-  }, [combinedEvents, autoScroll])
-
-  const allTypes = useMemo(
-    () => ['all', ...Array.from(new Set(combinedEvents.map(event => event.type)))],
-    [combinedEvents],
-  )
-
-  const filtered = useMemo(
-    () =>
-      combinedEvents.filter(event => {
-        const matchType = typeFilter === 'all' || event.type === typeFilter
-        const matchSearch = !filter || JSON.stringify(event).toLowerCase().includes(filter.toLowerCase())
-        return matchType && matchSearch
-      }),
-    [combinedEvents, filter, typeFilter],
-  )
-
-  const statusColor: Record<string, string> = {
-    completed: 'text-emerald-400',
-    failed: 'text-red-400',
-    cancelled: 'text-slate-400',
-    running: 'text-blue-400',
-    pending: 'text-yellow-400',
-    waiting_approval: 'text-amber-400',
-    rejected: 'text-red-400',
-    timed_out: 'text-slate-500',
-  }
-
-  const statusLabel: Record<string, string> = {
-    cancelled: 'Cancelled',
-    waiting_approval: 'Awaiting Approval',
-    rejected: 'Rejected by Human',
-    timed_out: 'Timed Out',
-  }
+  }, [recentQuery.data])
 
   const handleExecutionClick = (executionId: string) => {
     if (window.innerWidth >= 1024) {
@@ -299,162 +344,132 @@ export function Monitoring() {
   }
 
   const hasNoRuns = !(recentQuery.data?.length) && !combinedEvents.length
+  const filterTabs = [
+    { key: 'all', label: 'All' },
+    { key: 'running', label: 'Running' },
+    { key: 'review', label: 'Review' },
+    { key: 'done', label: 'Done' },
+    { key: 'failed', label: 'Failed' },
+  ] as const
+
+  const approveSelectedMutation = useMutation({
+    mutationFn: (executionId: string) => executionsApi.approve(executionId),
+    onSuccess: async (_, executionId) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['execution', executionId] }),
+        queryClient.invalidateQueries({ queryKey: ['recent-executions'] }),
+      ])
+      toast.success('Execution approved')
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
+
+  const exportSelected = async (format: 'pdf' | 'docx') => {
+    if (!selectedExecutionId) return
+    const { blob, filename } = await executionsApi.export(selectedExecutionId, format)
+    const href = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = href
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(href)
+  }
 
   return (
     <>
-      <div className="flex h-full flex-col gap-4 p-6">
-        <div className="flex flex-shrink-0 items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-100">Monitoring</h1>
-            <p className="mt-1 text-sm text-slate-400">Real-time agent execution logs and metrics</p>
+      <PageShell
+        title="Monitoring"
+        subtitle="Executions across the agency."
+        actions={
+          <div className={clsx('inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs', connected ? 'border-green-500/20 bg-green-500/10 text-green-400' : 'border-white/[0.08] text-[var(--t3)]')}>
+            {connected ? <Wifi size={13} /> : <WifiOff size={13} />}
+            {connected ? `Live · ${events.length}` : 'Reconnecting'}
           </div>
-          <div
-            className={clsx(
-              'flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm',
-              connected
-                ? 'border-emerald-900/60 bg-emerald-900/20 text-emerald-400'
-                : 'border-slate-800 text-slate-500',
-            )}
-          >
-            {connected ? <Wifi size={14} /> : <WifiOff size={14} />}
-            {connected ? `Live · ${events.length} events` : 'Reconnecting...'}
-          </div>
-        </div>
-
-        <div className="grid flex-shrink-0 grid-cols-4 gap-3">
-          {[
-            { label: 'Active Runs', value: statsQuery.data?.active_executions ?? 0, color: 'text-blue-400' },
-            { label: 'Total Runs', value: statsQuery.data?.executions ?? 0, color: 'text-slate-300' },
-            { label: 'Success Rate', value: `${statsQuery.data?.success_rate ?? 0}%`, color: 'text-emerald-400' },
-            { label: 'Total Tokens', value: (statsQuery.data?.total_tokens ?? 0).toLocaleString(), color: 'text-amber-400' },
-          ].map(stat => (
-            <div key={stat.label} className="card px-4 py-3">
-              <div className={clsx('text-lg font-bold', stat.color)}>{stat.value}</div>
-              <div className="text-xs text-slate-500">{stat.label}</div>
-            </div>
+        }
+        contentClassName="space-y-4 p-6"
+      >
+        <div className="flex flex-wrap items-center gap-5 border-b border-[var(--border)] pb-2">
+          {filterTabs.map(tab => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setStatusFilter(tab.key)}
+              className={clsx(
+                'inline-flex items-center gap-2 border-b-2 pb-2 font-mono text-[11px] uppercase tracking-[0.10em] transition-colors',
+                statusFilter === tab.key
+                  ? 'border-indigo-400 text-indigo-300 font-semibold'
+                  : 'border-transparent text-[var(--text-3)] hover:text-[var(--text-2)]',
+              )}
+            >
+              {tab.label}
+              {tab.key !== 'all' && filterCounts[tab.key] > 0 ? (
+                <span
+                  className={clsx(
+                    'badge px-1.5 py-0.5 font-mono text-[10px]',
+                    tab.key === 'running'
+                      ? 'badge-indigo'
+                      : tab.key === 'review'
+                        ? 'badge-amber'
+                        : tab.key === 'failed'
+                          ? 'badge-red'
+                          : 'badge-glass',
+                  )}
+                >
+                  {filterCounts[tab.key]}
+                </span>
+              ) : null}
+            </button>
           ))}
         </div>
 
-        <div className="flex min-h-0 flex-1 gap-4">
-          <div className="card flex w-56 flex-shrink-0 flex-col overflow-hidden">
-            <div className="border-b border-slate-800 p-3 text-xs font-semibold text-slate-400">
-              Recent Executions
+        <section className="glass-card overflow-hidden p-0">
+          {hasNoRuns ? (
+            <div className="p-8">
+              <EmptyState
+                icon="🎬"
+                title="No runs yet"
+                description="Run an agent to see executions appear here."
+                action={{ label: 'Run an agent →', onClick: () => navigate('/agents') }}
+              />
             </div>
-            <div className="flex-1 space-y-1 overflow-y-auto p-2">
-              {!recentQuery.data &&
-                Array.from({ length: 5 }).map((_, index) => <ExecutionRowSkeleton key={index} />)}
-              {(recentQuery.data || []).map((execution: any) => (
+          ) : recentQuery.isLoading && !(recentQuery.data || []).length ? (
+            <div className="p-4">
+              {Array.from({ length: 6 }).map((_, index) => <ExecutionRowSkeleton key={index} />)}
+            </div>
+          ) : !filteredExecutions.length ? (
+            <div className="px-4 py-12 text-center text-sm text-[var(--t2)]">No executions match this filter.</div>
+          ) : (
+            <div>
+              {filteredExecutions.map((execution: any) => (
                 <button
                   key={execution.id}
                   type="button"
                   data-testid="execution-row"
-                  className="group w-full rounded px-2 py-2 text-left text-xs text-slate-400 transition-colors hover:bg-slate-800"
+                  className="data-row w-full min-h-[44px] text-left"
                   onClick={() => handleExecutionClick(execution.id)}
                 >
-                  <div className="truncate font-medium text-slate-300">{execution.workflow_name}</div>
-                  <div className="mt-0.5 flex items-center justify-between gap-2">
-                    {execution.status === 'waiting_approval' ? (
-                      <Link
-                        to="/approvals"
-                        className="rounded-full bg-amber-900/30 px-2 py-0.5 text-[11px] text-amber-300 hover:bg-amber-900/50"
-                        onClick={event => event.stopPropagation()}
-                      >
-                        Awaiting Approval
-                      </Link>
-                    ) : (
-                      <span className={statusColor[execution.status] || 'text-slate-600'}>
-                        {statusLabel[execution.status] || execution.status}
-                      </span>
-                    )}
-                    <span className="text-[11px] text-white/20 group-hover:text-white/40">Open</span>
+                  <span className={clsx('status-dot', statusDotClass(execution.status))} />
+                  <div className="min-w-0 w-[180px] flex-shrink-0">
+                    <div className="truncate text-sm font-semibold text-white">
+                      {execution.agent_name || execution.workflow_name || 'Agent'}
+                    </div>
                   </div>
+                  <div className="min-w-0 flex-1 truncate text-xs text-[var(--text-2)]">
+                    {execution.input_message || execution.input || execution.workflow_name || 'Execution in progress'}
+                  </div>
+                  <div className="hidden max-w-[140px] truncate text-xs text-[var(--text-3)] md:block">
+                    {execution.client_name || 'Internal'}
+                  </div>
+                  <div className="hidden font-mono text-[11px] text-[var(--text-3)] sm:block">{formatDuration(execution.duration_seconds)}</div>
+                  <StatusBadge status={execution.status} />
                 </button>
               ))}
             </div>
-          </div>
-
-          <div className="card flex min-h-0 flex-1 flex-col overflow-hidden">
-            <div className="flex flex-shrink-0 items-center gap-2 border-b border-slate-800 p-3">
-              <Search size={14} className="text-slate-600" />
-              <input
-                className="flex-1 bg-transparent text-sm text-slate-300 outline-none placeholder-slate-600"
-                placeholder="Filter logs..."
-                value={filter}
-                onChange={event => setFilter(event.target.value)}
-              />
-              <select
-                className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-400 outline-none"
-                value={typeFilter}
-                onChange={event => setTypeFilter(event.target.value)}
-              >
-                {allTypes.map(type => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-              <label className="flex cursor-pointer select-none items-center gap-1 text-xs text-slate-500">
-                <input
-                  type="checkbox"
-                  className="accent-violet-500"
-                  checked={autoScroll}
-                  onChange={event => setAutoScroll(event.target.checked)}
-                />
-                Auto-scroll
-              </label>
-              <button
-                type="button"
-                className="btn-ghost p-1.5 text-slate-600 hover:text-red-400"
-                onClick={clearEvents}
-                title="Clear live buffer"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-
-            <div ref={logRef} className="flex-1 overflow-y-auto p-2 font-mono">
-              {hasNoRuns ? (
-                <EmptyState
-                  icon="🎬"
-                  title="No runs yet"
-                  description="Run an agent to see the magic happen here. Watch it think, search, and work in real time."
-                  action={{ label: 'Run an agent →', onClick: () => navigate('/agents') }}
-                />
-              ) : logsQuery.isLoading && !combinedEvents.length ? (
-                <div className="flex h-full flex-col items-center justify-center text-slate-700">
-                  <Activity size={32} className="mb-2 animate-pulse" />
-                  <div className="text-sm">Loading monitoring history…</div>
-                </div>
-              ) : !filtered.length ? (
-                <div className="flex h-full flex-col items-center justify-center text-slate-700">
-                  <Activity size={32} className="mb-2" />
-                  <div className="text-sm">No matching events</div>
-                  <div className="mt-1 text-xs">Try a different filter or run a workflow</div>
-                </div>
-              ) : (
-                <div className="space-y-0.5">
-                  {filtered.map((event, index) => (
-                    <LogEntry
-                      key={`${event.execution_id || 'event'}-${event.timestamp || index}-${event.type}-${index}`}
-                      event={event}
-                      onOpenExecution={handleExecutionClick}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-shrink-0 items-center justify-between border-t border-slate-800 px-3 py-2 text-xs text-slate-600">
-              <span>
-                {filtered.length} events shown · {combinedEvents.length} total visible
-              </span>
-              <span className="text-slate-700">
-                History comes from DB, live updates come from WebSocket
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
+          )}
+        </section>
+      </PageShell>
 
       {selectedExecutionId && (
         <>
@@ -462,17 +477,31 @@ export function Monitoring() {
             className="fixed inset-0 z-40 bg-black/40"
             onClick={() => setSelectedExecutionId(null)}
           />
-          <div
+          <motion.div
             data-testid="monitoring-drawer"
-            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[480px] flex-col border-l border-white/[0.08] bg-obsidian-950 shadow-glow-lg"
+            initial={{ x: 40, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: 40, opacity: 0 }}
+            transition={{ duration: 0.22, ease: 'easeOut' }}
+            className="glass-elevated fixed inset-y-0 right-0 z-50 flex w-full max-w-[520px] flex-col border-l border-white/[0.07] shadow-xl"
           >
-            <div className="flex items-center justify-between border-b border-white/[0.08] px-5 py-4">
-              <h2 className="text-sm font-semibold text-white">Execution Detail</h2>
+            <div className="flex items-start justify-between border-b border-white/[0.08] px-5 py-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-base font-semibold text-white">
+                    {selectedExecutionQuery.data?.agent_name || 'Agent'}
+                  </h2>
+                  {selectedExecutionQuery.data ? <StatusBadge status={selectedExecutionQuery.data.status} /> : null}
+                </div>
+                <div className="mt-1 text-xs text-[var(--text-3)]">
+                  {(selectedExecutionQuery.data?.workflow_name || 'Workflow')} · {(selectedExecutionQuery.data?.agent_name || 'Agent')}
+                </div>
+              </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => navigate(`/executions/${selectedExecutionId}`)}
-                  className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/60 hover:border-accent-400/30 hover:text-accent-300"
+                  className="btn-secondary text-xs"
                 >
                   Open full page ↗
                 </button>
@@ -487,14 +516,50 @@ export function Monitoring() {
               </div>
             </div>
             <div className="flex-1 overflow-y-auto p-4">
-              <ExecutionLiveView
-                executionId={selectedExecutionId}
-                maxHeight="100%"
-                onComplete={() => {}}
-                onError={() => {}}
-              />
+              <div className="overflow-hidden rounded-[20px] border border-white/[0.08] bg-white/[0.03]">
+                <ExecutionLiveView
+                  executionId={selectedExecutionId}
+                  maxHeight="100%"
+                  onComplete={() => {}}
+                  onError={() => {}}
+                />
+              </div>
             </div>
-          </div>
+            <div className="border-t border-white/[0.08] px-4 py-3">
+              {selectedExecutionQuery.data?.status === 'pending_review' ? (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => approveSelectedMutation.mutate(selectedExecutionId)}
+                    disabled={approveSelectedMutation.isPending}
+                    className="btn-emerald btn-runner flex-1"
+                  >
+                    <CheckCircle2 size={14} />
+                    {approveSelectedMutation.isPending ? 'Approving…' : 'Approve'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/executions/${selectedExecutionId}`)}
+                    className="btn-secondary flex-1"
+                  >
+                    <RotateCcw size={14} />
+                    Regenerate
+                  </button>
+                </div>
+              ) : selectedExecutionQuery.data?.status === 'completed' && selectedExecutionQuery.data.approved_by ? (
+                <div className="flex gap-2">
+                  <button type="button" className="btn-secondary flex-1 text-xs" onClick={() => void exportSelected('pdf')}>
+                    <FileText size={13} />
+                    PDF
+                  </button>
+                  <button type="button" className="btn-secondary flex-1 text-xs" onClick={() => void exportSelected('docx')}>
+                    <FileDown size={13} />
+                    Word
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </motion.div>
         </>
       )}
     </>

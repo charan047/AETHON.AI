@@ -1,27 +1,21 @@
 import { clsx } from 'clsx'
 
 export function Skeleton({ className }: { className?: string }) {
-  return (
-    <div
-      className={clsx(
-        'relative overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.035] before:absolute before:inset-0 before:-translate-x-full before:animate-shimmer before:bg-gradient-to-r before:from-transparent before:via-white/[0.08] before:to-transparent',
-        className,
-      )}
-    />
-  )
+  return <div className={clsx('skeleton', className)} />
 }
 
 export function SkeletonCard({ className }: { className?: string }) {
   return (
-    <div className={clsx('glass-card rounded-2xl p-5', className)}>
-      <Skeleton className="mb-5 h-14 w-14 rounded-full" />
-      <Skeleton className="mb-3 h-5 w-2/3" />
-      <Skeleton className="mb-5 h-3 w-full" />
-      <div className="grid grid-cols-3 gap-2">
-        <Skeleton className="h-14" />
-        <Skeleton className="h-14" />
-        <Skeleton className="h-14" />
+    <div className={clsx('glass-card p-5', className)}>
+      <div className="flex items-center gap-3">
+        <Skeleton className="h-10 w-10 rounded-xl" />
+        <div className="flex-1 space-y-2">
+          <Skeleton className="h-3.5 w-24 rounded-full" />
+          <Skeleton className="h-3 w-16 rounded-full" />
+        </div>
       </div>
+      <Skeleton className="mt-4 h-3 w-full rounded-full" />
+      <Skeleton className="mt-2 h-3 w-3/4 rounded-full" />
     </div>
   )
 }

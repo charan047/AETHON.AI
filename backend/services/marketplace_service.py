@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from database.models import (
     Agent,
     CustomTool,
@@ -373,7 +374,7 @@ class MarketplaceService:
             description=template.get("description", ""),
             system_prompt=template.get("system_prompt", ""),
             tools=template.get("tools", []),
-            model=template.get("model_preference") or "llama-3.3-70b-versatile",
+            model=template.get("model_preference") or settings.default_model,
             memory_enabled=template.get("memory_enabled", True),
             max_tokens=template.get("max_tokens", 2000),
             temperature=template.get("temperature", 0.7),

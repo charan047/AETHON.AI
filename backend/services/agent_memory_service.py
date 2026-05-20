@@ -205,6 +205,8 @@ class AgentMemoryService:
         memory_type: str,
         tags: list[str],
         importance: float,
+        always_inject: bool = False,
+        source: str | None = None,
         db: AsyncSession | None,
     ) -> None:
         entry = AgentMemoryEntry(
@@ -216,6 +218,8 @@ class AgentMemoryService:
             memory_type=memory_type,
             tags=tags,
             importance_score=importance,
+            always_inject=always_inject,
+            source=source,
         )
         if db is not None:
             db.add(entry)

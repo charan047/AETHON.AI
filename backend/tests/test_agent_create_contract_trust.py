@@ -15,6 +15,7 @@ async def test_create_agent_initializes_contract(client: AsyncClient, auth_heade
             "name": "Test Agent",
             "role": "Researcher",
             "system_prompt": "You are a researcher.",
+            "tools": ["web_search", "google_docs_create"],
         },
         headers=auth_headers,
     )
@@ -26,6 +27,7 @@ async def test_create_agent_initializes_contract(client: AsyncClient, auth_heade
     )
     assert contract is not None
     assert contract.autonomy_level == "supervised"
+    assert contract.allowed_tools == ["web_search", "google_docs_create"]
 
     trust = await db.scalar(
         select(AgentTrustScore).where(AgentTrustScore.agent_id == agent_id)

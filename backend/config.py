@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     # OpenAI-compatible (Groq / Ollama / Together AI / OpenRouter / real OpenAI)
     openai_compatible_api_key: str = ""
     openai_compatible_base_url: str = ""   # empty = real OpenAI API
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     groq_api_key: str = ""
     groq_base_url: str = "https://api.groq.com/openai/v1"
     openai_api_key: str = ""
@@ -35,7 +37,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     environment: str = "development"
     cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
-    default_model: str = "llama-3.3-70b-versatile"
+    default_model: str = "llama-3.1-8b-instant"
     direct_message_model: str = ""
     chroma_persist_dir: str = "./chroma_db"
     chroma_collection_name: str = "agent_memory"
@@ -72,6 +74,11 @@ class Settings(BaseSettings):
     mcp_api_secret: str = ""
     # Run: python backend/mcp_server.py
     # See docs/MCP.md for Claude Desktop and IDE setup.
+    # ─── A2A Protocol ───────────────────────────────────────────────────────
+    a2a_enabled: bool = False
+    a2a_base_url: str = "http://localhost:8000"
+    a2a_org_id: str = ""
+    a2a_require_api_key: bool = True
     run_migrations_on_startup: bool = False
     enable_testing_api: bool = False
     smtp_host: str = ""
@@ -89,6 +96,16 @@ class Settings(BaseSettings):
         if "sqlite" in value.lower():
             logger.warning("SQLite database URL detected: %s", value)
         return value
+
+    @field_validator("openai_compatible_api_key", mode="before")
+    @classmethod
+    def populate_openai_compatible_api_key(cls, value: str) -> str:
+        return value or os.getenv("OPENROUTER_API_KEY", "")
+
+    @field_validator("openai_compatible_base_url", mode="before")
+    @classmethod
+    def populate_openai_compatible_base_url(cls, value: str) -> str:
+        return value or os.getenv("OPENROUTER_BASE_URL", "")
 
 
 settings = Settings()

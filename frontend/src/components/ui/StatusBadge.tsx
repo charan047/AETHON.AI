@@ -1,15 +1,20 @@
 import { clsx } from 'clsx'
 
-export type StatusKind = 'running' | 'idle' | 'completed' | 'failed' | 'waiting_approval' | 'pending' | 'active'
-
-const styles: Record<StatusKind, { label: string; className: string; dot: string; pulse?: boolean }> = {
-  running: { label: 'Running', className: 'border-blue-400/25 bg-blue-500/10 text-blue-300', dot: 'bg-blue-400', pulse: true },
-  idle: { label: 'Idle', className: 'border-white/10 bg-white/[0.04] text-ink-secondary', dot: 'bg-ink-muted' },
-  completed: { label: 'Completed', className: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300', dot: 'bg-emerald-400' },
-  failed: { label: 'Failed', className: 'border-red-400/25 bg-red-400/10 text-red-300', dot: 'bg-red-400' },
-  waiting_approval: { label: 'Awaiting Approval', className: 'border-amber-400/25 bg-amber-400/10 text-amber-300', dot: 'bg-amber-400' },
-  pending: { label: 'Pending', className: 'border-amber-400/25 bg-amber-400/10 text-amber-300', dot: 'bg-amber-400' },
-  active: { label: 'Active', className: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300', dot: 'bg-emerald-400' },
+const STATUS_MAP: Record<string, { label: string; cls: string; live?: boolean }> = {
+  completed: { label: 'done', cls: 'badge-emerald' },
+  failed: { label: 'failed', cls: 'badge-red' },
+  running: { label: 'running', cls: 'badge-indigo', live: true },
+  pending_review: { label: 'review', cls: 'badge-amber', live: true },
+  waiting_approval: { label: 'review', cls: 'badge-amber', live: true },
+  pending: { label: 'pending', cls: 'badge-amber' },
+  cancelled: { label: 'stopped', cls: 'badge-glass' },
+  timed_out: { label: 'timeout', cls: 'badge-red' },
+  approved: { label: 'approved', cls: 'badge-emerald' },
+  rejected: { label: 'rejected', cls: 'badge-red' },
+  active: { label: 'active', cls: 'badge-emerald' },
+  idle: { label: 'idle', cls: 'badge-glass' },
+  working: { label: 'working', cls: 'badge-indigo', live: true },
+  blocked: { label: 'blocked', cls: 'badge-red' },
 }
 
 export function StatusBadge({
@@ -17,15 +22,29 @@ export function StatusBadge({
   label,
   className,
 }: {
-  status: StatusKind | string
+  status: string
   label?: string
   className?: string
 }) {
-  const style = styles[status as StatusKind] ?? styles.idle
+  const config = STATUS_MAP[status] || { label: String(status || 'unknown').toLowerCase(), cls: 'badge-glass' }
+
   return (
-    <span className={clsx('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium', style.className, className)}>
-      <span className={clsx('h-1.5 w-1.5 rounded-full', style.dot, style.pulse && 'animate-pulse')} />
-      {label ?? style.label}
+    <span className={clsx('badge', config.cls, className)}>
+      {config.live ? (
+        <span className="relative flex h-1.5 w-1.5">
+          <span
+            className="absolute inline-flex h-full w-full rounded-full opacity-50 animate-ping"
+            style={{ background: 'currentColor' }}
+          />
+          <span
+            className="relative inline-flex h-1.5 w-1.5 rounded-full"
+            style={{ background: 'currentColor' }}
+          />
+        </span>
+      ) : null}
+      {(label || config.label).toLowerCase()}
     </span>
   )
 }
+
+export default StatusBadge

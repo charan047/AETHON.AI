@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.dependencies import get_current_user, require_admin
 from auth.org_context import OrgContext, check_plan_limit, get_org_context
+from config import settings
 from database import get_db
 from database.models import (
     Agent,
@@ -634,7 +635,7 @@ async def install_marketplace_listing(
         role=_to_role_name(role_slug, agent_name),
         description=listing.short_description or workflow_cfg.get("description", ""),
         system_prompt=rendered_system_prompt,
-        model=agent_cfg.get("model", "llama-3.3-70b-versatile"),
+        model=agent_cfg.get("model", settings.default_model),
         role_slug=role_slug,
         seniority_level=agent_cfg.get("seniority_level", 1),
         autonomy_level=agent_cfg.get("autonomy_level", "supervised"),

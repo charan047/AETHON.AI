@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from auth.dependencies import get_current_user, require_editor
 from auth.org_context import OrgContext, get_org_context
 from database import get_db
-from database.models import Agent, Client, ClientStatus, Execution, ExecutionStatus, Organization, User, Workflow
+from database.models import Agent, Client, ClientStatus, Execution, ExecutionStatus, Mission, MissionStatus, Organization, User, Workflow
 
 router = APIRouter(dependencies=[Depends(get_current_user), Depends(get_org_context)])
 portal_router = APIRouter()
@@ -405,6 +405,18 @@ async def get_client_portal(
             .limit(10)
         )
     ).all()
+    recent_mission_rows = (
+        await db.execute(
+            select(Mission)
+            .where(
+                Mission.org_id == client.org_id,
+                Mission.client_id == client.id,
+                Mission.status == MissionStatus.completed,
+            )
+            .order_by(Mission.completed_at.desc().nullslast(), Mission.created_at.desc())
+            .limit(5)
+        )
+    ).scalars().all()
 
     assigned_agents = (
         await db.execute(
@@ -498,6 +510,16 @@ async def get_client_portal(
         "color": client.color or "#6366F1",
         "last_updated_at": last_updated,
         "recent_activity": recent_activity,
+        "recent_missions": [
+            {
+                "title": mission.title or mission.goal[:80],
+                "completed_at": mission.completed_at,
+                "report_preview": mission.report[:300] if mission.report else None,
+                "full_report_available": bool(mission.report),
+                "report": mission.report,
+            }
+            for mission in recent_mission_rows
+        ],
         "agents": [
             {
                 "name": agent.persona_name or agent.name,

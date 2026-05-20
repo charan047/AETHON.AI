@@ -38,7 +38,7 @@ TEMPLATE: MarketplaceTemplate = {
     },
     "agent": {
         "name": "Support Analyst",
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "temperature": 0.2,
         "max_iterations": 16,
         "tools": ["gmail_read", "web_search", "gmail_send"],

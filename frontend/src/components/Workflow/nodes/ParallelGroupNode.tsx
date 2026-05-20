@@ -78,7 +78,7 @@ export function ParallelGroupNode({ id, data, selected }: NodeProps<ParallelGrou
               <label key={agent.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-fuchsia-100 hover:bg-fuchsia-900/30">
                 <input
                   type="checkbox"
-                  className="accent-fuchsia-400"
+                  className="indigo-fuchsia-400"
                   checked={selectedAgentIds.includes(agent.id)}
                   onChange={() => toggleAgent(agent.id)}
                 />

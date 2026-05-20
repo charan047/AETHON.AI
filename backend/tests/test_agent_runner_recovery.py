@@ -4,6 +4,9 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from runtime import agent_runner as agent_runner_module
+from datetime import datetime
+
+from database.models import AgentMemoryEntry, Execution, ExecutionStatus
 from runtime.agent_runner import AgentRunner
 
 
@@ -42,6 +45,25 @@ class _RecoveringGraph:
 class _NoopMemoryService:
     async def store_memory(self, **_kwargs):
         return None
+
+
+def test_search_failed_output_is_detected():
+    reason = agent_runner_module._tool_failure_reason(
+        "{'snippet': 'SEARCH_FAILED: Web search is unavailable. Configure BRAVE_SEARCH_API_KEY.'}"
+    )
+
+    assert reason is not None
+    assert "SEARCH_FAILED:" in reason
+
+
+def test_tool_failure_guidance_instructs_agent_not_to_guess():
+    guidance = agent_runner_module._tool_failure_guidance(
+        "google_docs_create",
+        "Google Docs integration is not implemented yet in this phase",
+    )
+
+    assert "IMPORTANT: The tool 'google_docs_create' failed with:" in guidance
+    assert "Do NOT guess or make up information." in guidance
 
 
 @pytest.mark.asyncio
@@ -149,3 +171,175 @@ async def test_failed_run_records_zero_cost_log(monkeypatch):
     assert recorded["input_tokens"] == 0
     assert recorded["output_tokens"] == 0
     assert recorded["user_id"] == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_runtime_tools_do_not_auto_inject_notifications_or_agent_communication(monkeypatch):
+    config = SimpleNamespace(
+        id="agent-3",
+        name="A2A Agent",
+        org_id="org-1",
+        model="test-model",
+        tools=["web_search"],
+    )
+    runner = AgentRunner(config, memory_service=_NoopMemoryService())
+    runner.custom_tool_defs = []
+
+    captured: dict[str, object] = {}
+
+    async def _fake_get_langchain_tools_for_agent(tool_ids, **kwargs):
+        captured["tool_ids"] = list(tool_ids)
+        return []
+
+    async def _noop(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(
+        agent_runner_module.tool_registry,
+        "get_langchain_tools_for_agent",
+        _fake_get_langchain_tools_for_agent,
+    )
+    monkeypatch.setattr(runner, "_build_new_pattern_tools_as_langchain", _noop)
+
+    tools = await runner._build_runtime_tools(user_id=None)
+
+    assert tools == []
+    assert captured["tool_ids"] == ["web_search"]
+
+
+@pytest.mark.asyncio
+async def test_enhanced_system_prompt_injects_ceo_preferences_first(monkeypatch):
+    config = SimpleNamespace(
+        id="agent-pref",
+        name="Maya",
+        org_id="org-1",
+        model="test-model",
+        tools=[],
+        system_prompt="You are a sharp research analyst.",
+        persona_name=None,
+    )
+    runner = AgentRunner(config, memory_service=_NoopMemoryService())
+
+    class _FakeResult:
+        def __init__(self, items):
+            self._items = items
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._items
+
+    pref = AgentMemoryEntry(
+        id="pref-1",
+        agent_id="agent-pref",
+        org_id="org-1",
+        mem0_memory_id="local:pref-1",
+        content_preview="Keep responses under 400 words.",
+        memory_type="ceo_preference",
+        importance_score=1.0,
+        always_inject=True,
+        source="manual",
+    )
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def execute(self, *_args, **_kwargs):
+            return _FakeResult([pref])
+
+    monkeypatch.setattr(agent_runner_module, "AsyncSessionLocal", lambda: _FakeSession())
+
+    async def _business_context(_user_id=None):
+        return "BUSINESS CONTEXT"
+
+    async def _learning_context():
+        return "LEARNING CONTEXT"
+
+    async def _memory_context(**_kwargs):
+        return "LIVING MEMORY"
+
+    monkeypatch.setattr(runner, "_build_business_context", _business_context)
+    monkeypatch.setattr(runner, "_build_learning_context", _learning_context)
+    monkeypatch.setattr(agent_runner_module.agent_memory_service, "build_memory_context", _memory_context)
+
+    prompt = await runner._build_enhanced_system_prompt("Write the update")
+
+    assert prompt.startswith("CEO PREFERENCES — ALWAYS FOLLOW THESE:")
+    assert "- Keep responses under 400 words." in prompt
+    assert "BUSINESS CONTEXT" in prompt
+    assert "LIVING MEMORY" in prompt
+
+
+@pytest.mark.asyncio
+async def test_finalize_trust_skips_auto_update_for_review_required_workflow(db, test_agent, test_workflow, monkeypatch):
+    test_workflow.requires_review = True
+    execution = Execution(
+        org_id=test_workflow.org_id,
+        workflow_id=test_workflow.id,
+        trigger="manual",
+        status=ExecutionStatus.pending_review,
+        input_message="Needs review",
+        started_at=datetime.utcnow(),
+    )
+    db.add(execution)
+    await db.commit()
+    await db.refresh(execution)
+
+    runner = AgentRunner(test_agent, memory_service=_NoopMemoryService())
+    runner._context = {"execution_id": execution.id}
+
+    called = False
+
+    async def _fake_record_task_completed(**_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        agent_runner_module.trust_score_service,
+        "record_task_completed",
+        _fake_record_task_completed,
+    )
+
+    await runner._finalize_trust_and_status(success=True, tools_called=[], db=db)
+
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_finalize_trust_still_auto_updates_when_review_not_required(db, test_agent, test_workflow, monkeypatch):
+    execution = Execution(
+        org_id=test_workflow.org_id,
+        workflow_id=test_workflow.id,
+        trigger="manual",
+        status=ExecutionStatus.running,
+        input_message="No review needed",
+        started_at=datetime.utcnow(),
+    )
+    db.add(execution)
+    await db.commit()
+    await db.refresh(execution)
+
+    runner = AgentRunner(test_agent, memory_service=_NoopMemoryService())
+    runner._context = {"execution_id": execution.id}
+
+    captured: dict[str, object] = {}
+
+    async def _fake_record_task_completed(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        agent_runner_module.trust_score_service,
+        "record_task_completed",
+        _fake_record_task_completed,
+    )
+
+    await runner._finalize_trust_and_status(success=True, tools_called=["web_search"], db=db)
+
+    assert captured["agent_id"] == test_agent.id
+    assert captured["success"] is True
+    assert captured["tools_used"] == ["web_search"]

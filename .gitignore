@@ -31,6 +31,12 @@ docs/.DS_Store
 !.claude/skills/speckit-*/SKILL.md
 .claude/worktrees/
 .cursor/
+.taskmaster/
+.specify/
+.cursorrules
+CLAUDE.md
+docs/superpowers/
+backend/mission_migration_test.db
 *.zip
 chroma_db/
 backend/coverage.xml

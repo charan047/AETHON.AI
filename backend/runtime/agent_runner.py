@@ -13,7 +13,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import AsyncSessionLocal
-from database.models import Agent, AgentContract, AgentRole, CompanyProfile, ExecutionStep, IntegrationType, Organization, UserIntegration
+from database.models import Agent, AgentContract, AgentMemoryEntry, AgentRole, CompanyProfile, Execution, ExecutionStep, ExternalAgent, IntegrationType, Organization, UserIntegration, Workflow
 from runtime.tools import make_custom_tool
 from services.agent_memory_service import agent_memory_service
 from services.agent_messenger import agent_messenger
@@ -43,6 +43,17 @@ BLOCKER_SIGNALS = (
     "stuck",
     "need help",
     "low confidence",
+)
+SEARCH_FAILED_MARKER = "SEARCH_FAILED:"
+TOOL_FAILURE_PATTERNS = (
+    "not implemented",
+    "not configured",
+    "failed",
+    "rate limit",
+    "401",
+    "403",
+    "timeout",
+    SEARCH_FAILED_MARKER.lower(),
 )
 
 
@@ -76,6 +87,24 @@ def _looks_like_tool_call_stub(text: str) -> bool:
         or "i'll search" in lowered
         or "failed_generation" in lowered
         or "tool call" in lowered
+    )
+
+
+def _tool_failure_reason(output: Any) -> str | None:
+    text = _extract_text(output).strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if any(pattern in lowered for pattern in TOOL_FAILURE_PATTERNS):
+        return text[:500]
+    return None
+
+
+def _tool_failure_guidance(tool_name: str, reason: str) -> str:
+    return (
+        f"IMPORTANT: The tool '{tool_name}' failed with: {reason}\n"
+        "Do NOT guess or make up information.\n"
+        "State clearly that this tool was unavailable."
     )
 
 
@@ -213,6 +242,7 @@ class AgentRunner:
         execution_id: str,
     ) -> list:
         from langchain_core.tools import StructuredTool
+        from services.a2a_client import a2a_client, external_agent_tool_name
 
         new_tools = []
         active_user_id = user_id or "system"
@@ -255,6 +285,62 @@ class AgentRunner:
                 args_schema=self._schema_to_pydantic(schema, tool.name),
             )
             new_tools.append(langchain_tool)
+
+        if org_id:
+            async with AsyncSessionLocal() as db:
+                trusted_external_agents = (
+                    await db.execute(
+                        select(ExternalAgent).where(
+                            ExternalAgent.org_id == org_id,
+                            ExternalAgent.trust_status == "trusted",
+                        )
+                    )
+                ).scalars().all()
+
+            for external_agent in trusted_external_agents:
+                tool_name = external_agent_tool_name(external_agent.name)
+                skill_names = ", ".join(
+                    skill.get("name") or skill.get("id") or "unnamed skill"
+                    for skill in (external_agent.skills or [])[:4]
+                    if isinstance(skill, dict)
+                ) or "general delegation"
+
+                async def external_tool_func(_external_agent=external_agent, task: str = ""):
+                    async with AsyncSessionLocal() as tool_db:
+                        result = await a2a_client.call(
+                            _external_agent.id,
+                            task,
+                            str(self.config.id),
+                            org_id,
+                            tool_db,
+                            permission_checked=True,
+                        )
+                    return result.get("output") or "External agent returned no output."
+
+                langchain_tool = StructuredTool.from_function(
+                    coroutine=external_tool_func,
+                    name=tool_name,
+                    description=(
+                        f"Delegate specialized work to external agent '{external_agent.name}'. "
+                        f"Provider: {external_agent.provider_name or 'Unknown provider'}. "
+                        f"Skills: {skill_names}. "
+                        f"Use this when the task explicitly benefits from {external_agent.name}."
+                    ),
+                    args_schema=self._schema_to_pydantic(
+                        {
+                            "type": "object",
+                            "properties": {
+                                "task": {
+                                    "type": "string",
+                                    "description": "The exact instruction to send to the external agent.",
+                                }
+                            },
+                            "required": ["task"],
+                        },
+                        tool_name.replace(":", "_"),
+                    ),
+                )
+                new_tools.append(langchain_tool)
 
         return new_tools
 
@@ -346,6 +432,30 @@ class AgentRunner:
             update(ExecutionStep)
             .where(ExecutionStep.id == step_id)
             .values(**{key: self._json_safe(value) for key, value in values.items()})
+        )
+
+        if db is not None:
+            await db.execute(statement)
+            await db.commit()
+            return
+
+        async with AsyncSessionLocal() as session:
+            await session.execute(statement)
+            await session.commit()
+
+    async def _set_execution_warning(
+        self,
+        execution_id: str | None,
+        warning: str | None,
+        db: AsyncSession | None = None,
+    ) -> None:
+        if not execution_id or not warning:
+            return
+
+        statement = (
+            update(Execution)
+            .where(Execution.id == execution_id)
+            .values(warning=warning)
         )
 
         if db is not None:
@@ -548,9 +658,17 @@ class AgentRunner:
                     return f"Skipped: CEO did not approve use of '{tool_name}'"
 
             if getattr(tool, "coroutine", None):
-                return await tool.coroutine(**kwargs)
+                result = await tool.coroutine(**kwargs)
+                failure_reason = _tool_failure_reason(result)
+                if failure_reason:
+                    return f"{_extract_text(result)}\n\n{_tool_failure_guidance(tool_name, failure_reason)}"
+                return result
             if getattr(tool, "func", None):
-                return tool.func(**kwargs)
+                result = tool.func(**kwargs)
+                failure_reason = _tool_failure_reason(result)
+                if failure_reason:
+                    return f"{_extract_text(result)}\n\n{_tool_failure_guidance(tool_name, failure_reason)}"
+                return result
             return "Tool error: Tool is not executable."
         finally:
             if owns_session:
@@ -597,10 +715,6 @@ class AgentRunner:
         step_index_ref: dict[str, int] | None = None,
     ):
         tool_ids = list(self.tool_ids or [])
-        if "notifications" not in tool_ids:
-            tool_ids.append("notifications")
-        if "agent_communication" not in tool_ids:
-            tool_ids.append("agent_communication")
         custom_by_id = {tool_def.id: tool_def for tool_def in (self.custom_tool_defs or [])}
         custom_tools = [
             make_custom_tool(custom_by_id[tool_id])
@@ -804,16 +918,34 @@ class AgentRunner:
                 if contract and contract.max_cost_per_task_cents is not None
                 else 100
             )
+            workflow_requires_review = False
+            workflow_id = self._context.get("workflow_id")
+            execution_id = self._context.get("execution_id")
 
-            await trust_score_service.record_task_completed(
-                agent_id=str(self.config.id),
-                success=success,
-                on_time=True,
-                cost_cents=0,
-                budget_cents=budget_cents,
-                tools_used=tools_called,
-                db=session,
-            )
+            if execution_id:
+                execution = await session.scalar(
+                    select(Execution).where(Execution.id == str(execution_id))
+                )
+                if execution and execution.workflow_id:
+                    workflow_id = execution.workflow_id
+
+            if workflow_id:
+                workflow = await session.scalar(
+                    select(Workflow).where(Workflow.id == str(workflow_id))
+                )
+                workflow_requires_review = bool(workflow and workflow.requires_review)
+
+            # Review-gated workflows only earn trust after explicit human approval.
+            if not workflow_requires_review:
+                await trust_score_service.record_task_completed(
+                    agent_id=str(self.config.id),
+                    success=success,
+                    on_time=True,
+                    cost_cents=0,
+                    budget_cents=budget_cents,
+                    tools_used=tools_called,
+                    db=session,
+                )
 
             values = {}
             if success:
@@ -881,6 +1013,36 @@ class AgentRunner:
         learning_context = await self._build_learning_context()
         identity_block = ""
         living_memory_context = ""
+        ceo_preferences_block = ""
+
+        try:
+            async with AsyncSessionLocal() as db:
+                prefs = (
+                    await db.execute(
+                        select(AgentMemoryEntry)
+                        .where(
+                            AgentMemoryEntry.agent_id == str(self.config.id),
+                            AgentMemoryEntry.org_id == str(self.config.org_id),
+                            AgentMemoryEntry.always_inject == True,
+                            AgentMemoryEntry.memory_type == "ceo_preference",
+                        )
+                        .order_by(AgentMemoryEntry.created_at.asc())
+                    )
+                ).scalars().all()
+            if prefs:
+                pref_lines = "\n".join(
+                    f"- {p.content_preview}"
+                    for p in prefs
+                    if getattr(p, "content_preview", None)
+                )
+                if pref_lines:
+                    ceo_preferences_block = (
+                        "CEO PREFERENCES — ALWAYS FOLLOW THESE:\n"
+                        f"{pref_lines}\n"
+                    )
+        except Exception as exc:
+            logger.warning("CEO preference retrieval failed for agent %s: %s", self.config.id, exc)
+            ceo_preferences_block = ""
 
         if getattr(self.config, "persona_name", None):
             company_name = await self._get_company_name(user_id)
@@ -910,6 +1072,7 @@ class AgentRunner:
         parts = [
             part
             for part in (
+                ceo_preferences_block,
                 identity_block,
                 business_context,
                 living_memory_context,
@@ -1066,16 +1229,26 @@ class AgentRunner:
                         })
                     tool_name = event.get("name", "unknown")
                     raw_output = event.get("data", {}).get("output", "")
+                    failure_reason = _tool_failure_reason(raw_output)
                     output_text = self._truncate_text(raw_output, 1000)
                     output_payload = {"result": self._truncate_text(raw_output, 2000)}
-                    success = not output_text.lower().startswith("tool error:")
+                    success = failure_reason is None and not output_text.lower().startswith("tool error:")
+                    step_type = "observation" if success else "error"
                     duration_ms = None
                     if pending_tool_started_at is not None:
                         duration_ms = int((datetime.utcnow() - pending_tool_started_at).total_seconds() * 1000)
+                    if failure_reason:
+                        output_payload["warning"] = failure_reason
+                        if SEARCH_FAILED_MARKER.lower() in failure_reason.lower():
+                            await self._set_execution_warning(
+                                execution_id,
+                                "Web search unavailable — results may be empty",
+                                db=db,
+                            )
                     await self._record_execution_step(
                         execution_id=execution_id,
                         org_id=org_id,
-                        step_type="observation",
+                        step_type=step_type,
                         content=output_text,
                         step_index_ref=step_index_ref,
                         db=db,
@@ -1409,6 +1582,8 @@ class AgentRunner:
             db=db,
             step_index_ref=step_index_ref,
         )
+        self._context["workflow_id"] = workflow_id
+        self._context["execution_id"] = execution_id
         enhanced_system_prompt = await self._build_enhanced_system_prompt(message, user_id=user_id)
         config = {
             "configurable": {"thread_id": thread_id},

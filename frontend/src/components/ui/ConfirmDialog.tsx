@@ -38,7 +38,7 @@ export function ConfirmDialog({
         className="glass-elevated w-full max-w-md overflow-hidden"
         onClick={event => event.stopPropagation()}
       >
-        <div className="flex items-start gap-4 border-b border-white/10 p-5">
+        <div className="flex items-start gap-4 border-b border-white/[0.08] p-5">
           <div className={clsx('grid h-11 w-11 shrink-0 place-items-center rounded-xl border', toneClass)}>
             <AlertTriangle size={20} />
           </div>

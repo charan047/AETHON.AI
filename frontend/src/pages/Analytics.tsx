@@ -31,12 +31,29 @@ import { GlowCard } from '../components/ui/GlowCard'
 import { Skeleton, SkeletonCard } from '../components/ui/Skeleton'
 import { useAnalytics } from '../hooks/useAnalytics'
 import { toast } from '../lib/toast'
+import type { AgentReputation } from '../types'
 
-const PERIODS = [7, 30, 90]
+const PERIODS = [
+  { value: 1, label: 'Today' },
+  { value: 7, label: '7d' },
+  { value: 30, label: '30d' },
+  { value: 90, label: '90d' },
+] as const
 const AGENT_COLORS = ['#2563EB', '#10B981', '#60A5FA', '#34D399', '#F59E0B', '#0EA5E9']
+const CHART_TOOLTIP_STYLE = {
+  background: 'rgba(8,13,26,0.95)',
+  border: '1px solid rgba(99,102,241,0.18)',
+  borderRadius: 12,
+  color: '#fff',
+  backdropFilter: 'blur(16px)',
+}
 
 function money(value = 0, digits = 2) {
   return `$${value.toFixed(digits)}`
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
 }
 
 function successTone(rate: number) {
@@ -59,14 +76,30 @@ function normalizeExecutionData(data: { date: string; count: number }[] = [], pe
   })
 }
 
+function performanceTone(value: number | null, good: number, warning: number) {
+  if (value === null) return 'text-[#8B9DBE]'
+  if (value >= good) return 'text-emerald-300'
+  if (value >= warning) return 'text-amber-300'
+  return 'text-red-300'
+}
+
+function inversePerformanceTone(value: number | null, good: number, warning: number) {
+  if (value === null) return 'text-[#8B9DBE]'
+  if (value < good) return 'text-emerald-300'
+  if (value < warning) return 'text-amber-300'
+  return 'text-red-300'
+}
+
 function AnalyticsEmptyState({
   onOpenAgents,
   message = 'No data yet',
   detail = 'Run an agent to start seeing analytics here.',
+  ctaLabel = 'Go to Agents →',
 }: {
   onOpenAgents: () => void
   message?: string
   detail?: string
+  ctaLabel?: string
 }) {
   return (
     <div className="glass-card flex flex-col items-center justify-center rounded-2xl p-12 text-center">
@@ -74,7 +107,7 @@ function AnalyticsEmptyState({
       <p className="text-sm font-semibold text-[#8B9DBE]">{message}</p>
       <p className="mt-1 text-xs text-[#4B5A73]">{detail}</p>
       <button className="btn-secondary mt-4 text-xs" onClick={onOpenAgents}>
-        Go to Agents →
+        {ctaLabel}
       </button>
     </div>
   )
@@ -116,18 +149,23 @@ function MetricCard({
   value,
   icon: Icon,
   tone,
+  detail,
+  detailTone = 'text-[#4B5A73]',
 }: {
   label: string
   value: string
   icon: LucideIcon
   tone: string
+  detail?: string
+  detailTone?: string
 }) {
   return (
     <GlowCard glowColor="blue" className="p-5">
       <div className="flex items-start justify-between">
         <div>
           <div className="text-sm text-[#8B9DBE]">{label}</div>
-          <div className={`mt-3 font-mono text-3xl font-semibold ${tone}`}>{value}</div>
+          <div className={`mt-3 font-mono text-3xl font-semibold animate-number-flip ${tone}`}>{value}</div>
+          {detail ? <div className={clsx('mt-2 text-xs', detailTone)}>{detail}</div> : null}
         </div>
         <div className="rounded-xl bg-blue-600/12 p-2.5">
           <Icon size={18} className="text-blue-400" />
@@ -173,6 +211,7 @@ export function Analytics() {
   const costPerRun = totalCost / Math.max(workflowRuns, 1)
   const budgetPct = (totalCost / Math.max(budget, 1)) * 100
   const budgetTone = budgetPct >= 100 ? 'bg-red-500' : budgetPct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'
+  const pendingReviewCount = analytics.pendingApprovals.length
 
   const dailyExecutions = useMemo(
     () => normalizeExecutionData(analytics.overview?.daily_executions || [], period),
@@ -186,6 +225,30 @@ export function Analytics() {
   const maxToolCalls = Math.max(1, ...(analytics.tools?.tools || []).map(tool => tool.calls))
   const hasExecutionData = dailyExecutions.some(point => point.count > 0)
   const hasCostByAgentData = costByAgent.some(row => row.cost > 0)
+  const periodLabel = PERIODS.find(item => item.value === period)?.label || `${period}d`
+  const feedbackSignals = useMemo(() => {
+    const reputations = Object.values(analytics.reputations || {}).filter(Boolean) as AgentReputation[]
+    const totals = reputations.reduce(
+      (acc, reputation) => {
+        acc.totalTasks += reputation.total_tasks || 0
+        acc.approved += reputation.approved_count || 0
+        acc.edited += reputation.edited_count || 0
+        acc.rejected += reputation.rejected_count || 0
+        return acc
+      },
+      { totalTasks: 0, approved: 0, edited: 0, rejected: 0 },
+    )
+
+    if (!totals.totalTasks) {
+      return { firstDraftRate: null as number | null, avgRevisions: null as number | null }
+    }
+
+    return {
+      // Best-effort agency quality metrics from existing human review signals.
+      firstDraftRate: clamp((totals.approved / totals.totalTasks) * 100, 0, 100),
+      avgRevisions: (totals.edited + totals.rejected) / totals.totalTasks,
+    }
+  }, [analytics.reputations])
 
   const saveBudget = async () => {
     const next = Number(budgetDraft)
@@ -225,29 +288,55 @@ export function Analytics() {
           <p className="mt-2 text-sm text-[#8B9DBE]">Cost, performance, reliability, and operating signals for your agency.</p>
         </div>
         <div className="glass-card flex rounded-2xl p-1">
-          {PERIODS.map(days => (
+          {PERIODS.map(item => (
             <button
-              key={days}
-              onClick={() => setPeriod(days)}
+              key={item.value}
+              onClick={() => setPeriod(item.value)}
               className={clsx(
                 'rounded-xl px-4 py-2 text-sm transition',
-                period === days ? 'bg-blue-600 text-white shadow-glow-sm' : 'text-[#8B9DBE] hover:bg-white/[0.04] hover:text-white',
+                period === item.value ? 'bg-blue-600 text-white shadow-glow-sm' : 'text-[#8B9DBE] hover:bg-white/[0.04] hover:text-white',
               )}
             >
-              Last {days}d
+              {item.label}
             </button>
           ))}
         </div>
       </div>
 
+      {pendingReviewCount > 0 ? (
+        <div className="glass-card glass-card-amber flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <AlertTriangle size={18} className="text-amber-300" />
+            <div className="text-sm text-amber-100">
+              <span className="font-semibold text-amber-200">{pendingReviewCount}</span>{' '}
+              execution{pendingReviewCount === 1 ? '' : 's'} waiting for review
+            </div>
+          </div>
+          <button
+            className="btn-secondary btn-sm border-amber-400/20 bg-amber-400/10 text-amber-200 hover:border-amber-300/35 hover:bg-amber-400/15 hover:text-amber-100"
+            onClick={() => navigate('/approvals')}
+          >
+            Review now →
+          </button>
+        </div>
+      ) : null}
+
       <section className="space-y-4">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="This Month" value={money(totalCost, 4)} icon={Coins} tone="text-emerald-300" />
+          <MetricCard
+            label={`Spend (${periodLabel})`}
+            value={money(totalCost, 4)}
+            icon={Coins}
+            tone="text-emerald-300"
+            detail={`${workflowRuns} workflow run${workflowRuns === 1 ? '' : 's'} tracked`}
+          />
           <MetricCard
             label="Projected Month-End"
             value={money(projected, 2)}
             icon={TrendingUp}
             tone={projected > budget * 0.8 ? 'text-amber-300' : 'text-blue-300'}
+            detail={projected > budget ? 'Projected over budget' : 'Projection based on current run-rate'}
+            detailTone={projected > budget ? 'text-amber-300' : 'text-[#4B5A73]'}
           />
           <GlowCard glowColor="blue" className="p-5">
             <div className="flex items-start justify-between">
@@ -265,7 +354,7 @@ export function Analytics() {
                     <button className="btn-primary h-10 text-xs" onClick={saveBudget}>Save</button>
                   </div>
                 ) : (
-                  <div className="mt-3 font-mono text-3xl font-semibold text-white">{money(budget, 2)}</div>
+                  <div className="mt-3 font-mono text-3xl font-semibold text-white animate-number-flip">{money(budget, 2)}</div>
                 )}
               </div>
               <button
@@ -278,8 +367,42 @@ export function Analytics() {
                 <Edit3 size={15} />
               </button>
             </div>
+            <div className="mt-2 text-xs text-[#4B5A73]">Editable agency budget target</div>
           </GlowCard>
-          <MetricCard label="Cost per Workflow Run" value={money(costPerRun, 4)} icon={GitBranch} tone="text-blue-300" />
+          <MetricCard
+            label="Cost per Workflow Run"
+            value={money(costPerRun, 4)}
+            icon={GitBranch}
+            tone="text-blue-300"
+            detail={workflowRuns ? 'Average spend per run in the selected window' : 'Waiting for first workflow run'}
+          />
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <MetricCard
+            label="First-Draft Rate"
+            value={feedbackSignals.firstDraftRate === null ? '—' : `${feedbackSignals.firstDraftRate.toFixed(1)}%`}
+            icon={ShieldAlert}
+            tone={performanceTone(feedbackSignals.firstDraftRate, 70, 40)}
+            detail={
+              feedbackSignals.firstDraftRate === null
+                ? 'Waiting for human review data'
+                : 'Derived from approval signals already collected'
+            }
+            detailTone={feedbackSignals.firstDraftRate === null ? 'text-[#4B5A73]' : performanceTone(feedbackSignals.firstDraftRate, 70, 40)}
+          />
+          <MetricCard
+            label="Avg Revisions"
+            value={feedbackSignals.avgRevisions === null ? '—' : feedbackSignals.avgRevisions.toFixed(2)}
+            icon={RefreshCcw}
+            tone={inversePerformanceTone(feedbackSignals.avgRevisions, 1.3, 2)}
+            detail={
+              feedbackSignals.avgRevisions === null
+                ? 'Waiting for edit/reject signals'
+                : 'Best-effort average from existing edit and rejection feedback'
+            }
+            detailTone={feedbackSignals.avgRevisions === null ? 'text-[#4B5A73]' : inversePerformanceTone(feedbackSignals.avgRevisions, 1.3, 2)}
+          />
         </div>
 
         <GlowCard glowColor={budgetPct >= 100 ? 'red' : budgetPct >= 80 ? 'amber' : 'emerald'} className="p-5">
@@ -302,25 +425,19 @@ export function Analytics() {
             {!hasExecutionData ? (
               <AnalyticsEmptyState onOpenAgents={() => navigate('/agents')} />
             ) : (
-              <div className="h-[300px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={dailyExecutions} margin={{ left: 0, right: 12, top: 8, bottom: 0 }}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                    <XAxis dataKey="date" tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} minTickGap={24} />
-                    <YAxis allowDecimals={false} tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} />
-                    <Tooltip
-                      contentStyle={{
-                        background: 'rgba(8,13,26,0.95)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 12,
-                        color: '#fff',
-                        backdropFilter: 'blur(16px)',
-                      }}
-                      formatter={value => [`${Number(value)} run${Number(value) === 1 ? '' : 's'}`, 'Executions']}
-                    />
-                    <Bar dataKey="count" fill="#2563EB" radius={[8, 8, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <div className="h-[300px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={dailyExecutions} margin={{ left: 0, right: 12, top: 8, bottom: 0 }}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                      <XAxis dataKey="date" tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} minTickGap={24} />
+                      <YAxis allowDecimals={false} tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} />
+                      <Tooltip
+                        contentStyle={CHART_TOOLTIP_STYLE}
+                        formatter={value => [`${Number(value)} run${Number(value) === 1 ? '' : 's'}`, 'Executions']}
+                      />
+                      <Bar dataKey="count" fill="#2563EB" radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
               </div>
             )}
             <p className="mt-3 text-xs text-[#4B5A73]">
@@ -344,13 +461,7 @@ export function Analytics() {
                   <XAxis dataKey="name" tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} />
                   <YAxis tick={{ fill: '#8B9DBE', fontSize: 11 }} tickLine={false} axisLine={false} />
                   <Tooltip
-                    contentStyle={{
-                      background: 'rgba(8,13,26,0.95)',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: 12,
-                      color: '#fff',
-                      backdropFilter: 'blur(16px)',
-                    }}
+                    contentStyle={CHART_TOOLTIP_STYLE}
                     formatter={value => [money(Number(value), 6), 'Total cost']}
                   />
                   <Bar dataKey="cost" radius={[8, 8, 0, 0]}>

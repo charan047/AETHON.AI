@@ -38,7 +38,7 @@ TEMPLATE: MarketplaceTemplate = {
     },
     "agent": {
         "name": "Support Triage",
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "temperature": 0.2,
         "max_iterations": 12,
         "tools": ["gmail_read", "gmail_send", "slack_post"],

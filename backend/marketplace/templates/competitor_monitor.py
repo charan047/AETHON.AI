@@ -39,7 +39,7 @@ TEMPLATE: MarketplaceTemplate = {
     },
     "agent": {
         "name": "Competitor Monitor",
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "temperature": 0.1,
         "max_iterations": 15,
         "tools": ["web_scrape", "web_search", "slack_post", "gmail_send"],

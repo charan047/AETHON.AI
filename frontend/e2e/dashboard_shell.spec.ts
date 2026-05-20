@@ -8,8 +8,8 @@ test.describe('Dashboard Shell', () => {
     await registerAndCompleteOnboarding(request, email, password)
 
     await page.goto('/login')
-    await page.getByPlaceholder(/email/i).fill(email)
-    await page.getByPlaceholder(/password/i).fill(password)
+    await page.getByLabel(/^email$/i).fill(email)
+    await page.getByLabel(/^password$/i).fill(password)
     await page.locator('button[type="submit"]').click()
 
     await page.waitForURL(url => !url.pathname.includes('/login') && !url.pathname.includes('/onboarding'))

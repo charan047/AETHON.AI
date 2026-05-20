@@ -26,6 +26,7 @@ from slowapi.errors import RateLimitExceeded
 from config import settings, AVAILABLE_MODELS
 from database import init_db
 from api import api_router
+from api.a2a import router as a2a_router
 from api.tools_registry import router as public_tools_registry_router
 from api.triggers import public_router as public_webhook_router
 from channels.telegram import TelegramChannel
@@ -304,7 +305,7 @@ app.add_middleware(
     allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Api-Key"],
+    allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Api-Key", "X-A2A-Key"],
     expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-Request-ID"],
     max_age=600,
 )
@@ -332,6 +333,7 @@ async def api_request_metrics_middleware(request, call_next):
 
 
 app.include_router(api_router, prefix="/api")
+app.include_router(a2a_router)
 app.include_router(public_tools_registry_router, prefix="/tools", tags=["tools-registry"])
 app.include_router(public_webhook_router)
 

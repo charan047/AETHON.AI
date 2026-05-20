@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import ReactFlow, {
@@ -8,15 +8,16 @@ import ReactFlow, {
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import { workflowsApi, agentsApi, executionsApi, extractApiError } from '../api/client'
+import { PageShell } from '../components/Layout/PageShell'
 import { AgentNode } from '../components/Workflow/AgentNode'
 import { ApprovalNode } from '../components/Workflow/nodes/ApprovalNode'
 import { ConditionNode } from '../components/Workflow/nodes/ConditionNode'
 import { ParallelGroupNode } from '../components/Workflow/nodes/ParallelGroupNode'
 import { EmptyState } from '../components/ui/EmptyState'
 import { VersionHistory } from '../components/workflows/VersionHistory'
-import { Plus, Save, Play, Square, Trash2, GitBranch, ChevronLeft, X, Layers, MessageSquare, Copy, Cpu, GitMerge, Hand, GitCompareArrows, CalendarClock, Webhook, SunMedium, Newspaper, FileText } from 'lucide-react'
+import { Plus, Save, Play, Square, Trash2, GitBranch, ChevronLeft, X, Layers, MessageSquare, Copy, Cpu, GitMerge, Hand, GitCompareArrows, CalendarClock, Webhook, SunMedium, Newspaper, FileText, Search, Clock3 } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { Workflow, Agent, AutomationTemplate, ScheduledWorkflow } from '../types'
+import type { Workflow, Agent, AutomationTemplate, ScheduledWorkflow, WorkflowInputVariable } from '../types'
 import { SkeletonCard } from '../components/ui/Skeleton'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
 import { toast } from '../lib/toast'
@@ -29,8 +30,8 @@ const nodeTypes = {
 }
 
 const SCHEDULE_PRESETS = [
-  { label: 'Every day 8am', cron: '0 8 * * *' },
-  { label: 'Every Monday', cron: '0 9 * * 1' },
+  { label: 'Weekdays 8am', cron: '0 8 * * 1-5' },
+  { label: 'Monday', cron: '0 9 * * 1' },
   { label: 'Friday 5pm', cron: '0 17 * * 5' },
 ]
 
@@ -40,6 +41,54 @@ function formatRunTime(iso?: string | null) {
   return Number.isNaN(date.getTime())
     ? 'Not scheduled yet'
     : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+function workflowStatusBadge(status?: string | null) {
+  if (status === 'active' || status === 'completed') return 'badge badge-green'
+  if (status === 'paused' || status === 'pending_review') return 'badge badge-amber'
+  if (status === 'failed') return 'badge badge-red'
+  return 'badge badge-glass'
+}
+
+function statusActionLabel(status?: string | null) {
+  if (status === 'active') return 'Pause'
+  if (status === 'paused') return 'Resume'
+  return 'Activate'
+}
+
+function nextStatus(status?: string | null) {
+  if (status === 'active') return 'paused'
+  return 'active'
+}
+
+function workflowSortOrder(status?: string | null) {
+  if (status === 'active') return 0
+  if (status === 'paused') return 1
+  return 2
+}
+
+function canActivateWorkflow(workflow: Workflow) {
+  return Boolean((workflow.nodes || []).length)
+}
+
+function createWorkflowDraft(): Partial<Workflow> {
+  return {
+    name: 'New Workflow',
+    description: 'Describe the operating loop this workflow should run for your agency.',
+    trigger: 'manual',
+    execution_mode: 'sequential',
+    requires_review: false,
+    input_variables: [],
+    nodes: [
+      {
+        id: 'node-1',
+        type: 'agentNode',
+        position: { x: 220, y: 200 },
+        data: { label: 'Agent 1' },
+      },
+    ],
+    edges: [],
+  }
 }
 
 function automationIcon(id: string) {
@@ -58,6 +107,37 @@ function normalizeNodePosition(position: { x?: number; y?: number } | undefined,
     x: typeof position?.x === 'number' ? position.x : 180 + index * 220,
     y: typeof position?.y === 'number' ? position.y : 180,
   }
+}
+
+function normalizeWorkflowInputVariables(inputVariables?: WorkflowInputVariable[] | null): WorkflowInputVariable[] {
+  return (inputVariables || []).map((variable, index) => ({
+    name: String(variable.name || `input_${index + 1}`),
+    label: String(variable.label || variable.name || `Input ${index + 1}`),
+    type: variable.type === 'select' || variable.type === 'number' ? variable.type : 'text',
+    required: Boolean(variable.required),
+    default: String(variable.default || ''),
+    options: Array.isArray(variable.options)
+      ? variable.options.map(option => String(option).trim()).filter(Boolean)
+      : [],
+  }))
+}
+
+function createWorkflowInputVariable(index: number): WorkflowInputVariable {
+  return {
+    name: `input_${index + 1}`,
+    label: `Input ${index + 1}`,
+    type: 'text',
+    required: false,
+    default: '',
+    options: [],
+  }
+}
+
+function buildVariableRunDefaults(inputVariables: WorkflowInputVariable[]): Record<string, string> {
+  return inputVariables.reduce<Record<string, string>>((acc, variable) => {
+    acc[variable.name] = variable.default || ''
+    return acc
+  }, {})
 }
 
 function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
@@ -90,17 +170,32 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
   const [name, setName] = useState(workflow.name || '')
   const [desc, setDesc] = useState(workflow.description || '')
   const [selectedNode, setSelectedNode] = useState<Node | null>(null)
+  const [isEditingName, setIsEditingName] = useState(false)
   const [runInput, setRunInput] = useState('')
+  const [inputVariables, setInputVariables] = useState<WorkflowInputVariable[]>(
+    normalizeWorkflowInputVariables(workflow.input_variables),
+  )
+  const [runPanelOpen, setRunPanelOpen] = useState(false)
+  const [runVariableValues, setRunVariableValues] = useState<Record<string, string>>(
+    buildVariableRunDefaults(normalizeWorkflowInputVariables(workflow.input_variables)),
+  )
+  const [runValidationError, setRunValidationError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [runningId, setRunningId] = useState<string | null>(null)
   const [mode, setMode] = useState<'sequential' | 'orchestrator'>(workflow.execution_mode || 'sequential')
   const [orchPrompt, setOrchPrompt] = useState(workflow.orchestration_prompt || '')
+  const [requiresReview, setRequiresReview] = useState(Boolean(workflow.requires_review))
   const [historyOpen, setHistoryOpen] = useState(false)
   const [scheduleValue, setScheduleValue] = useState(workflow.schedule || '')
   const [scheduleTimezone, setScheduleTimezone] = useState(workflow.schedule_timezone || 'UTC')
   const [scheduleEnabled, setScheduleEnabled] = useState(Boolean(workflow.schedule_enabled))
   const idRef = useRef(Date.now())
+  const runPanelRef = useRef<HTMLDivElement | null>(null)
   const qc = useQueryClient()
+  const hasStructuredInputs = inputVariables.length > 0
+  const nextRunLabel = scheduleEnabled && scheduleValue ? 'Runs after schedule save' : 'Manual only'
+  const selectedSchedulePreset = SCHEDULE_PRESETS.find(preset => preset.cron === scheduleValue)?.cron || null
+  const webhookId = useMemo(() => workflow.id || 'unsaved', [workflow.id])
 
   const { data: webhookInfo } = useQuery({
     queryKey: ['workflow-webhook-url', workflow.id],
@@ -118,6 +213,31 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
     },
     onError: error => toast.error(extractApiError(error)),
   })
+
+  useEffect(() => {
+    if (!runPanelOpen) return undefined
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setRunPanelOpen(false)
+        setRunValidationError(null)
+      }
+    }
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (runPanelRef.current && event.target instanceof globalThis.Node && !runPanelRef.current.contains(event.target)) {
+        setRunPanelOpen(false)
+        setRunValidationError(null)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('mousedown', onPointerDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('mousedown', onPointerDown)
+    }
+  }, [runPanelOpen])
 
   const onConnect = useCallback((connection: Connection) => {
     setEdges(es => addEdge({ ...connection, animated: true, markerEnd: { type: MarkerType.ArrowClosed } }, es))
@@ -218,7 +338,16 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
       },
     }))
     const cleanEdges = edges.map((e: any) => ({ id: e.id, source: e.source, target: e.target, animated: e.animated, label: typeof e.label === 'string' ? e.label : undefined }))
-    onSave({ name, description: desc, nodes: cleanNodes, edges: cleanEdges, execution_mode: mode, orchestration_prompt: orchPrompt })
+    onSave({
+      name,
+      description: desc,
+      nodes: cleanNodes,
+      edges: cleanEdges,
+      execution_mode: mode,
+      orchestration_prompt: orchPrompt,
+      requires_review: requiresReview,
+      input_variables: inputVariables,
+    })
   }
 
   const run = async () => {
@@ -240,243 +369,459 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
     }
   }
 
+  const openRunPanel = () => {
+    if (!workflow.id) { toast.error('Save the workflow first'); return }
+    setRunVariableValues(buildVariableRunDefaults(inputVariables))
+    setRunValidationError(null)
+    setRunPanelOpen(true)
+  }
+
+  const runWithVariables = async () => {
+    if (!workflow.id) { toast.error('Save the workflow first'); return }
+
+    const missing = inputVariables
+      .filter(variable => variable.required && !(runVariableValues[variable.name] || variable.default || '').trim())
+      .map(variable => variable.label || variable.name)
+
+    if (missing.length > 0) {
+      const message = `Please fill the required inputs: ${missing.join(', ')}`
+      setRunValidationError(message)
+      toast.error(message)
+      return
+    }
+
+    setRunning(true)
+    setRunningId(null)
+    setRunValidationError(null)
+    try {
+      const execution = await workflowsApi.run(
+        workflow.id,
+        Object.fromEntries(
+          Object.entries(runVariableValues).map(([key, value]) => [key, value.trim()]),
+        ),
+      )
+      setRunning(true)
+      setRunningId(execution.execution_id)
+      setRunPanelOpen(false)
+      toast.info('Run started')
+      navigate(`/executions/${execution.execution_id}`)
+    } catch (e) {
+      setRunning(false)
+      setRunningId(null)
+      toast.error(extractApiError(e))
+    }
+  }
+
   return (
-    <div className="flex h-full flex-col bg-obsidian-950">
-      {/* Toolbar */}
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[0.08] bg-obsidian-925 px-4">
-        <button className="btn-ghost" onClick={onClose}><ChevronLeft size={18} /></button>
-        <div className="flex items-center gap-2 flex-1">
-          <input className="w-48 border-none bg-transparent text-base font-semibold text-white outline-none"
-            placeholder="Workflow Name" value={name} onChange={e => setName(e.target.value)} />
-          <input className="flex-1 border-none bg-transparent text-sm text-obsidian-500 outline-none"
-            placeholder="Description..." value={desc} onChange={e => setDesc(e.target.value)} />
-        </div>
-        <button className="btn-secondary text-xs" onClick={addNode}><Plus size={14} /> Agent</button>
-        <button className="btn-secondary text-xs text-amber-300" onClick={addApprovalNode}><Hand size={14} /> Approval</button>
-        <button className="btn-secondary text-xs text-blue-300" onClick={addConditionNode}><GitBranch size={14} /> Condition</button>
-        <button className="btn-secondary text-xs text-fuchsia-300" onClick={addParallelGroupNode}><GitCompareArrows size={14} /> Parallel</button>
-
-        {/* Execution mode toggle */}
-        <div className="flex items-center gap-1 rounded-lg border border-white/[0.08] bg-obsidian-900 p-0.5">
-          <button
-            onClick={() => setMode('sequential')}
-            className={clsx('flex items-center gap-1 rounded-md px-2.5 py-1 text-xs transition-colors', mode === 'sequential' ? 'bg-blue-600 text-white shadow-glow-sm' : 'text-obsidian-400 hover:text-white')}
-          >
-            <GitMerge size={12} /> Sequential
-          </button>
-          <button
-            onClick={() => setMode('orchestrator')}
-            className={clsx('flex items-center gap-1 rounded-md px-2.5 py-1 text-xs transition-colors', mode === 'orchestrator' ? 'bg-cyan-500 text-white shadow-glow-cyan' : 'text-obsidian-400 hover:text-white')}
-          >
-            <Cpu size={12} /> Orchestrator
-          </button>
-        </div>
-
-        {workflow.id && (
-          <button className="btn-secondary text-xs" onClick={() => setHistoryOpen(true)}>
-            <GitCompareArrows size={14} /> History
-          </button>
-        )}
-        <button className="btn-secondary text-xs" onClick={save}><Save size={14} /> Save</button>
-
-        {workflow.id && (
-          <div className="flex items-center gap-2 border-l border-white/[0.08] pl-3">
-            <input className="input w-48 text-xs py-1.5" placeholder="Enter task input..." value={runInput} onChange={e => setRunInput(e.target.value)} />
-            <button className="btn-primary text-xs" onClick={run} disabled={running}>
-              <Play size={14} /> {running ? 'Running...' : 'Run'}
-            </button>
-            {running && runningId && (
-              <button
-                className="btn-danger text-xs"
-                onClick={async () => {
-                  try {
-                    await executionsApi.cancel(runningId)
-                    setRunning(false)
-                    setRunningId(null)
-                    toast.success('Execution stopped')
-                  } catch (e) {
-                    toast.error(extractApiError(e))
+    <div className="flex h-full flex-col bg-[var(--bg)]">
+      <div className="border-b border-[var(--border)] px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button className="btn-ghost" onClick={onClose}><ChevronLeft size={18} /></button>
+          <div className="min-w-0 flex-1">
+            {isEditingName ? (
+              <input
+                autoFocus
+                aria-label="Workflow name"
+                className="w-full rounded-lg border border-[var(--border)] bg-transparent px-2 py-1 text-xl font-semibold tracking-[-0.03em] text-[var(--t1)] outline-none focus:border-indigo-400"
+                value={name}
+                placeholder="Workflow name"
+                onChange={event => setName(event.target.value)}
+                onBlur={() => {
+                  setIsEditingName(false)
+                  if (workflow.id) save()
+                }}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    setIsEditingName(false)
+                    if (workflow.id) save()
                   }
                 }}
-              >
-                <Square size={14} /> Stop
+              />
+            ) : (
+              <button type="button" className="text-left" aria-label="Edit workflow name" onClick={() => setIsEditingName(true)}>
+                <div className="truncate text-xl font-semibold tracking-[-0.03em] text-[var(--t1)]">{name || workflow.name || 'Untitled workflow'}</div>
+                <div className="mt-1 truncate text-xs text-[var(--t2)]">{desc || 'Click the title to rename. Save persists nodes, review rules, variables, and schedule.'}</div>
               </button>
             )}
           </div>
-        )}
+          <div className="flex flex-wrap items-center gap-2">
+            {workflow.id && (
+              <button className="btn-ghost text-xs" onClick={() => setHistoryOpen(true)}>
+                <GitCompareArrows size={14} /> History
+              </button>
+            )}
+            <button className="btn-secondary text-xs" onClick={save}>
+              <Save size={14} /> Save
+            </button>
+            {workflow.id && (
+              <div className="relative flex items-center gap-2" ref={runPanelRef}>
+                {hasStructuredInputs ? (
+                  <>
+                    <button className="btn-primary text-xs" onClick={openRunPanel} disabled={running}>
+                      <Play size={14} /> {running ? 'Running...' : 'Run'}
+                    </button>
+                    {runPanelOpen && (
+                      <div className="glass-elevated absolute right-0 top-[calc(100%+0.75rem)] z-30 w-[360px] p-4">
+                        <div className="mb-3 flex flex-wrap gap-2">
+                          {inputVariables.map(variable => (
+                            <span key={variable.name} className="badge badge-indigo">
+                              {variable.label || variable.name}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="space-y-3">
+                          {inputVariables.map(variable => (
+                            <label key={variable.name} className="block">
+                              <div className="mb-1 flex items-center gap-1 text-xs font-medium text-white">
+                                <span>{variable.label || variable.name}</span>
+                                {variable.required && <span className="text-red-400">*</span>}
+                              </div>
+                              {variable.type === 'select' ? (
+                                <select
+                                  className="input w-full"
+                                  value={runVariableValues[variable.name] ?? variable.default ?? ''}
+                                  onChange={event => setRunVariableValues(current => ({ ...current, [variable.name]: event.target.value }))}
+                                >
+                                  <option value="">Select an option</option>
+                                  {(variable.options || []).map(option => (
+                                    <option key={option} value={option}>{option}</option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <input
+                                  type={variable.type === 'number' ? 'number' : 'text'}
+                                  className="input w-full"
+                                  placeholder={variable.default || `Enter ${variable.label || variable.name}`}
+                                  value={runVariableValues[variable.name] ?? variable.default ?? ''}
+                                  onChange={event => setRunVariableValues(current => ({ ...current, [variable.name]: event.target.value }))}
+                                />
+                              )}
+                            </label>
+                          ))}
+                        </div>
+                        {runValidationError ? <p className="mt-3 text-xs text-red-300">{runValidationError}</p> : null}
+                        <div className="mt-4 flex items-center justify-end gap-2">
+                          <button type="button" className="btn-ghost text-xs" onClick={() => { setRunPanelOpen(false); setRunValidationError(null) }}>
+                            Cancel
+                          </button>
+                          <button className="btn-primary text-xs" onClick={runWithVariables} disabled={running}>
+                            <Play size={14} /> Start Run
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <input
+                      className="input w-48 text-xs"
+                      placeholder="Task input..."
+                      value={runInput}
+                      onChange={event => setRunInput(event.target.value)}
+                    />
+                    <button className="btn-primary text-xs" onClick={run} disabled={running}>
+                      <Play size={14} /> Run
+                    </button>
+                  </>
+                )}
+                {running && runningId ? (
+                  <button
+                    className="btn-danger text-xs"
+                    onClick={async () => {
+                      try {
+                        await executionsApi.cancel(runningId)
+                        setRunning(false)
+                        setRunningId(null)
+                        toast.success('Execution stopped')
+                      } catch (e) {
+                        toast.error(extractApiError(e))
+                      }
+                    }}
+                  >
+                    <Square size={14} /> Stop
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button className="btn-secondary text-xs" onClick={addNode}><Plus size={14} /> Agent</button>
+          <button className="btn-secondary text-xs" onClick={addApprovalNode}><Hand size={14} /> Approval</button>
+          <button className="btn-secondary text-xs" onClick={addConditionNode}><GitBranch size={14} /> Condition</button>
+          <button className="btn-secondary text-xs" onClick={addParallelGroupNode}><GitCompareArrows size={14} /> Parallel</button>
+          <div className="ml-auto flex items-center gap-1 rounded-xl border border-[var(--border)] bg-white/[0.03] p-1">
+            <button
+              onClick={() => setMode('sequential')}
+              className={clsx('rounded-lg px-2.5 py-1 text-xs transition-colors', mode === 'sequential' ? 'bg-indigo-500/15 text-indigo-300' : 'text-[var(--t3)] hover:text-[var(--t1)]')}
+            >
+              <span className="inline-flex items-center gap-1"><GitMerge size={12} /> Sequential</span>
+            </button>
+            <button
+              onClick={() => setMode('orchestrator')}
+              className={clsx('rounded-lg px-2.5 py-1 text-xs transition-colors', mode === 'orchestrator' ? 'bg-indigo-500/15 text-indigo-300' : 'text-[var(--t3)] hover:text-[var(--t1)]')}
+            >
+              <span className="inline-flex items-center gap-1"><Cpu size={12} /> Orchestrator</span>
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* Orchestration prompt bar — shown only in orchestrator mode */}
       {mode === 'orchestrator' && (
-        <div className="flex shrink-0 items-start gap-3 border-b border-cyan-400/15 bg-cyan-400/5 px-4 py-2.5">
-          <div className="flex items-center gap-1.5 whitespace-nowrap pt-1.5 text-xs font-medium text-cyan-300">
-            <Cpu size={12} /> Orchestration Prompt
-          </div>
-          <textarea
-            className="flex-1 resize-none rounded-lg border border-cyan-400/15 bg-obsidian-950/60 px-3 py-1.5 text-xs text-obsidian-100 placeholder-obsidian-600 outline-none focus:border-cyan-400/60"
-            rows={2}
-            placeholder="Describe how the orchestrator should coordinate agents — e.g. 'First use the Researcher to gather facts, then pass results to the Writer to produce a report. Always synthesize a final answer.'"
-            value={orchPrompt}
-            onChange={e => setOrchPrompt(e.target.value)}
-          />
-        </div>
-      )}
-
-      {workflow.id && (
-        <div className="grid shrink-0 gap-4 border-b border-white/[0.08] bg-[#080D1A]/80 px-4 py-4 lg:grid-cols-[1.2fr_1fr]">
-          <div className="glass-card p-4">
-            <div className="mb-3 flex items-center gap-2">
-              <div className="rounded-xl bg-blue-600/12 p-2 text-blue-400">
-                <CalendarClock size={16} />
-              </div>
-              <div>
-                <h3 className="text-sm font-semibold text-white">Schedule</h3>
-                <p className="text-xs text-[#8B9DBE]">Run this workflow automatically on a cron schedule.</p>
-              </div>
+        <div className="border-b border-[var(--border)] bg-white/[0.02] px-4 py-3">
+          <div className="glass-card p-3">
+            <div className="mb-2 inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--t3)]">
+              <Cpu size={12} /> Orchestration Prompt
             </div>
-            <div className="flex flex-wrap gap-2">
-              {SCHEDULE_PRESETS.map(preset => (
-                <button
-                  key={preset.cron}
-                  type="button"
-                  onClick={() => {
-                    setScheduleEnabled(true)
-                    setScheduleValue(preset.cron)
-                  }}
-                  className={clsx(
-                    'rounded-xl border px-3 py-2 text-xs font-medium transition-all duration-150',
-                    scheduleValue === preset.cron
-                      ? 'border-blue-500/50 bg-blue-600/12 text-blue-300'
-                      : 'border-white/[0.08] bg-white/[0.03] text-[#8B9DBE] hover:bg-white/[0.04]',
-                  )}
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-[1fr_180px_120px]">
-              <input
-                className="input"
-                placeholder="0 8 * * 1-5"
-                value={scheduleValue}
-                onChange={e => setScheduleValue(e.target.value)}
-              />
-              <select className="input" value={scheduleTimezone} onChange={e => setScheduleTimezone(e.target.value)}>
-                {['UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Asia/Kolkata'].map(zone => (
-                  <option key={zone} value={zone}>{zone}</option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className={scheduleEnabled ? 'btn-secondary' : 'btn-primary'}
-                onClick={() => setScheduleEnabled(current => !current)}
-              >
-                {scheduleEnabled ? 'Enabled' : 'Enable'}
-              </button>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs text-[#4B5A73]">
-                Current mode: {scheduleEnabled ? 'Scheduled' : 'Manual'}
-              </p>
-              <button
-                className="btn-primary text-xs"
-                onClick={() => scheduleMut.mutate()}
-                disabled={!scheduleValue || scheduleMut.isPending}
-              >
-                {scheduleMut.isPending ? 'Saving…' : 'Save Schedule'}
-              </button>
-            </div>
-          </div>
-
-          <div className="glass-card p-4">
-            <div className="mb-3 flex items-center gap-2">
-              <div className="rounded-xl bg-emerald-600/12 p-2 text-emerald-400">
-                <Webhook size={16} />
-              </div>
-              <div>
-                <h3 className="text-sm font-semibold text-white">Webhook trigger</h3>
-                <p className="text-xs text-[#8B9DBE]">Trigger this workflow from external tools without logging in.</p>
-              </div>
-            </div>
-            {webhookInfo ? (
-              <>
-                <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2">
-                  <div className="flex items-start gap-2">
-                    <code className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-[#8B9DBE]">
-                      {webhookInfo.webhook_url}
-                    </code>
-                    <button className="btn-ghost px-2 py-1 text-xs" onClick={() => {
-                      navigator.clipboard.writeText(webhookInfo.webhook_url)
-                      toast.success('Webhook URL copied')
-                    }}>
-                      <Copy size={12} />
-                    </button>
-                  </div>
-                </div>
-                <pre className="mt-3 overflow-x-auto rounded-xl border border-white/[0.08] bg-black/20 p-3 text-[11px] text-[#4B5A73]">
-                  {webhookInfo.curl_example}
-                </pre>
-              </>
-            ) : (
-              <p className="text-xs text-[#4B5A73]">Save this workflow to generate a signed webhook URL.</p>
-            )}
+            <textarea
+              className="input min-h-[84px] w-full resize-none py-3"
+              placeholder="Describe how the orchestrator should coordinate agents."
+              value={orchPrompt}
+              onChange={e => setOrchPrompt(e.target.value)}
+            />
           </div>
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Canvas */}
-        <div className="obsidian-grid relative flex-1" data-testid="workflow-builder">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <div className="wf-canvas relative flex-1" data-testid="workflow-builder">
           <ReactFlow
-            nodes={nodes} edges={edges}
-            onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
-            onConnect={onConnect} nodeTypes={nodeTypes}
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            nodeTypes={nodeTypes}
             onNodeClick={(_, node) => setSelectedNode(node)}
             onPaneClick={() => setSelectedNode(null)}
             fitView
-            defaultEdgeOptions={{ animated: true, style: { stroke: '#2563EB', strokeWidth: 2 }, markerEnd: { type: MarkerType.ArrowClosed, color: '#2563EB' } }}
+            defaultEdgeOptions={{
+              animated: true,
+              style: { stroke: 'rgba(99,102,241,0.82)', strokeWidth: 1.8, filter: 'drop-shadow(0 0 6px rgba(99,102,241,0.35))' },
+              markerEnd: { type: MarkerType.ArrowClosed, color: 'rgba(99,102,241,0.82)' },
+            }}
           >
-            <Background color="rgba(37,99,235,0.22)" gap={22} />
+            <Background color="rgba(99,102,241,0.16)" gap={22} />
             <Controls />
-            <MiniMap nodeColor="#2563EB" maskColor="rgba(10,10,15,0.72)" />
+            <MiniMap nodeColor="rgba(255,255,255,0.6)" maskColor="rgba(5,9,20,0.82)" />
           </ReactFlow>
 
-          {nodes.length === 0 && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="text-center">
-                <GitBranch size={40} className="mx-auto mb-3 text-obsidian-600" />
-                <div className="text-sm text-obsidian-400">Add nodes to build your workflow</div>
-                <div className="mt-1 text-xs text-obsidian-600">Compose agents, approvals, conditions, and parallel phases</div>
+          {nodes.length === 0 ? (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <div className="rounded-2xl border border-dashed border-white/[0.10] bg-black/15 px-6 py-8 text-center backdrop-blur-sm">
+                <GitBranch size={32} className="mx-auto mb-3 text-[var(--t3)]" />
+                <div className="text-sm text-[var(--t2)]">Add nodes to build your workflow</div>
+                <div className="mt-1 text-xs text-[var(--t3)]">Compose agents, approvals, conditions, and parallel phases.</div>
               </div>
             </div>
-          )}
+          ) : null}
         </div>
 
-        {/* Agent Assignment Panel */}
-        {selectedNode && selectedNode.type === 'agentNode' && (
-          <div className="w-72 overflow-y-auto border-l border-white/[0.08] bg-obsidian-925 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-white">Assign Agent</h3>
-              <button onClick={() => setSelectedNode(null)} className="btn-ghost p-1"><X size={14} /></button>
+        {workflow.id ? (
+          <aside className="glass-elevated min-h-0 w-[380px] overflow-y-auto border-l border-white/[0.07] p-4">
+            <div className="space-y-4">
+              <div className="glass-card p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-white">Require my review</div>
+                    <div className="mt-1 text-xs text-[var(--t2)]">Outputs pause for approval before the run completes.</div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={requiresReview}
+                    onClick={() => setRequiresReview(value => !value)}
+                    className={clsx(
+                      'relative inline-flex h-7 w-12 items-center rounded-full border transition-colors duration-200',
+                      requiresReview ? 'border-indigo-500/30 bg-indigo-500/15' : 'border-white/[0.10] bg-white/[0.04]',
+                    )}
+                  >
+                    <span className={clsx('inline-block h-5 w-5 rounded-full bg-white shadow transition-transform duration-200', requiresReview ? 'translate-x-6' : 'translate-x-1')} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="glass-card p-4">
+                <div className="section-title">Schedule</div>
+                <div className="flex flex-wrap gap-2">
+                  {SCHEDULE_PRESETS.map(preset => (
+                    <button
+                      key={preset.cron}
+                      type="button"
+                      onClick={() => {
+                        setScheduleEnabled(true)
+                        setScheduleValue(preset.cron)
+                      }}
+                      className={clsx(
+                        'rounded-full border px-3 py-1.5 text-xs transition-all duration-150',
+                        selectedSchedulePreset === preset.cron
+                          ? 'border-indigo-500/30 bg-indigo-500/15 text-indigo-300'
+                          : 'border-white/[0.10] bg-white/[0.03] text-[var(--t2)] hover:text-[var(--t1)]',
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setScheduleEnabled(true)}
+                    className={clsx(
+                      'rounded-full border px-3 py-1.5 text-xs transition-all duration-150',
+                      !selectedSchedulePreset && scheduleEnabled
+                        ? 'border-indigo-500/30 bg-indigo-500/15 text-indigo-300'
+                        : 'border-white/[0.10] bg-white/[0.03] text-[var(--t2)] hover:text-[var(--t1)]',
+                    )}
+                  >
+                    Custom
+                  </button>
+                </div>
+                <div className="mt-3 grid gap-3">
+                  <input className="input" placeholder="0 8 * * 1-5" value={scheduleValue} onChange={e => setScheduleValue(e.target.value)} />
+                  <select className="input" value={scheduleTimezone} onChange={e => setScheduleTimezone(e.target.value)}>
+                    {['UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Asia/Kolkata'].map(zone => (
+                      <option key={zone} value={zone}>{zone}</option>
+                    ))}
+                  </select>
+                  <div className="font-mono text-[11px] text-[var(--t3)]">Next run: {nextRunLabel}</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <button type="button" className={scheduleEnabled ? 'btn-secondary btn-sm' : 'btn-ghost btn-sm'} onClick={() => setScheduleEnabled(current => !current)}>
+                      {scheduleEnabled ? 'Scheduled' : 'Manual'}
+                    </button>
+                    <button className="btn-primary btn-sm" onClick={() => scheduleMut.mutate()} disabled={!scheduleValue || scheduleMut.isPending}>
+                      {scheduleMut.isPending ? 'Saving…' : 'Save Schedule'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="glass-card p-4">
+                <div className="section-title">Webhook</div>
+                {webhookInfo ? (
+                  <>
+                    <div className="rounded-xl border border-white/[0.10] bg-black/20 px-3 py-2 font-mono text-[11px] text-white/70">
+                      <div className="flex items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate">{webhookInfo.webhook_url}</span>
+                        <button
+                          className="btn-ghost px-2 py-1 text-xs"
+                          onClick={() => {
+                            navigator.clipboard.writeText(webhookInfo.webhook_url)
+                            toast.success('Webhook URL copied')
+                          }}
+                        >
+                          <Copy size={12} />
+                        </button>
+                      </div>
+                    </div>
+                    <pre className="mt-3 overflow-x-auto rounded-xl border border-white/[0.08] bg-black/20 p-3 font-mono text-[11px] text-white/55">
+                      {webhookInfo.curl_example}
+                    </pre>
+                  </>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-white/[0.10] px-3 py-4 text-xs text-[var(--t3)]">
+                    Save this workflow to generate a signed webhook URL.
+                  </div>
+                )}
+              </div>
+
+              <div className="glass-card p-4">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div className="section-title !mb-0 !border-0 !pb-0">Input Variables</div>
+                  <button type="button" className="btn-secondary btn-sm" onClick={() => setInputVariables(current => [...current, createWorkflowInputVariable(current.length)])}>
+                    <Plus size={14} /> Add Variable
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  {inputVariables.map((variable, index) => (
+                    <div key={`${variable.name}-${index}`} className="rounded-xl border border-white/[0.08] bg-black/15 p-3">
+                      <div className="grid gap-2 md:grid-cols-[1fr_1fr_120px_auto]">
+                        <input
+                          className="input"
+                          placeholder="name"
+                          value={variable.name}
+                          onChange={event => setInputVariables(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value.replace(/\s+/g, '_') } : item))}
+                        />
+                        <input
+                          className="input"
+                          placeholder="Label"
+                          value={variable.label}
+                          onChange={event => setInputVariables(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))}
+                        />
+                        <select
+                          className="input"
+                          value={variable.type}
+                          onChange={event => setInputVariables(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, type: event.target.value as WorkflowInputVariable['type'] } : item))}
+                        >
+                          <option value="text">Text</option>
+                          <option value="select">Select</option>
+                          <option value="number">Number</option>
+                        </select>
+                        <button type="button" className="btn-ghost h-10 px-3 text-red-300" onClick={() => setInputVariables(current => current.filter((_, itemIndex) => itemIndex !== index))}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                      <div className="mt-2 grid gap-2 md:grid-cols-[1fr_1fr]">
+                        <input
+                          className="input"
+                          placeholder={variable.type === 'select' ? 'Default option' : 'Default value'}
+                          value={variable.default || ''}
+                          onChange={event => setInputVariables(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, default: event.target.value } : item))}
+                        />
+                        {variable.type === 'select' ? (
+                          <input
+                            className="input"
+                            placeholder="Options: formal, casual, friendly"
+                            value={(variable.options || []).join(', ')}
+                            onChange={event => setInputVariables(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, options: event.target.value.split(',').map(option => option.trim()).filter(Boolean) } : item))}
+                          />
+                        ) : (
+                          <div className="rounded-xl border border-dashed border-white/[0.10] px-3 py-2 text-xs text-[var(--t3)]">
+                            {variable.type === 'number' ? 'Numbers are sent as plain text values.' : 'Text inputs support free-form values.'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {!inputVariables.length ? (
+                    <div className="rounded-xl border border-dashed border-white/[0.10] px-4 py-5 text-sm text-[var(--t3)]">
+                      No inputs yet. Add variables to turn this workflow into a reusable run template.
+                    </div>
+                  ) : null}
+                  <div className="flex justify-end">
+                    <button className="btn-primary btn-sm" onClick={save}>Save Variables</button>
+                  </div>
+                </div>
+              </div>
+
+              {selectedNode && selectedNode.type === 'agentNode' ? (
+                <div className="glass-card p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="section-title !mb-0 !border-0 !pb-0">Assign Agent</div>
+                    <button onClick={() => setSelectedNode(null)} className="btn-ghost p-1"><X size={14} /></button>
+                  </div>
+                  <p className="mb-3 text-xs text-[var(--t3)]">Select an agent for <span className="text-white">{selectedNode.data.label}</span></p>
+                  <div className="space-y-2">
+                    {agents.map(agent => (
+                      <button
+                        key={agent.id}
+                        onClick={() => assignAgent(selectedNode.id, agent)}
+                        className={clsx(
+                          'w-full rounded-xl border p-3 text-left text-sm transition-colors',
+                          selectedNode.data.agent_id === agent.id
+                            ? 'border-indigo-500/30 bg-indigo-500/10 text-white'
+                            : 'border-white/[0.08] bg-white/[0.03] text-white/70 hover:border-white/[0.14]',
+                        )}
+                      >
+                        <div className="font-medium">{agent.name}</div>
+                        <div className="mt-0.5 text-xs text-[var(--t3)]">{agent.role} · {agent.model.split('-')[1] || agent.model}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
-            <p className="mb-3 text-xs text-obsidian-500">Select an agent for <strong className="text-obsidian-300">{selectedNode.data.label}</strong></p>
-            <div className="space-y-2">
-              {agents.map(agent => (
-                <button key={agent.id}
-                  onClick={() => assignAgent(selectedNode.id, agent)}
-                  className={clsx('w-full text-left p-3 rounded-lg border text-sm transition-colors',
-                    selectedNode.data.agent_id === agent.id
-                      ? 'border-accent-400/60 bg-accent-400/10 text-accent-200 shadow-glow-sm'
-                      : 'border-white/[0.08] bg-white/[0.03] text-obsidian-300 hover:border-white/[0.14]'
-                  )}>
-                  <div className="font-medium">{agent.name}</div>
-                  <div className="mt-0.5 text-xs text-obsidian-500">{agent.role} · {agent.model.split('-')[1] || agent.model}</div>
-                </button>
-              ))}
-              {!agents.length && <div className="py-4 text-center text-xs text-obsidian-600">No agents yet. Create agents first.</div>}
-            </div>
-          </div>
-        )}
+          </aside>
+        ) : null}
       </div>
       {workflow.id && (
         <VersionHistory
@@ -506,6 +851,11 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
             setEdges((restored.edges || []) as Edge<any>[])
             setMode(restored.execution_mode)
             setOrchPrompt(restored.orchestration_prompt || '')
+            setRequiresReview(Boolean(restored.requires_review))
+            setInputVariables(normalizeWorkflowInputVariables(restored.input_variables))
+            setRunVariableValues(buildVariableRunDefaults(normalizeWorkflowInputVariables(restored.input_variables)))
+            setRunPanelOpen(false)
+            setRunValidationError(null)
           }}
         />
       )}
@@ -518,6 +868,8 @@ export function Workflows() {
   const qc = useQueryClient()
   const [editing, setEditing] = useState<Partial<Workflow> | null>(null)
   const [workflowToDelete, setWorkflowToDelete] = useState<Workflow | null>(null)
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
 
   const { data: workflows = [], isLoading } = useQuery({ queryKey: ['workflows'], queryFn: workflowsApi.list })
   const { data: scheduledWorkflows = [] } = useQuery({ queryKey: ['workflows-scheduled'], queryFn: workflowsApi.listScheduled })
@@ -526,12 +878,22 @@ export function Workflows() {
 
   const createMut = useMutation({
     mutationFn: workflowsApi.create,
-    onSuccess: (wf) => { qc.invalidateQueries({ queryKey: ['workflows'] }); setEditing(wf); toast.success('Workflow created!') },
+    onSuccess: async (wf) => {
+      await qc.invalidateQueries({ queryKey: ['workflows'] })
+      setSelectedWorkflowId(wf.id)
+      setEditing(wf)
+      toast.success('Workflow created!')
+    },
     onError: () => toast.error('Failed to create workflow'),
   })
   const updateMut = useMutation({
     mutationFn: ({ id, ...data }: Partial<Workflow>) => workflowsApi.update(id!, data),
-    onSuccess: (wf) => { qc.invalidateQueries({ queryKey: ['workflows'] }); setEditing(wf); toast.success('Saved!') },
+    onSuccess: async (wf) => {
+      await qc.invalidateQueries({ queryKey: ['workflows'] })
+      setSelectedWorkflowId(wf.id)
+      setEditing(wf)
+      toast.success('Saved!')
+    },
     onError: () => toast.error('Failed to save workflow'),
   })
   const deleteMut = useMutation({
@@ -563,18 +925,33 @@ export function Workflows() {
     },
     onError: error => toast.error(extractApiError(error)),
   })
+  const updateStatusMut = useMutation({
+    mutationFn: ({ workflow, status }: { workflow: Workflow; status: 'active' | 'paused' }) =>
+      workflowsApi.update(workflow.id, { status, trigger: status === 'active' ? workflow.trigger || 'manual' : 'manual' }),
+    onSuccess: async (wf) => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['workflows'] }),
+        qc.invalidateQueries({ queryKey: ['workflows-scheduled'] }),
+      ])
+      setSelectedWorkflowId(wf.id)
+      toast.success(`Workflow ${wf.status === 'active' ? 'activated' : 'paused'}`)
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
 
   const handleSave = (data: Partial<Workflow>) => {
     if (editing?.id) updateMut.mutate({ ...data, id: editing.id })
     else createMut.mutate(data)
   }
 
+  useEffect(() => {
+    if (!selectedWorkflowId && workflows.length) {
+      setSelectedWorkflowId(workflows[0].id)
+    }
+  }, [selectedWorkflowId, workflows])
+
   if (editing !== null) {
     return <WorkflowBuilder workflow={editing} agents={agents} onSave={handleSave} onClose={() => setEditing(null)} />
-  }
-
-  const statusColor: Record<string, string> = {
-    draft: 'badge-gray', active: 'badge-green', paused: 'badge-yellow',
   }
 
   const copyId = (id: string) => {
@@ -582,51 +959,80 @@ export function Workflows() {
     toast.success('Workflow ID copied!')
   }
 
+  const filteredWorkflows = workflows
+    .filter(workflow => {
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return [workflow.name, workflow.description || '', workflow.trigger || ''].join(' ').toLowerCase().includes(q)
+    })
+    .sort((a, b) => {
+      const statusDelta = workflowSortOrder(a.status) - workflowSortOrder(b.status)
+      if (statusDelta !== 0) return statusDelta
+      return a.name.localeCompare(b.name)
+    })
+  const liveWorkflows = filteredWorkflows.filter(workflow => workflow.status !== 'draft')
+  const draftWorkflows = filteredWorkflows.filter(workflow => workflow.status === 'draft')
+  const selectedWorkflow = filteredWorkflows.find(workflow => workflow.id === selectedWorkflowId) || workflows.find(workflow => workflow.id === selectedWorkflowId) || filteredWorkflows[0] || workflows[0]
+  const selectedScheduled = scheduledWorkflows.find(item => item.workflow_id === selectedWorkflow?.id)
+  const selectedScheduleActive = Boolean(selectedScheduled?.schedule_enabled)
+
   return (
-    <div className="space-y-6 p-6 animate-fade-in">
+    <PageShell
+      title="Workflows"
+      subtitle="Design the operating loops your AI company runs every day."
+      actions={<button className="btn-primary" onClick={() => setEditing(createWorkflowDraft())}><Plus size={16} /> New Workflow</button>}
+      contentClassName="space-y-6 p-6"
+    >
       <section className="space-y-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[#4B5A73]">Automations</p>
-          <h2 className="mt-2 text-2xl font-extrabold tracking-tight text-white">Quick automations</h2>
-          <p className="mt-1 text-sm text-[#8B9DBE]">Enable the agency routines founders expect to run without touching a button.</p>
+          <p className="section-title mb-3 border-0 pb-0">AUTOMATIONS</p>
+          <p className="text-sm text-[var(--t2)]">Enable the agency routines founders expect to run without touching a button.</p>
         </div>
         <div className="grid gap-4 lg:grid-cols-3">
           {automationTemplates.map((template: AutomationTemplate) => {
             const Icon = automationIcon(template.id)
             const scheduled = scheduledWorkflows.find((item: ScheduledWorkflow) => item.workflow_id === template.workflow_id)
             return (
-              <div key={template.id} className="glass-card flex flex-col gap-4 p-5">
+              <div key={template.id} className="surface-card flex flex-col gap-4 p-5">
                 <div className="flex items-start gap-3">
-                  <div className="rounded-2xl bg-blue-600/12 p-3 text-blue-400">
+                  <div className="rounded-2xl bg-[var(--bg-s)] p-3 text-[var(--t1)]">
                     <Icon size={18} />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-semibold text-white">{template.name}</h3>
-                      <span className={template.enabled ? 'badge-emerald' : 'badge-glass'}>
+                      <h3 className="text-sm font-semibold text-[var(--t1)]">{template.name}</h3>
+                      <span className={template.enabled ? 'badge badge-green' : 'badge badge-muted'}>
                         {template.enabled ? 'Enabled' : 'Ready'}
                       </span>
                     </div>
-                    <p className="mt-1 text-xs text-[#8B9DBE]">{template.description}</p>
+                    <p className="mt-1 text-xs text-[var(--t2)]">{template.description}</p>
                   </div>
                 </div>
-                <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-xs text-[#4B5A73]">
-                  {template.enabled && scheduled?.next_run_at
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-s)] px-3 py-2 text-xs text-[var(--t3)]">
+                  {template.enabled && scheduled?.schedule_enabled && scheduled?.next_run_at
                     ? `Next run: ${formatRunTime(scheduled.next_run_at)}`
                     : `Cron: ${template.cron}`}
                 </div>
                 <div className="mt-auto flex gap-2">
                   {template.enabled && template.workflow_id && scheduled ? (
-                    <button
-                      className="btn-secondary w-full text-xs"
-                      onClick={() => disableAutomationMut.mutate({
-                        workflowId: template.workflow_id!,
-                        schedule: scheduled.schedule,
-                        timezone: scheduled.schedule_timezone,
-                      })}
-                    >
-                      Disable
-                    </button>
+                    <>
+                      <button
+                        className="btn-secondary flex-1 text-xs"
+                        onClick={() => setSelectedWorkflowId(template.workflow_id!)}
+                      >
+                        Manage
+                      </button>
+                      <button
+                        className="btn-ghost flex-1 text-xs"
+                        onClick={() => disableAutomationMut.mutate({
+                          workflowId: template.workflow_id!,
+                          schedule: scheduled.schedule,
+                          timezone: scheduled.schedule_timezone,
+                        })}
+                      >
+                        Disable
+                      </button>
+                    </>
                   ) : (
                     <button className="btn-primary w-full text-xs" onClick={() => enableAutomationMut.mutate(template.id)}>
                       Enable →
@@ -639,85 +1045,206 @@ export function Workflows() {
         </div>
       </section>
 
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-4xl font-semibold tracking-[-0.05em] text-white">Workflows</h1>
-          <p className="mt-2 text-sm text-obsidian-400">Design the operating loops your AI company runs every day.</p>
-        </div>
-        <button className="btn-primary" onClick={() => setEditing({})}>
-          <Plus size={16} /> New Workflow
-        </button>
-      </div>
-
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[...Array(3)].map((_, i) => <SkeletonCard key={i} className="h-44" />)}
+        <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4">
+          <SkeletonCard className="h-[420px]" />
+          <SkeletonCard className="h-[420px]" />
         </div>
       ) : !workflows.length ? (
-        <div className="rounded-2xl border border-white/[0.08] bg-obsidian-900">
+        <div className="surface-card">
           <EmptyState
             icon="⚡"
             title="Automate your first task"
             description="Workflows let your agents run automatically — on a schedule, triggered by an email, or on demand."
             action={{ label: 'Install from marketplace →', onClick: () => navigate('/marketplace') }}
-            secondaryAction={{ label: 'Create from scratch', onClick: () => setEditing({}) }}
+            secondaryAction={{ label: 'Create from scratch', onClick: () => setEditing(createWorkflowDraft()) }}
           />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {workflows.map(wf => (
-            <div key={wf.id} className="workflow-card card card-hover flex flex-col gap-3 p-5">
-              <div className="flex items-start justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-white">{wf.name}</div>
-                  {wf.description && <div className="mt-0.5 line-clamp-1 text-xs text-obsidian-500">{wf.description}</div>}
-                </div>
-                <span className={clsx(statusColor[wf.status] || 'badge-gray', 'ml-2 flex-shrink-0')}>{wf.status}</span>
-              </div>
-
-              <div className="flex items-center gap-3 text-xs text-obsidian-500">
-                <span>{(wf.nodes || []).length} nodes</span>
-                <span>·</span>
-                <span>{(wf.edges || []).length} edges</span>
-                <span>·</span>
-                <span>{wf.trigger}</span>
-                <span>·</span>
-                {wf.execution_mode === 'orchestrator'
-                  ? <span className="flex items-center gap-1 text-emerald-500"><Cpu size={10} /> orchestrator</span>
-                  : <span className="flex items-center gap-1 text-violet-400"><GitMerge size={10} /> sequential</span>
-                }
-              </div>
-
-              {/* Workflow ID row */}
-              <div className="flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] px-2.5 py-1.5">
-                <span className="text-[10px] font-medium uppercase tracking-wide text-obsidian-600">ID</span>
-                <span className="flex-1 truncate font-mono text-[11px] text-obsidian-500">{wf.id}</span>
-                <button
-                  onClick={() => copyId(wf.id)}
-                  className="text-slate-600 hover:text-slate-400 transition-colors flex-shrink-0"
-                  title="Copy workflow ID"
-                >
-                  <Copy size={11} />
-                </button>
-              </div>
-
-              <div className="flex gap-2 mt-auto">
-                <button className="btn-secondary flex-1 text-xs" onClick={() => setEditing(wf)}>
-                  <GitBranch size={13} /> Builder
-                </button>
-                <Link
-                  to={`/chat/${wf.id}`}
-                  className="btn-secondary text-xs px-3 flex items-center gap-1.5"
-                  title="Chat with this workflow"
-                >
-                  <MessageSquare size={13} /> Chat
-                </Link>
-                <button className="btn-danger text-xs px-3" onClick={() => setWorkflowToDelete(wf)}>
-                  <Trash2 size={13} />
-                </button>
+        <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <div className="surface overflow-hidden self-start">
+            <div className="border-b border-[var(--border)] p-3">
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--t3)]" />
+                <input
+                  className="input pl-9"
+                  value={search}
+                  onChange={event => setSearch(event.target.value)}
+                  placeholder="Search workflows"
+                />
               </div>
             </div>
-          ))}
+            <div className="px-3 pb-1 pt-4 font-mono text-[9px] font-semibold uppercase tracking-[0.22em] text-[var(--t3)]">
+              Live
+            </div>
+            {liveWorkflows.length ? liveWorkflows.map(wf => {
+              const scheduled = scheduledWorkflows.find(item => item.workflow_id === wf.id)
+              const scheduleActive = Boolean(scheduled?.schedule_enabled)
+              return (
+                <button
+                  key={wf.id}
+                  type="button"
+                  onClick={() => setSelectedWorkflowId(wf.id)}
+                  className={clsx(
+                    'data-row grid w-full grid-cols-[minmax(0,1fr)_max-content_max-content] items-center gap-3 text-left',
+                    selectedWorkflow?.id === wf.id && 'bg-indigo-500/[0.08] border-l-2 border-indigo-400',
+                  )}
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-[var(--t1)]">{wf.name}</div>
+                    <div className="mono mt-1 text-[10px] text-[var(--t3)]">{scheduleActive && scheduled?.next_run_at ? formatRunTime(scheduled.next_run_at) : wf.trigger}</div>
+                  </div>
+                  <span className={clsx('status-dot', scheduleActive ? 'dot-green dot-live' : wf.status === 'active' ? 'dot-blue' : 'dot-muted')} />
+                  <span className={workflowStatusBadge(wf.status)}>{wf.status}</span>
+                </button>
+              )
+            }) : (
+              <div className="data-row cursor-default text-xs text-[var(--t3)]">No live workflows yet.</div>
+            )}
+            {draftWorkflows.length ? (
+              <>
+                <div className="px-3 pb-1 pt-4 font-mono text-[9px] font-semibold uppercase tracking-[0.22em] text-[var(--t3)]">
+                  Drafts
+                </div>
+                {draftWorkflows.map(wf => {
+                  const scheduled = scheduledWorkflows.find(item => item.workflow_id === wf.id)
+                  const scheduleActive = Boolean(scheduled?.schedule_enabled)
+                  return (
+                    <button
+                      key={wf.id}
+                      type="button"
+                      onClick={() => setSelectedWorkflowId(wf.id)}
+                      className={clsx(
+                        'data-row grid w-full grid-cols-[minmax(0,1fr)_max-content_max-content] items-center gap-3 text-left',
+                        selectedWorkflow?.id === wf.id && 'bg-indigo-500/[0.08] border-l-2 border-indigo-400',
+                      )}
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-[var(--t1)]">{wf.name}</div>
+                        <div className="mono mt-1 text-[10px] text-[var(--t3)]">{scheduleActive && scheduled?.next_run_at ? formatRunTime(scheduled.next_run_at) : 'Needs activation'}</div>
+                      </div>
+                      <span className={clsx('status-dot', scheduleActive ? 'dot-green dot-live' : 'dot-muted')} />
+                      <span className={workflowStatusBadge(wf.status)}>{wf.status}</span>
+                    </button>
+                  )
+                })}
+              </>
+            ) : null}
+          </div>
+
+          <div className="space-y-4">
+            {selectedWorkflow ? (
+              <div className="surface-card p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className={clsx('badge', selectedWorkflow.status === 'active' ? 'badge-green' : selectedWorkflow.status === 'paused' ? 'badge-amber' : 'badge-muted')}>
+                        {selectedWorkflow.status}
+                      </span>
+                      <span className="mono text-xs text-[var(--t3)]">{selectedWorkflow.execution_mode}</span>
+                    </div>
+                    <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-[var(--t1)]">{selectedWorkflow.name}</h2>
+                    <p className="mt-2 max-w-3xl text-sm text-[var(--t2)]">{selectedWorkflow.description || 'No description yet.'}</p>
+                    {selectedWorkflow.status === 'draft' ? (
+                      <p className="mt-3 text-xs text-[var(--t3)]">
+                        Drafts do not run yet. Activate this workflow once the steps look right.
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      className="btn-primary btn-sm"
+                      disabled={(selectedWorkflow.status === 'draft' && !canActivateWorkflow(selectedWorkflow)) || updateStatusMut.isPending}
+                      onClick={() => updateStatusMut.mutate({
+                        workflow: selectedWorkflow,
+                        status: nextStatus(selectedWorkflow.status) as 'active' | 'paused',
+                      })}
+                    >
+                      {statusActionLabel(selectedWorkflow.status)}
+                    </button>
+                    <button className="btn-secondary btn-sm" onClick={() => copyId(selectedWorkflow.id)}>
+                      <Copy size={13} /> ID
+                    </button>
+                    <button className="btn-secondary btn-sm" onClick={() => setEditing(selectedWorkflow)}>
+                      <GitBranch size={13} /> Builder
+                    </button>
+                    <Link
+                      to={`/chat/${selectedWorkflow.id}`}
+                      className="btn-secondary btn-sm flex items-center gap-1.5"
+                      title="Chat with this workflow"
+                    >
+                      <MessageSquare size={13} /> Chat
+                    </Link>
+                    <button className="btn-danger btn-sm" onClick={() => setWorkflowToDelete(selectedWorkflow)}>
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="surface p-3">
+                    <div className="section-title mb-2 border-0 pb-0">NODES</div>
+                    <div className="mono text-lg text-[var(--t1)]">{(selectedWorkflow.nodes || []).length}</div>
+                  </div>
+                  <div className="surface p-3">
+                    <div className="section-title mb-2 border-0 pb-0">EDGES</div>
+                    <div className="mono text-lg text-[var(--t1)]">{(selectedWorkflow.edges || []).length}</div>
+                  </div>
+                  <div className="surface p-3">
+                    <div className="section-title mb-2 border-0 pb-0">NEXT RUN</div>
+                    <div className="mono text-sm text-[var(--t1)]">{selectedScheduleActive && selectedScheduled?.next_run_at ? formatRunTime(selectedScheduled.next_run_at) : 'Manual only'}</div>
+                  </div>
+                  <div className="surface p-3">
+                    <div className="section-title mb-2 border-0 pb-0">REVIEW</div>
+                    <div className="mono text-sm text-[var(--t1)]">{selectedWorkflow.requires_review ? 'Required' : 'Auto-complete'}</div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="space-y-3">
+              <div className="section-title mb-0 border-0 pb-0">DRAFT WORKFLOWS</div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {draftWorkflows.length ? draftWorkflows.map(wf => (
+                <div key={wf.id} className="surface-card flex flex-col gap-3 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-[var(--t1)]">{wf.name}</div>
+                      {wf.description ? <div className="mt-1 line-clamp-2 text-xs text-[var(--t3)]">{wf.description}</div> : null}
+                    </div>
+                    <span className={clsx('badge', wf.status === 'active' ? 'badge-green' : wf.status === 'paused' ? 'badge-amber' : 'badge-muted')}>{wf.status}</span>
+                  </div>
+                  <div className="mono flex items-center gap-2 text-[11px] text-[var(--t3)]">
+                    <span>{(wf.nodes || []).length} nodes</span>
+                    <span>·</span>
+                    <span>{wf.execution_mode}</span>
+                    <span>·</span>
+                    <span>{wf.trigger}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      className="btn-primary btn-sm"
+                      disabled={!canActivateWorkflow(wf) || updateStatusMut.isPending}
+                      onClick={() => updateStatusMut.mutate({ workflow: wf, status: 'active' })}
+                    >
+                      Activate
+                    </button>
+                    <button className="btn-secondary btn-sm flex-1" onClick={() => setEditing(wf)}>
+                      <GitBranch size={13} /> Builder
+                    </button>
+                    <button className="btn-ghost btn-sm" onClick={() => setSelectedWorkflowId(wf.id)}>
+                      Details
+                    </button>
+                  </div>
+                </div>
+              )) : (
+                <div className="surface-card p-5 text-sm text-[var(--t3)]">
+                  No drafts hanging around. New workflows you create from scratch will show up here until you activate them.
+                </div>
+              )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
       <ConfirmDialog
@@ -729,6 +1256,6 @@ export function Workflows() {
         onClose={() => setWorkflowToDelete(null)}
         onConfirm={() => workflowToDelete && deleteMut.mutate(workflowToDelete.id)}
       />
-    </div>
+    </PageShell>
   )
 }

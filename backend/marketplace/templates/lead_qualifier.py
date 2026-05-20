@@ -38,7 +38,7 @@ TEMPLATE: MarketplaceTemplate = {
     },
     "agent": {
         "name": "Lead Qualifier",
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "temperature": 0.2,
         "max_iterations": 12,
         "tools": ["web_search", "web_scrape", "google_sheets", "gmail_send"],

@@ -1,9 +1,10 @@
 import { ChangeEvent, DragEvent, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Bot, CheckCircle2, FileUp, GitBranch, Sparkles, Workflow, Wrench } from 'lucide-react'
+import { ArrowLeft, Bot, CheckCircle2, FileUp, GitBranch, Sparkles, Workflow, Wrench, Zap } from 'lucide-react'
 import { clsx } from 'clsx'
 import { agentsApi, customToolsApi, extractApiError, marketplaceApi, workflowsApi } from '../api/client'
+import { FloatingField } from '../components/AuthShell'
 import type { Agent, CustomTool, MarketplaceCategory, Workflow as WorkflowType } from '../types'
 import { toast } from '../lib/toast'
 
@@ -36,19 +37,20 @@ function PreviewCard({ name, tagline, category, tags, previewUrl, kind }: {
 }) {
   const Icon = kind === 'agent' ? Bot : kind === 'workflow' ? Workflow : Wrench
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/10 bg-obsidian-900 shadow-glow-sm">
-      <div className="relative h-40 overflow-hidden bg-gradient-to-br from-accent-500/80 via-cyan-400/35 to-obsidian-900">
+    <div className="glass-card overflow-hidden rounded-2xl">
+      <div className="h-1 w-full bg-gradient-to-r from-indigo-500 to-violet-500" />
+      <div className="relative h-40 overflow-hidden bg-gradient-to-br from-indigo-500/40 to-black">
         {previewUrl ? <img src={previewUrl} alt="" className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center"><Icon size={38} className="text-white" /></div>}
         <span className="absolute right-3 top-3 rounded-full border border-white/15 bg-black/35 px-2 py-1 text-xs font-medium text-white backdrop-blur">
           {kind === 'agent' ? 'Agent' : kind === 'workflow' ? 'Workflow' : 'Tool config'}
         </span>
       </div>
       <div className="p-4">
-        <span className="badge-blue capitalize">{categoryLabel(category)}</span>
+        <span className="badge badge-glass capitalize">{categoryLabel(category)}</span>
         <h3 className="mt-3 line-clamp-1 text-lg font-semibold text-white">{name || 'Listing name'}</h3>
-        <p className="mt-1 line-clamp-2 text-sm text-obsidian-400">{tagline || 'A compelling one-line promise for founders.'}</p>
+        <p className="mt-1 line-clamp-2 text-sm text-[#8B9DBE]">{tagline || 'A compelling one-line promise for founders.'}</p>
         <div className="mt-4 flex flex-wrap gap-2">
-          {tags.slice(0, 4).map(tag => <span key={tag} className="rounded-full bg-white/[0.04] px-2 py-0.5 text-xs text-obsidian-400">#{tag}</span>)}
+          {tags.slice(0, 4).map(tag => <span key={tag} className="badge badge-glass">#{tag}</span>)}
         </div>
       </div>
     </div>
@@ -140,8 +142,8 @@ export function PublishListing() {
 
   if (step === 3) {
     return (
-      <div className="grid min-h-screen place-items-center bg-obsidian-950 px-4 text-center text-white">
-        <div className="max-w-xl rounded-3xl border border-white/10 bg-obsidian-900 p-10 shadow-glow-lg">
+      <div className="grid min-h-screen place-items-center bg-base-bg px-4 text-center text-white">
+        <div className="max-w-xl rounded-3xl border border-white/[0.08] bg-base-surface p-10 shadow-glow-lg">
           <CheckCircle2 className="mx-auto text-emerald-300" size={52} />
           <h1 className="mt-5 text-3xl font-semibold tracking-tight">Your listing is under review.</h1>
           <p className="mt-4 leading-7 text-obsidian-300">We’ll notify you when it’s approved, usually within 24 hours. Tiny marketplace gatekeepers, doing tiny marketplace paperwork.</p>
@@ -155,58 +157,58 @@ export function PublishListing() {
   }
 
   return (
-    <div className="min-h-dvh bg-obsidian-950 text-white">
-      <header className="border-b border-white/10 bg-obsidian-950/80 backdrop-blur-xl">
+    <div className="min-h-dvh bg-base-bg text-white">
+      <header className="border-b border-white/[0.08] bg-obsidian-950/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
           <Link to="/marketplace" className="btn-ghost px-2"><ArrowLeft size={16} /> Marketplace</Link>
-          <div className="font-mono text-xs uppercase tracking-[0.24em] text-accent-300">Submit for review</div>
+          <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.24em] text-indigo-300"><Zap size={14} /> Submit for review</div>
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8">
         <div className="mb-8">
-          <p className="font-mono text-xs uppercase tracking-[0.24em] text-cyan-300">Step {step} of 2</p>
+          <p className="font-mono text-xs uppercase tracking-[0.24em] text-emerald-300">Step {step} of 2</p>
           <h1 className="mt-2 text-4xl font-semibold tracking-[-0.05em]">Publish to Marketplace</h1>
-          <p className="mt-2 text-sm text-obsidian-400">Turn your best agents, workflows, and tool configs into installable company building blocks.</p>
+          <p className="mt-2 text-sm text-ink-muted">Turn your best agents, workflows, and tool configs into installable company building blocks.</p>
         </div>
 
         {step === 1 ? (
           <div className="grid gap-6 lg:grid-cols-3">
             <section className="card p-5">
               <div className="mb-5 flex items-center gap-3">
-                <div className="grid h-11 w-11 place-items-center rounded-xl bg-accent-500/15 text-accent-200"><Bot size={20} /></div>
+                <div className="grid h-11 w-11 place-items-center rounded-xl bg-indigo-500/15 text-indigo-200"><Bot size={20} /></div>
                 <div>
                   <h2 className="text-xl font-semibold">Publish an Agent</h2>
-                  <p className="text-sm text-obsidian-500">Share a role, prompt, and tool setup.</p>
+                  <p className="text-sm text-ink-faint">Share a role, prompt, and tool setup.</p>
                 </div>
               </div>
               <div className="space-y-3">
                 {agents.map(agent => (
-                  <button key={agent.id} className="w-full rounded-2xl border border-white/10 bg-white/[0.025] p-4 text-left transition hover:border-accent-400/40 hover:bg-white/[0.05]" onClick={() => choose('agent', agent)}>
+                  <button key={agent.id} className="w-full rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4 text-left transition hover:border-indigo-400/40 hover:bg-white/[0.05]" onClick={() => choose('agent', agent)}>
                     <div className="font-medium text-white">{agent.name}</div>
-                    <div className="mt-1 text-sm text-obsidian-400">{agent.role} · {agent.tools.length} tools</div>
+                    <div className="mt-1 text-sm text-ink-muted">{agent.role} · {agent.tools.length} tools</div>
                   </button>
                 ))}
-                {!agents.length && <p className="rounded-2xl border border-white/10 p-5 text-sm text-obsidian-500">No agents yet. Create one before publishing.</p>}
+                {!agents.length && <p className="rounded-2xl border border-white/[0.08] p-5 text-sm text-ink-faint">No agents yet. Create one before publishing.</p>}
               </div>
             </section>
 
             <section className="card p-5">
               <div className="mb-5 flex items-center gap-3">
-                <div className="grid h-11 w-11 place-items-center rounded-xl bg-cyan-500/15 text-cyan-200"><GitBranch size={20} /></div>
+                <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-500/15 text-emerald-200"><GitBranch size={20} /></div>
                 <div>
                   <h2 className="text-xl font-semibold">Publish a Workflow</h2>
-                  <p className="text-sm text-obsidian-500">Share a reusable process blueprint.</p>
+                  <p className="text-sm text-ink-faint">Share a reusable process blueprint.</p>
                 </div>
               </div>
               <div className="space-y-3">
                 {workflows.map(workflow => (
-                  <button key={workflow.id} className="w-full rounded-2xl border border-white/10 bg-white/[0.025] p-4 text-left transition hover:border-cyan-400/40 hover:bg-white/[0.05]" onClick={() => choose('workflow', workflow)}>
+                  <button key={workflow.id} className="w-full rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4 text-left transition hover:border-emerald-400/40 hover:bg-white/[0.05]" onClick={() => choose('workflow', workflow)}>
                     <div className="font-medium text-white">{workflow.name}</div>
-                    <div className="mt-1 text-sm text-obsidian-400">{workflow.nodes.length} nodes · {workflow.execution_mode}</div>
+                    <div className="mt-1 text-sm text-ink-muted">{workflow.nodes.length} nodes · {workflow.execution_mode}</div>
                   </button>
                 ))}
-                {!workflows.length && <p className="rounded-2xl border border-white/10 p-5 text-sm text-obsidian-500">No workflows yet. Build one before publishing.</p>}
+                {!workflows.length && <p className="rounded-2xl border border-white/[0.08] p-5 text-sm text-ink-faint">No workflows yet. Build one before publishing.</p>}
               </div>
             </section>
 
@@ -215,33 +217,30 @@ export function PublishListing() {
                 <div className="grid h-11 w-11 place-items-center rounded-xl bg-amber-500/15 text-amber-200"><Wrench size={20} /></div>
                 <div>
                   <h2 className="text-xl font-semibold">Publish a Tool Config</h2>
-                  <p className="text-sm text-obsidian-500">Share a reusable custom tool.</p>
+                  <p className="text-sm text-ink-faint">Share a reusable custom tool.</p>
                 </div>
               </div>
               <div className="space-y-3">
                 {(tools as CustomTool[]).map(tool => (
-                  <button key={tool.id} className="w-full rounded-2xl border border-white/10 bg-white/[0.025] p-4 text-left transition hover:border-amber-400/40 hover:bg-white/[0.05]" onClick={() => choose('tool_config', tool)}>
+                  <button key={tool.id} className="w-full rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4 text-left transition hover:border-amber-400/40 hover:bg-white/[0.05]" onClick={() => choose('tool_config', tool)}>
                     <div className="font-medium text-white">{tool.name}</div>
-                    <div className="mt-1 line-clamp-1 text-sm text-obsidian-400">{tool.description}</div>
+                    <div className="mt-1 line-clamp-1 text-sm text-ink-muted">{tool.description}</div>
                   </button>
                 ))}
-                {!(tools as CustomTool[]).length && <p className="rounded-2xl border border-white/10 p-5 text-sm text-obsidian-500">No custom tools yet. Create one before publishing.</p>}
+                {!(tools as CustomTool[]).length && <p className="rounded-2xl border border-white/[0.08] p-5 text-sm text-ink-faint">No custom tools yet. Create one before publishing.</p>}
               </div>
             </section>
           </div>
         ) : (
           <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
-            <section className="card space-y-5 p-6">
-              <div className="rounded-2xl border border-accent-400/20 bg-accent-400/10 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-accent-100"><Sparkles size={16} /> Publishing {selectedName}</div>
-                <p className="mt-1 text-xs text-accent-100/70">Template data is sanitized server-side before review.</p>
+            <section className="glass-elevated space-y-5 p-6">
+              <div className="rounded-2xl border border-indigo-400/20 bg-indigo-500/10 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-indigo-100"><Sparkles size={16} /> Publishing {selectedName}</div>
+                <p className="mt-1 text-xs text-indigo-100/70">Template data is sanitized server-side before review.</p>
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="label">Name</label>
-                  <input className="input" value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} />
-                </div>
+                <FloatingField label="Name" type="text" value={form.name} onChange={value => setForm({ ...form, name: value })} />
                 <div>
                   <label className="label">Category</label>
                   <select className="input capitalize" value={form.category} onChange={event => setForm({ ...form, category: event.target.value as MarketplaceCategory })}>
@@ -255,19 +254,19 @@ export function PublishListing() {
                   <label className="label mb-0">Tagline</label>
                   <span className={clsx('font-mono text-xs', form.tagline.length >= 50 && form.tagline.length <= 150 ? 'text-emerald-300' : 'text-amber-300')}>{form.tagline.length}/150</span>
                 </div>
-                <input className="input" value={form.tagline} onChange={event => setForm({ ...form, tagline: event.target.value })} placeholder="50-150 characters" />
+                <FloatingField label="Tagline" type="text" value={form.tagline} onChange={value => setForm({ ...form, tagline: value })} />
               </div>
 
               <div>
                 <label className="label">Description</label>
                 <textarea className="input min-h-40" value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} placeholder="Explain what this solves, who it is for, and how to use it." />
-                <p className="mt-1 text-xs text-obsidian-500">{form.description.length}/100 minimum characters</p>
+                <p className="mt-1 text-xs text-ink-faint">{form.description.length}/100 minimum characters</p>
               </div>
 
               <div>
                 <label className="label">Tags</label>
-                <input className="input" value={form.tags} onChange={event => setForm({ ...form, tags: event.target.value })} placeholder="startup, support, research" />
-                <div className="mt-2 flex flex-wrap gap-2">{tags.map(tag => <span key={tag} className="rounded-full bg-white/[0.04] px-2 py-0.5 text-xs text-obsidian-400">#{tag}</span>)}</div>
+                <FloatingField label="Tags" type="text" value={form.tags} onChange={value => setForm({ ...form, tags: value })} />
+                <div className="mt-2 flex flex-wrap gap-2">{tags.map(tag => <span key={tag} className="rounded-full bg-white/[0.04] px-2 py-0.5 text-xs text-ink-muted">#{tag}</span>)}</div>
               </div>
 
               <div>
@@ -276,49 +275,44 @@ export function PublishListing() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="label">Preview image URL</label>
-                  <input className="input" value={form.preview_image_url} onChange={event => setForm({ ...form, preview_image_url: event.target.value })} placeholder="https://..." />
-                </div>
-                <div>
-                  <label className="label">Source URL</label>
-                  <input className="input" value={form.source_url} onChange={event => setForm({ ...form, source_url: event.target.value })} placeholder="GitHub, docs, etc." />
-                </div>
+                <FloatingField label="Preview image URL" type="text" value={form.preview_image_url} onChange={value => setForm({ ...form, preview_image_url: value })} />
+                <FloatingField label="Source URL" type="text" value={form.source_url} onChange={value => setForm({ ...form, source_url: value })} />
               </div>
 
-              <label className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+              <label className="flex items-center justify-between gap-4 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4">
                 <div>
                   <div className="text-sm font-medium text-white">Free listing</div>
-                  <p className="mt-1 text-xs text-obsidian-500">Phase 5 marketplace listings are always free. Paid marketplace pricing can be enabled later.</p>
+                  <p className="mt-1 text-xs text-ink-faint">Phase 5 marketplace listings are always free. Paid marketplace pricing can be enabled later.</p>
                 </div>
                 <input
                   type="checkbox"
                   checked={form.is_free}
                   disabled
                   onChange={event => setForm({ ...form, is_free: event.target.checked })}
-                  className="h-5 w-5 rounded border-white/20 bg-obsidian-900 text-accent-500"
+                  className="h-5 w-5 rounded border-white/20 bg-base-surface text-indigo-500"
                 />
               </label>
 
               <label
                 onDrop={handleDrop}
                 onDragOver={event => event.preventDefault()}
-                className="grid cursor-pointer place-items-center rounded-2xl border border-dashed border-white/15 bg-white/[0.025] p-8 text-center transition hover:border-accent-400/40"
+                className="grid cursor-pointer place-items-center rounded-2xl border border-dashed border-white/15 bg-white/[0.025] p-8 text-center transition hover:border-indigo-400/40"
               >
                 <input type="file" accept="image/*" className="sr-only" onChange={handleFileChange} />
-                <FileUp className="text-obsidian-500" />
+                <FileUp className="text-ink-faint" />
                 <p className="mt-2 text-sm text-obsidian-300">Drag a preview image here, or click to choose one for local preview</p>
-                <p className="mt-1 text-xs text-obsidian-500">Phase 5 saves image URLs only; binary upload comes later.</p>
+                <p className="mt-1 text-xs text-ink-faint">Phase 5 saves image URLs only; binary upload comes later.</p>
               </label>
 
-              <div className="flex flex-wrap gap-3 border-t border-white/10 pt-5">
+              <div className="flex flex-wrap gap-3 border-t border-white/[0.08] pt-5">
                 <button className="btn-primary" disabled={publish.isPending} onClick={submit}>{publish.isPending ? 'Submitting...' : 'Submit for Review'}</button>
                 <button className="btn-secondary" onClick={() => setStep(1)}>Back</button>
               </div>
             </section>
 
             <aside className="lg:sticky lg:top-6 lg:h-max">
-              <p className="mb-3 font-mono text-xs uppercase tracking-[0.22em] text-obsidian-500">Live preview</p>
+              <div className="glass-elevated p-5">
+                <p className="mb-3 font-mono text-xs uppercase tracking-[0.22em] text-[#8B9DBE]">Live preview</p>
               <PreviewCard
                 name={form.name}
                 tagline={form.tagline}
@@ -327,6 +321,7 @@ export function PublishListing() {
                 previewUrl={form.preview_image_url || previewUrl}
                 kind={kind}
               />
+              </div>
             </aside>
           </div>
         )}

@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AnimatePresence, motion } from 'framer-motion'
 import { CheckCircle2, ChevronDown, ChevronRight, Clock3, ShieldAlert, XCircle } from 'lucide-react'
 import { clsx } from 'clsx'
+
 import { approvalsApi, extractApiError } from '../api/client'
+import { FloatingField } from '../components/AuthShell'
+import { PageShell } from '../components/Layout/PageShell'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { toast } from '../lib/toast'
 import type { AgentApprovalRequestItem, ApprovalRequest, WsEvent } from '../types'
@@ -17,10 +21,55 @@ function timeUntil(value?: string | null) {
 }
 
 function riskMeta(risk: AgentApprovalRequestItem['risk_level'] | string) {
-  if (risk === 'critical') return { color: '#EF4444', badge: 'badge-red', glow: '0 0 20px rgba(239,68,68,0.14)' }
-  if (risk === 'high') return { color: '#F59E0B', badge: 'badge-amber', glow: '0 0 20px rgba(245,158,11,0.12)' }
-  if (risk === 'medium') return { color: '#2563EB', badge: 'badge-blue', glow: '0 0 20px rgba(37,99,235,0.12)' }
-  return { color: '#10B981', badge: 'badge-emerald', glow: '0 0 20px rgba(16,185,129,0.10)' }
+  if (risk === 'critical') return { color: '#ef4444', badge: 'badge-red', cardClass: 'glass-card glass-card-red', label: 'CRITICAL' }
+  if (risk === 'high') return { color: '#f59e0b', badge: 'badge-amber', cardClass: 'glass-card glass-card-amber', label: 'HIGH' }
+  if (risk === 'medium') return { color: 'rgba(99,102,241,0.50)', badge: 'badge-indigo', cardClass: 'glass-card glass-card-indigo', label: 'MEDIUM' }
+  return { color: 'rgba(255,255,255,0.18)', badge: 'badge-glass', cardClass: 'glass-card', label: 'LOW' }
+}
+
+function recommendationMeta(kind: 'approve' | 'review' | 'reject') {
+  if (kind === 'approve') return { label: 'AI recommends: Approve', className: 'badge badge-emerald' }
+  if (kind === 'reject') return { label: 'AI recommends: Reject', className: 'badge badge-red' }
+  return { label: 'AI recommends: Review', className: 'badge badge-amber' }
+}
+
+function roleTone(role?: string | null) {
+  const value = (role || '').toLowerCase()
+  if (value.includes('sales') || value.includes('outreach')) return 'from-amber-500/80 to-red-500/70'
+  if (value.includes('research') || value.includes('analysis')) return 'from-indigo-500/80 to-violet-500/70'
+  if (value.includes('ops') || value.includes('automation')) return 'from-emerald-500/80 to-emerald-500/70'
+  return 'from-indigo-500/80 to-violet-500/70'
+}
+
+function initials(name?: string | null) {
+  return (name || 'A').trim().charAt(0).toUpperCase() || 'A'
+}
+
+function RecommendationBanner({ kind }: { kind: 'approve' | 'review' | 'reject' }) {
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setVisible(true), 3000)
+    return () => window.clearTimeout(timer)
+  }, [])
+
+  const meta = recommendationMeta(kind)
+
+  return (
+    <AnimatePresence>
+      {visible ? (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 8 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
+          className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2"
+        >
+          <span className={meta.className}>{meta.label}</span>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  )
 }
 
 function ContextViewer({ data }: { data: ApprovalRequest['context_data'] }) {
@@ -28,24 +77,81 @@ function ContextViewer({ data }: { data: ApprovalRequest['context_data'] }) {
   const text = typeof data === 'string' ? data : JSON.stringify(data ?? {}, null, 2)
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.03]">
+    <div className="surface overflow-hidden">
       <button
-        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs font-medium text-[#8B9DBE] transition hover:bg-white/[0.04]"
+        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs font-medium text-[var(--text-2)] transition hover:bg-white/[0.04]"
         onClick={() => setOpen(value => !value)}
       >
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         Context data
       </button>
-      {open && (
-        <pre className="max-h-64 overflow-auto border-t border-white/[0.06] p-3 text-xs text-white/75">
+      {open ? (
+        <pre className="max-h-64 overflow-auto border-t border-[var(--border)] p-3 text-xs text-[var(--text-2)]">
           {text}
         </pre>
-      )}
+      ) : null}
     </div>
   )
 }
 
-function HumanApprovalCard({
+function ApprovalCardShell({
+  avatarName,
+  role,
+  title,
+  analysis,
+  timeText,
+  badge,
+  leftBorder,
+  className,
+  children,
+}: {
+  avatarName: string
+  role?: string | null
+  title: string
+  analysis: string
+  timeText: string
+  badge: ReactNode
+  leftBorder: string
+  className?: string
+  children: React.ReactNode
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 18, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.32, ease: [0.34, 1.56, 0.64, 1] }}
+      className={clsx(className, 'overflow-hidden p-5')}
+      style={{ borderLeftWidth: leftBorder.startsWith('#ef') || leftBorder.startsWith('#f59') ? '3px' : '2px', borderLeftColor: leftBorder }}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-3">
+            <div className={clsx('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-sm font-bold text-white', roleTone(role))}>
+              {initials(avatarName)}
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-bold text-white">{avatarName}</div>
+              <div className="mt-1 flex items-center gap-2">
+                {badge}
+                {role ? <span className="truncate text-xs text-[var(--text-3)]">{role}</span> : null}
+              </div>
+            </div>
+          </div>
+          <h3 className="mt-4 text-base font-semibold text-white">{title}</h3>
+        </div>
+        <div className="font-mono text-right text-xs text-[var(--text-3)]">
+          <div>{timeText}</div>
+        </div>
+      </div>
+
+      <div className="mt-4">{children}</div>
+
+      <p className="mt-3 line-clamp-2 text-sm text-[var(--text-2)]">{analysis}</p>
+    </motion.div>
+  )
+}
+
+function WorkflowReviewCard({
   approval,
   onDecision,
 }: {
@@ -54,68 +160,65 @@ function HumanApprovalCard({
 }) {
   const [decision, setDecision] = useState<'approve' | 'reject' | null>(null)
   const [comment, setComment] = useState('')
+  const agentDisplay = approval.agent_name || 'Agent'
 
   return (
-    <div className="glass-card overflow-hidden rounded-2xl border-l-[3px] border-l-amber-500 p-5 shadow-[0_0_20px_rgba(245,158,11,0.10)]">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="badge-amber">Pending</span>
-            <span className="text-xs text-[#8B9DBE]">{approval.workflow_name || 'Workflow'}</span>
-            {approval.agent_name && <span className="text-xs text-[#4B5A73]">· {approval.agent_name}</span>}
-          </div>
-          <h3 className="mt-3 text-lg font-semibold text-white">{approval.title}</h3>
-          {approval.description && <p className="mt-2 text-sm text-[#8B9DBE]">{approval.description}</p>}
-        </div>
-        <div className="text-right text-xs text-[#8B9DBE]">
-          <div>{new Date(approval.requested_at).toLocaleString()}</div>
-          <div className="mt-1 flex items-center justify-end gap-1 text-amber-300">
-            <Clock3 size={12} /> {timeUntil(approval.expires_at)}
-          </div>
-        </div>
-      </div>
-
+    <ApprovalCardShell
+      avatarName={agentDisplay}
+      role={approval.workflow_name || 'Workflow'}
+      title={approval.title}
+      analysis={approval.description || 'Final output is ready for CEO review before it goes to the client.'}
+      timeText={timeUntil(approval.expires_at)}
+      badge={<span className="badge badge-amber">REVIEW</span>}
+      leftBorder="#f59e0b"
+      className="glass-card glass-card-amber"
+    >
+      <RecommendationBanner kind="approve" />
       <div className="mt-4">
         <ContextViewer data={approval.context_data} />
       </div>
-
-      <div className="mt-4 flex flex-wrap items-start gap-3">
+      <div className="mt-4">
         {!decision ? (
-          <>
-            <button className="btn-emerald" onClick={() => setDecision('approve')}>
-              <CheckCircle2 size={16} /> Approve
-            </button>
-            <button className="btn-danger" onClick={() => setDecision('reject')}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button className="btn-danger h-10 justify-center" onClick={() => setDecision('reject')}>
               <XCircle size={16} /> Reject
             </button>
-          </>
+            <button className="btn-emerald btn-runner h-10 justify-center" onClick={() => setDecision('approve')}>
+              <CheckCircle2 size={16} /> Approve
+            </button>
+          </div>
         ) : (
-          <div className="w-full space-y-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3">
-            <textarea
-              className="input min-h-[80px]"
-              placeholder={decision === 'approve' ? 'Optional approval comment...' : 'Why are you rejecting this?'}
-              value={comment}
-              onChange={event => setComment(event.target.value)}
-            />
-            <div className="flex gap-2">
+          <div className="space-y-3">
+            {decision === 'reject' ? (
+              <FloatingField label="Reason for rejection" type="text" value={comment} onChange={setComment} />
+            ) : (
+              <input
+                className="input h-[52px] w-full"
+                placeholder="Optional approval comment..."
+                value={comment}
+                onChange={event => setComment(event.target.value)}
+              />
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
               <button
-                className={decision === 'approve' ? 'btn-emerald' : 'btn-danger'}
+                className={decision === 'approve' ? 'btn-emerald btn-runner h-10 justify-center' : 'btn-danger h-10 justify-center'}
                 onClick={() => onDecision(approval, decision, comment)}
               >
+                {decision === 'approve' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
                 Confirm {decision === 'approve' ? 'approval' : 'rejection'}
               </button>
-              <button className="btn-secondary" onClick={() => setDecision(null)}>
+              <button className="btn-secondary h-10 justify-center" onClick={() => setDecision(null)}>
                 Cancel
               </button>
             </div>
           </div>
         )}
       </div>
-    </div>
+    </ApprovalCardShell>
   )
 }
 
-function AgentPermissionCard({
+function AgentRequestCard({
   approval,
   onDecision,
   highlight,
@@ -128,71 +231,84 @@ function AgentPermissionCard({
   const [note, setNote] = useState('')
   const agentDisplay = approval.agent.persona_name || approval.agent.name || 'Agent'
   const risk = riskMeta(approval.risk_level)
+  const recommendation =
+    approval.risk_level === 'critical' ? 'review' : approval.risk_level === 'high' ? 'reject' : 'approve'
+  const rejectNeedsReason = decision === 'reject' && !note.trim()
+
+  const handleConfirm = () => {
+    if (rejectNeedsReason) return
+    onDecision(approval, decision!, note.trim())
+  }
 
   return (
-    <div
-      className={clsx('glass-card overflow-hidden rounded-2xl p-5 transition-all duration-150', highlight && 'ring-2 ring-blue-500/25')}
-      style={{ borderLeft: `3px solid ${risk.color}`, boxShadow: risk.glow }}
+    <ApprovalCardShell
+      avatarName={agentDisplay}
+      role={approval.agent.role || approval.approval_type}
+      title={approval.title}
+      analysis={approval.description}
+      timeText={timeUntil(approval.expires_at)}
+      badge={
+        <span className={clsx('badge', risk.badge, approval.risk_level === 'critical' && 'animate-pulse-ring')}>
+          {risk.label}
+        </span>
+      }
+      leftBorder={risk.color}
+      className={clsx(risk.cardClass, highlight && 'shadow-red')}
     >
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className={risk.badge}>
-              {approval.risk_level.toUpperCase()}
-            </span>
-            <span className="text-xs text-[#8B9DBE]">{approval.approval_type}</span>
-          </div>
-          <h3 className="mt-3 text-lg font-semibold text-white">{approval.title}</h3>
-          <p className="mt-1 text-sm text-white/85">
-            {agentDisplay}
-            {approval.agent.role ? ` · ${approval.agent.role}` : ''}
-          </p>
-          <p className="mt-3 whitespace-pre-wrap text-sm text-[#8B9DBE]">{approval.description}</p>
-        </div>
-        <div className="text-right text-xs text-[#8B9DBE]">
-          <div>{new Date(approval.created_at).toLocaleString()}</div>
-          <div className="mt-1 flex items-center justify-end gap-1 text-amber-300">
-            <Clock3 size={12} /> {timeUntil(approval.expires_at)}
-          </div>
-          <div className="mt-2 text-[#4B5A73]">
-            Trust {approval.agent.trust_score?.toFixed(0) ?? '50'}
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-start gap-3">
+      <RecommendationBanner kind={recommendation} />
+      <div className="mt-4">
         {!decision ? (
-          <>
-            <button className="btn-emerald" onClick={() => setDecision('approve')}>
-              <CheckCircle2 size={16} /> Approve
-            </button>
-            <button className="btn-danger" onClick={() => setDecision('reject')}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              className="btn-danger h-10 justify-center"
+              onClick={() => setDecision('reject')}
+            >
               <XCircle size={16} /> Reject
             </button>
-          </>
+            <button
+              className="btn-emerald btn-runner h-10 justify-center"
+              onClick={() => setDecision('approve')}
+            >
+              <CheckCircle2 size={16} /> Approve
+            </button>
+          </div>
         ) : (
-          <div className="w-full space-y-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3">
-            <textarea
-              className="input min-h-[80px]"
-              placeholder={decision === 'approve' ? 'Optional approval note...' : 'Why are you rejecting this?'}
-              value={note}
-              onChange={event => setNote(event.target.value)}
-            />
-            <div className="flex gap-2">
+          <div className="space-y-3">
+            {decision === 'reject' ? (
+              <div className="space-y-2">
+                <FloatingField
+                  label="Reason for rejection"
+                  type="text"
+                  value={note}
+                  onChange={setNote}
+                />
+                {rejectNeedsReason ? <p className="text-xs text-red-400">Reason for rejection is required.</p> : null}
+              </div>
+            ) : (
+              <input
+                className="input h-[52px] w-full"
+                placeholder="Optional approval note..."
+                value={note}
+                onChange={event => setNote(event.target.value)}
+              />
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
               <button
-                className={decision === 'approve' ? 'btn-emerald' : 'btn-danger'}
-                onClick={() => onDecision(approval, decision, note)}
+                className={decision === 'approve' ? 'btn-emerald btn-runner h-10 justify-center' : 'btn-danger h-10 justify-center'}
+                disabled={rejectNeedsReason}
+                onClick={handleConfirm}
               >
+                {decision === 'approve' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
                 Confirm {decision === 'approve' ? 'approval' : 'rejection'}
               </button>
-              <button className="btn-secondary" onClick={() => setDecision(null)}>
+              <button className="btn-secondary h-10 justify-center" onClick={() => setDecision(null)}>
                 Cancel
               </button>
             </div>
           </div>
         )}
       </div>
-    </div>
+    </ApprovalCardShell>
   )
 }
 
@@ -229,10 +345,7 @@ export function Approvals() {
 
   useEffect(() => {
     if (!lastEvent) return
-    const event = lastEvent as WsEvent & {
-      event?: string
-      approval_id?: string
-    }
+    const event = lastEvent as WsEvent & { event?: string; approval_id?: string }
     if (event.event !== 'new_approval_request' || !event.approval_id) return
 
     setFreshAgentRequestIds(ids => [event.approval_id!, ...ids.filter(id => id !== event.approval_id)].slice(0, 10))
@@ -295,80 +408,86 @@ export function Approvals() {
   )
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <div className="inline-flex rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8B9DBE]">
-            Review queue
-          </div>
-          <h1 className="mt-4 text-3xl font-extrabold tracking-tight text-white md:text-4xl">Approvals</h1>
-          <p className="mt-2 text-sm text-[#8B9DBE]">
-            Review paused workflow steps and risky agent permission requests.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <span
-            className={clsx(
-              'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm',
-              totalPending
-                ? 'border-red-500/20 bg-red-500/10 text-red-300'
-                : 'border-white/[0.08] bg-white/[0.03] text-[#8B9DBE]',
-            )}
+    <PageShell
+      title="Approvals"
+      subtitle="Review paused workflow steps and risky agent permission requests."
+      actions={
+        <span className={clsx('badge', totalPending ? 'badge-red animate-pulse' : 'badge-muted')}>
+          <ShieldAlert size={12} /> {totalPending} pending
+        </span>
+      }
+      contentClassName="space-y-8 p-6"
+    >
+      {totalPending === 0 && !pendingQuery.isLoading && !agentPendingQuery.isLoading ? (
+        <div className="flex min-h-[48vh] flex-col items-center justify-center text-center">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.88 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.28, ease: [0.34, 1.56, 0.64, 1] }}
+            className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/12 text-emerald-400"
           >
-            <ShieldAlert size={14} /> {totalPending} pending
-          </span>
-          <span className="text-xs text-[#4B5A73]">Auto-refreshes every 10s</span>
+            <CheckCircle2 size={32} />
+          </motion.div>
+          <div className="text-xl font-semibold text-white">All clear — nothing needs your approval</div>
+          <div className="mt-2 text-sm text-[var(--text-3)]">New workflow reviews and agent approvals will appear here in real time.</div>
         </div>
-      </div>
+      ) : (
+        <>
+          <section className="space-y-3">
+            <div className="section-title flex items-center justify-between">
+              <span>AGENT REQUESTS</span>
+              <span className="badge badge-muted">{agentPendingCount}</span>
+            </div>
+            {agentPendingQuery.isLoading ? (
+              <div className="glass-card sk h-32" />
+            ) : agentPending.length ? (
+              <div className="space-y-4">
+                {agentPending.map((approval, index) => (
+                  <div key={approval.id} className={clsx(index < 7 && `animate-d-${Math.min(index, 6)}`)}>
+                    <AgentRequestCard
+                      approval={approval}
+                      onDecision={submitAgentDecision}
+                      highlight={freshAgentRequestIds.includes(approval.id)}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="glass-card px-5 py-6 text-sm text-[var(--text-2)]">
+                No agent permission requests right now.
+              </div>
+            )}
+          </section>
 
-      <section className="space-y-3">
-        <div className="flex items-center gap-3">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-white/70">Pending workflow approvals</h2>
-          <span className="badge-glass">{pending.length}</span>
-        </div>
-        {pendingQuery.isLoading ? (
-          <div className="glass-card h-32 animate-pulse rounded-2xl" />
-        ) : pending.length ? (
-          pending.map(approval => (
-            <HumanApprovalCard key={approval.id} approval={approval} onDecision={submitDecision} />
-          ))
-        ) : (
-          <div className="glass-card rounded-2xl p-10 text-center text-[#8B9DBE]">
-            <ShieldAlert size={32} className="mx-auto mb-3 text-[#2D3748]" />
-            No pending workflow approvals right now.
-          </div>
-        )}
-      </section>
+          <section className="space-y-3">
+            <div className="section-title flex items-center justify-between">
+              <span>WORKFLOW REVIEWS</span>
+              <span className="badge badge-muted">{pending.length}</span>
+            </div>
+            {pendingQuery.isLoading ? (
+              <div className="glass-card sk h-32" />
+            ) : pending.length ? (
+              <div className="space-y-4">
+                {pending.map((approval, index) => (
+                  <div key={approval.id} className={clsx(index < 7 && `animate-d-${Math.min(index, 6)}`)}>
+                    <WorkflowReviewCard approval={approval} onDecision={submitDecision} />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="glass-card px-5 py-6 text-sm text-[var(--text-2)]">
+                No pending workflow approvals right now.
+              </div>
+            )}
+          </section>
+        </>
+      )}
 
-      <section className="space-y-3">
-        <div className="flex items-center gap-3">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-white/70">Agent permission requests</h2>
-          <span className="badge-glass">{agentPendingCount}</span>
-        </div>
-        {agentPendingQuery.isLoading ? (
-          <div className="glass-card h-32 animate-pulse rounded-2xl" />
-        ) : agentPending.length ? (
-          agentPending.map(approval => (
-            <AgentPermissionCard
-              key={approval.id}
-              approval={approval}
-              onDecision={submitAgentDecision}
-              highlight={freshAgentRequestIds.includes(approval.id)}
-            />
-          ))
-        ) : (
-          <div className="glass-card rounded-2xl p-10 text-center text-[#8B9DBE]">
-            <ShieldAlert size={32} className="mx-auto mb-3 text-[#2D3748]" />
-            No agent permission requests right now.
-          </div>
-        )}
-      </section>
-
-      <section className="glass-card overflow-hidden rounded-2xl">
-        <div className="border-b border-white/[0.08] px-5 py-4 text-sm font-semibold text-white">Decision history</div>
+      <section className="surface-card overflow-hidden">
+        <div className="section-title mb-0 border-b border-[var(--border)] px-5 py-4">DECISION HISTORY</div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="sticky top-0 bg-[rgba(8,13,26,0.9)] text-xs uppercase tracking-wide text-[#4B5A73] backdrop-blur">
+            <thead className="sticky top-0 bg-[var(--surface)] text-xs uppercase tracking-wide text-[var(--text-3)]">
               <tr>
                 <th className="px-4 py-3">Title</th>
                 <th className="px-4 py-3">Decision</th>
@@ -379,29 +498,29 @@ export function Approvals() {
             </thead>
             <tbody>
               {history.map(item => (
-                <tr key={item.id} className="border-t border-white/[0.04] text-[#8B9DBE] transition hover:bg-white/[0.025]">
+                <tr key={item.id} className="border-t border-[var(--border)] text-[var(--text-2)] transition hover:bg-white/[0.03]">
                   <td className="px-4 py-3 text-white">{item.title}</td>
                   <td className="px-4 py-3">
-                    <span className={item.status === 'approved' ? 'badge-emerald' : item.status === 'rejected' ? 'badge-red' : 'badge-glass'}>
+                    <span className={clsx('badge', item.status === 'approved' ? 'badge-green' : item.status === 'rejected' ? 'badge-red' : 'badge-muted')}>
                       {item.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3">{item.reviewer || item.reviewed_by_user_id || 'You'}</td>
-                  <td className="px-4 py-3">{item.reviewed_at ? new Date(item.reviewed_at).toLocaleString() : '-'}</td>
+                  <td className="mono px-4 py-3">{item.reviewer || item.reviewed_by_user_id || 'You'}</td>
+                  <td className="mono px-4 py-3">{item.reviewed_at ? new Date(item.reviewed_at).toLocaleString() : '-'}</td>
                   <td className="max-w-md truncate px-4 py-3">{item.reviewer_comment || '-'}</td>
                 </tr>
               ))}
-              {!history.length && (
+              {!history.length ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-[#4B5A73]">
+                  <td colSpan={5} className="px-4 py-8 text-center text-[var(--text-3)]">
                     No decisions yet.
                   </td>
                 </tr>
-              )}
+              ) : null}
             </tbody>
           </table>
         </div>
       </section>
-    </div>
+    </PageShell>
   )
 }

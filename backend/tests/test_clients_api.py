@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from auth.security import create_access_token, hash_password
-from database.models import Agent, Client, Execution, ExecutionStatus, OrgMember, OrgMemberRole, Organization, User, UserRole, Workflow
+from database.models import Agent, Client, Execution, ExecutionStatus, Mission, MissionStatus, OrgMember, OrgMemberRole, Organization, User, UserRole, Workflow
 
 
 async def _create_user_with_org(db, *, email: str, org_name: str, org_slug: str):
@@ -109,6 +109,40 @@ async def test_enable_portal_returns_url(authed_client):
     payload = response.json()
     assert payload["portal_token"]
     assert payload["portal_url"].startswith("/portal/")
+
+
+@pytest.mark.asyncio
+async def test_portal_includes_recent_missions(authed_client, db, test_org):
+    create_response = await authed_client.post("/api/clients", json={"name": "Portal Reports", "company_name": "Acme Corp"})
+    client_payload = create_response.json()
+    client_id = client_payload["id"]
+
+    portal_response = await authed_client.post(f"/api/clients/{client_id}/portal/enable")
+    portal_token = portal_response.json()["portal_token"]
+
+    db.add(
+        Mission(
+            org_id=test_org.id,
+            client_id=client_id,
+            goal="Research competitor landscape",
+            title="Acme Competitor Report",
+            status=MissionStatus.completed,
+            report="## Summary\n\nAcme has three primary competitors.",
+            report_delivered=True,
+            created_at=datetime.utcnow(),
+            completed_at=datetime.utcnow(),
+        )
+    )
+    await db.commit()
+
+    response = await authed_client.get(f"/api/portal/{portal_token}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["recent_missions"]) == 1
+    assert payload["recent_missions"][0]["title"] == "Acme Competitor Report"
+    assert payload["recent_missions"][0]["full_report_available"] is True
+    assert payload["recent_missions"][0]["report_preview"].startswith("## Summary")
 
 
 @pytest.mark.asyncio

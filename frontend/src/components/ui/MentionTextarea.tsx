@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { clsx } from 'clsx'
 import type { Agent } from '../../types'
 
@@ -40,6 +40,13 @@ export function MentionTextarea({
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`
+  }, [value])
 
   const matches = useMemo(() => {
     if (!open) return []
@@ -143,12 +150,12 @@ export function MentionTextarea({
         placeholder={placeholder}
         className={clsx(
           minHeightClassName,
-          'w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none transition focus:border-blue-500/40',
+          'w-full rounded-2xl border border-white/[0.08] bg-black/20 px-4 py-3 text-sm text-white outline-none transition focus:border-blue-500/40',
           className,
         )}
       />
       {open && matches.length > 0 && (
-        <div className="absolute left-3 top-3 z-20 w-[300px] rounded-2xl border border-white/10 bg-[#0F1520] p-2 shadow-2xl">
+        <div className="absolute left-3 top-3 z-20 w-[300px] rounded-2xl border border-white/[0.08] bg-[#0F1520] p-2 shadow-2xl">
           <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/30">
             Mention an agent
           </div>

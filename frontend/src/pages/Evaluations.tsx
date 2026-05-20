@@ -1,31 +1,20 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
-  ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from '@tanstack/react-table'
-import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
   Beaker,
-  Braces,
-  CalendarClock,
-  ChevronDown,
-  ChevronRight,
   CheckCircle2,
   FileJson,
   FlaskConical,
-  History,
   Loader2,
   Pencil,
   Play,
   Plus,
+  Search,
   Sparkles,
   Trophy,
   Trash2,
-  Upload,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -43,14 +32,12 @@ import { format, formatDistanceToNow } from 'date-fns'
 import { clsx } from 'clsx'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { agentsApi, evalsApi, extractApiError, modelsApi } from '../api/client'
-import { GlowCard } from '../components/ui/GlowCard'
 import { Skeleton, SkeletonCard } from '../components/ui/Skeleton'
 import { ScoreBadge } from '../components/evals/ScoreBadge'
 import { RunSuiteModal } from '../components/evals/RunSuiteModal'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
 import type {
   EvalCase,
-  EvalCaseResult,
   EvalModelComparisonHistoryItem,
   EvalModelComparisonResult,
   EvalRun,
@@ -60,7 +47,7 @@ import type {
 } from '../types'
 import { toast } from '../lib/toast'
 
-type Tab = 'cases' | 'history' | 'details' | 'insights' | 'compare'
+type Tab = 'cases' | 'runs' | 'insights' | 'compare'
 
 const scoringMethods: ScoringMethod[] = [
   'llm_judge',
@@ -97,6 +84,8 @@ export function Evaluations() {
   const [caseToDelete, setCaseToDelete] = useState<EvalCase | null>(null)
   const [showImport, setShowImport] = useState(false)
   const [showRunModal, setShowRunModal] = useState(false)
+  const [suiteSearch, setSuiteSearch] = useState('')
+  const [caseRunState, setCaseRunState] = useState<Record<string, { loading?: boolean; passed?: boolean | null; error?: string | null }>>({})
 
   const suitesQuery = useQuery({ queryKey: ['evals', 'suites'], queryFn: evalsApi.suites })
   const agentsQuery = useQuery({ queryKey: ['agents'], queryFn: agentsApi.list })
@@ -147,6 +136,24 @@ export function Evaluations() {
     qc.invalidateQueries({ queryKey: ['evals'] })
   }
 
+  const quickTestMutation = useMutation({
+    mutationFn: (agentId: string) => evalsApi.quickTest(agentId),
+    onSuccess: async payload => {
+      toast.success(`Quick test complete — ${payload.passed}/${payload.total} passed`)
+      if (payload.suite_id) {
+        setSelectedSuiteId(payload.suite_id)
+        setSelectedRunId(payload.run_id)
+        setTab('runs')
+      }
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['evals', 'suite-runs', selectedSuiteId] }),
+        qc.invalidateQueries({ queryKey: ['evals', 'run', payload.run_id] }),
+        qc.invalidateQueries({ queryKey: ['evals', 'suites'] }),
+      ])
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
+
   const runSuite = (suite: EvalSuite) => {
     setSelectedSuiteId(suite.id)
     setShowRunModal(true)
@@ -161,39 +168,55 @@ export function Evaluations() {
     return map
   }, [runDetailQuery.data])
 
+  const filteredSuites = useMemo(() => {
+    const suites = suitesQuery.data || []
+    if (!suiteSearch.trim()) return suites
+    const query = suiteSearch.toLowerCase()
+    return suites.filter(suite =>
+      [suite.name, suite.agent_name || '', suite.description || '']
+        .join(' ')
+        .toLowerCase()
+        .includes(query),
+    )
+  }, [suiteSearch, suitesQuery.data])
+
   return (
     <div className="flex h-full min-h-0 animate-fade-in overflow-hidden">
-      <aside className="flex w-80 shrink-0 flex-col border-r border-white/[0.08] bg-obsidian-925">
-        <div className="border-b border-white/[0.08] p-5">
-          <div className="mb-3 inline-flex rounded-full border border-accent-400/20 bg-accent-400/10 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.22em] text-accent-200">
-            Quality system
+      <aside className="flex w-[260px] shrink-0 flex-col border-r border-white/[0.08] bg-[rgba(5,9,20,0.88)] backdrop-blur-xl">
+        <div className="border-b border-white/[0.08] px-4 py-5">
+          <div className="mb-3">
+            <h1 className="page-title">Evaluations</h1>
+            <p className="page-subtitle">{(suitesQuery.data?.length || 0)} suites · test your agents</p>
           </div>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-[-0.04em] text-white">Eval Suites</h1>
-              <p className="mt-1 text-xs text-obsidian-500">Regression proof for every agent.</p>
-            </div>
-            <button className="btn-primary h-9 px-3 text-xs" onClick={() => setShowSuiteForm(true)}>
-              <Plus size={14} /> New
-            </button>
+          <button className="btn-primary w-full justify-center" onClick={() => setShowSuiteForm(true)}>
+            <Plus size={14} /> Create Suite
+          </button>
+          <div className="mt-4 flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2">
+            <Search size={14} className="text-[var(--text-3)]" />
+            <input
+              value={suiteSearch}
+              onChange={event => setSuiteSearch(event.target.value)}
+              placeholder="Search suites"
+              className="w-full bg-transparent text-sm text-white outline-none placeholder:text-[var(--text-3)]"
+            />
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
           {suitesQuery.isLoading ? (
             <div className="space-y-3">
               {[...Array(4)].map((_, index) => <Skeleton key={index} className="h-32" />)}
             </div>
-          ) : !suitesQuery.data?.length ? (
-            <GlowCard glowColor="cyan" className="p-5 text-center">
-              <FlaskConical className="mx-auto mb-3 text-cyan-300" size={28} />
-              <div className="font-medium text-white">No eval suites yet</div>
-              <p className="mt-2 text-sm text-obsidian-500">Create one to start measuring your agent quality.</p>
-              <button className="btn-primary mt-4 w-full" onClick={() => setShowSuiteForm(true)}>Create Suite</button>
-            </GlowCard>
+          ) : !filteredSuites.length ? (
+            <div className="glass-card rounded-2xl p-5 text-center">
+              <FlaskConical className="mx-auto mb-3 text-indigo-300" size={28} />
+              <div className="font-medium text-white">{suitesQuery.data?.length ? 'No suites match your search' : 'No eval suites yet'}</div>
+              <p className="mt-2 text-sm text-[#8B9DBE]">Create one to start measuring your agent quality.</p>
+              {!suitesQuery.data?.length ? <button className="btn-primary mt-4 w-full" onClick={() => setShowSuiteForm(true)}>Create Suite</button> : null}
+            </div>
           ) : (
-            <div className="space-y-3">
-              {suitesQuery.data.map(suite => (
+            <div className="space-y-1">
+              {filteredSuites.map(suite => (
                 <SuiteCard
                   key={suite.id}
                   suite={suite}
@@ -203,7 +226,6 @@ export function Evaluations() {
                     setTab('cases')
                     setSelectedRunId(null)
                   }}
-                  onRun={() => runSuite(suite)}
                 />
               ))}
             </div>
@@ -224,19 +246,22 @@ export function Evaluations() {
             <SuiteHeader
               suite={detailQuery.data}
               onRun={() => setShowRunModal(true)}
-              onImport={() => setShowImport(true)}
-              onAddCase={() => {
-                setEditingCase(null)
-                setShowCaseForm(true)
-              }}
+              onQuickTest={() => quickTestMutation.mutate(detailQuery.data.agent_id)}
+              quickTesting={quickTestMutation.isPending}
             />
-            <Tabs tab={tab} setTab={setTab} hasRun={Boolean(activeRunId)} />
+            <Tabs tab={tab} setTab={setTab} />
 
             {tab === 'cases' && (
               <TestCasesTab
                 suite={detailQuery.data}
                 cases={cases}
                 latestScores={latestScores}
+                caseRunState={caseRunState}
+                onAddCase={() => {
+                  setEditingCase(null)
+                  setShowCaseForm(true)
+                }}
+                onImport={() => setShowImport(true)}
                 onEdit={caseItem => {
                   setEditingCase(caseItem)
                   setShowCaseForm(true)
@@ -244,35 +269,41 @@ export function Evaluations() {
                 onDelete={caseItem => setCaseToDelete(caseItem)}
                 onRunCase={async caseItem => {
                   try {
+                    setCaseRunState(prev => ({ ...prev, [caseItem.id]: { loading: true } }))
                     const run = await evalsApi.runCase(detailQuery.data!.id, caseItem.id)
+                    const inlineResult = run.results?.find(result => result.case_id === caseItem.id)
+                    setCaseRunState(prev => ({
+                      ...prev,
+                      [caseItem.id]: {
+                        loading: false,
+                        passed: run.passed ?? inlineResult?.passed ?? null,
+                        error: inlineResult?.error_message || null,
+                      },
+                    }))
                     toast.success(run.passed ? 'Case passed' : 'Case failed')
                     setSelectedRunId(run.id)
-                    setTab('details')
+                    setTab('runs')
                     refreshSelected()
                   } catch (error: any) {
+                    setCaseRunState(prev => ({
+                      ...prev,
+                      [caseItem.id]: { loading: false, passed: false, error: extractApiError(error) },
+                    }))
                     toast.error(extractApiError(error))
                   }
                 }}
               />
             )}
 
-            {tab === 'history' && (
+            {tab === 'runs' && (
               <RunHistoryTab
                 suite={detailQuery.data}
                 runs={runsQuery.data?.runs || []}
                 trend={runsQuery.data?.score_trend || []}
-                onSelectRun={run => {
-                  setSelectedRunId(run.id)
-                  setTab('details')
-                }}
-              />
-            )}
-
-            {tab === 'details' && (
-              <RunDetailsTab
-                suite={detailQuery.data}
-                run={runDetailQuery.data || null}
-                loading={runDetailQuery.isLoading}
+                selectedRunId={selectedRunId}
+                selectedRun={runDetailQuery.data || null}
+                loadingSelectedRun={runDetailQuery.isLoading}
+                onSelectRun={run => setSelectedRunId(current => current === run.id ? null : run.id)}
               />
             )}
 
@@ -349,182 +380,201 @@ export function Evaluations() {
   )
 }
 
-function SuiteCard({ suite, selected, onSelect, onRun }: {
+function SuiteCard({ suite, selected, onSelect }: {
   suite: EvalSuite
   selected: boolean
   onSelect: () => void
-  onRun: () => void
 }) {
+  const agentTone = suite.agent_name?.charAt(0).toUpperCase() || 'A'
+  const scoreBadgeClass =
+    suite.last_run_score == null
+      ? 'badge-glass'
+      : suite.last_run_passed
+        ? 'badge-emerald'
+        : 'badge-red'
+
   return (
-    <GlowCard active={selected} hoverable glowColor={suite.last_run_passed === false ? 'red' : 'indigo'} className="p-4">
-      <button className="block w-full text-left" onClick={onSelect}>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate font-semibold text-white">{suite.name}</div>
-            <div className="mt-2 inline-flex max-w-full rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2 py-0.5 text-xs text-cyan-200">
-              <span className="truncate">{suite.agent_name || 'Agent'}</span>
-            </div>
+    <button
+      className={clsx(
+        'data-row w-full rounded-xl px-3 py-3 text-left transition-all',
+        selected ? 'bg-indigo-500/[0.08] border-l-2 border-indigo-400' : 'hover:bg-white/[0.04]',
+      )}
+      onClick={onSelect}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-semibold text-white">{suite.name}</div>
+        <div className="mt-2 flex items-center gap-2">
+          <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-indigo-500/15 text-[10px] font-bold text-indigo-200">
+            {agentTone}
           </div>
-          <ScoreBadge score={suite.last_run_score} threshold={suite.pass_threshold} size="sm" />
+          <span className="truncate text-xs text-[#8B9DBE]">{suite.agent_name || 'Agent'}</span>
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-obsidian-500">
-          <div>{suite.case_count || 0} cases</div>
-          <div className="text-right">{suite.last_run_score == null ? 'Never run' : relative(suite.updated_at || suite.created_at)}</div>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          {suite.last_run_score == null ? (
+            <span className="text-xs text-[#8B9DBE]">never</span>
+          ) : (
+            <span className={clsx('badge font-mono text-[10px]', scoreBadgeClass)}>
+              {Math.round((suite.last_run_score || 0) * 100)}%
+            </span>
+          )}
+          <span className="text-xs text-[#8B9DBE]">{suite.last_run_score == null ? '' : relative(suite.updated_at || suite.created_at)}</span>
         </div>
-      </button>
-      <button className="btn-secondary mt-3 h-9 w-full text-xs" onClick={onRun}>
-        <Play size={13} /> Run Now
-      </button>
-    </GlowCard>
+      </div>
+    </button>
   )
 }
 
 function EmptyEvalHero({ onNew }: { onNew: () => void }) {
   return (
     <div className="grid h-full place-items-center">
-      <GlowCard glowColor="cyan" className="max-w-xl p-10 text-center">
-        <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-accent-500 to-cyan-500 shadow-glow-md">
+      <div className="glass-card max-w-xl rounded-[28px] p-10 text-center">
+        <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 shadow-btn-primary">
           <Beaker size={28} className="text-white" />
         </div>
         <h2 className="text-3xl font-semibold tracking-[-0.05em] text-white">Build your agent quality lab</h2>
-        <p className="mt-3 text-obsidian-400">Turn vibes into scores. Create regression suites, run them before changes, and watch agent quality improve over time.</p>
+        <p className="mt-3 text-[#8B9DBE]">Turn vibes into scores. Create regression suites, run them before changes, and watch agent quality improve over time.</p>
         <button className="btn-primary mt-6" onClick={onNew}><Plus size={16} /> New Eval Suite</button>
-      </GlowCard>
+      </div>
     </div>
   )
 }
 
-function SuiteHeader({ suite, onRun, onImport, onAddCase }: {
+function SuiteHeader({ suite, onRun, onQuickTest, quickTesting }: {
   suite: EvalSuite
   onRun: () => void
-  onImport: () => void
-  onAddCase: () => void
+  onQuickTest: () => void
+  quickTesting: boolean
 }) {
   return (
-    <GlowCard glowColor="indigo" className="p-5">
+    <div className="glass-card p-5">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <span className="badge-purple">{suite.status}</span>
-            <span className="badge-blue">{suite.agent_name || 'Agent'}</span>
-            <span className="badge-gray">v{suite.version}</span>
+            <span className="badge badge-glass">{suite.agent_name || 'Agent'}</span>
           </div>
           <h2 className="text-3xl font-semibold tracking-[-0.05em] text-white">{suite.name}</h2>
-          <p className="mt-2 max-w-2xl text-sm text-obsidian-400">{suite.description || 'No description yet.'}</p>
+          <p className="mt-2 max-w-2xl text-sm text-[#8B9DBE]">{suite.description || 'No description yet.'}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button className="btn-secondary" onClick={onImport}><Upload size={15} /> Import Cases</button>
-          <button className="btn-secondary" onClick={onAddCase}><Plus size={15} /> Add Case</button>
-          <button className="btn-primary" onClick={onRun}><Play size={15} /> Run Suite</button>
+          <button className="btn-secondary" onClick={onQuickTest} disabled={quickTesting}>
+            {quickTesting ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Quick Test
+          </button>
+          <button className="btn-primary" onClick={onRun}><Play size={15} /> Run Eval</button>
         </div>
       </div>
-    </GlowCard>
+    </div>
   )
 }
 
-function Tabs({ tab, setTab, hasRun }: { tab: Tab; setTab: (tab: Tab) => void; hasRun: boolean }) {
-  const tabs: { id: Tab; label: string; icon: LucideIcon; disabled?: boolean }[] = [
-    { id: 'cases', label: 'Test Cases', icon: FileJson },
-    { id: 'history', label: 'Run History', icon: History },
-    { id: 'details', label: 'Run Details', icon: Braces, disabled: !hasRun },
-    { id: 'insights', label: 'Insights', icon: Sparkles },
-    { id: 'compare', label: 'Compare', icon: Trophy },
+function Tabs({ tab, setTab }: { tab: Tab; setTab: (tab: Tab) => void }) {
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'cases', label: 'CASES' },
+    { id: 'runs', label: 'RUNS' },
+    { id: 'insights', label: 'INSIGHTS' },
+    { id: 'compare', label: 'COMPARE' },
   ]
   return (
-    <div className="glass-card flex flex-wrap gap-2 rounded-xl p-1">
-      {tabs.map(({ id, label, icon: Icon, disabled }) => (
+    <div className="glass-card flex flex-wrap gap-5 rounded-xl px-4 py-3">
+      {tabs.map(({ id, label }) => (
         <button
           key={id}
-          disabled={disabled}
           onClick={() => setTab(id)}
           className={clsx(
-            'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-40',
-            tab === id ? 'bg-blue-600/12 text-white shadow-glow-sm' : 'text-obsidian-400 hover:bg-white/[0.04] hover:text-white',
+            'border-b-2 pb-2 font-mono text-[11px] uppercase tracking-[0.14em] transition',
+            tab === id ? 'border-indigo-400 text-indigo-300' : 'border-transparent text-[#8B9DBE] hover:text-white',
           )}
         >
-          <Icon size={15} /> {label}
+          {label}
         </button>
       ))}
     </div>
   )
 }
 
-function TestCasesTab({ suite, cases, latestScores, onEdit, onDelete, onRunCase }: {
+function TestCasesTab({ suite, cases, latestScores, caseRunState, onAddCase, onImport, onEdit, onDelete, onRunCase }: {
   suite: EvalSuite
   cases: EvalCase[]
   latestScores: Map<string, number | null>
+  caseRunState: Record<string, { loading?: boolean; passed?: boolean | null; error?: string | null }>
+  onAddCase: () => void
+  onImport: () => void
   onEdit: (caseItem: EvalCase) => void
   onDelete: (caseItem: EvalCase) => void
   onRunCase: (caseItem: EvalCase) => void
 }) {
-  const columns = useMemo<ColumnDef<EvalCase>[]>(() => [
-    { header: 'Name', accessorKey: 'name', cell: info => <span className="font-medium text-white">{String(info.getValue())}</span> },
-    { header: 'Input', accessorKey: 'input', cell: info => <span className="text-obsidian-400">{truncate(String(info.getValue()), 72)}</span> },
-    { header: 'Expected', accessorKey: 'expected_output', cell: info => <span className="text-obsidian-400">{truncate(String(info.getValue() || 'Judge quality'), 72)}</span> },
-    { header: 'Scoring Method', accessorKey: 'scoring_method', cell: info => <span className="badge-purple capitalize">{methodLabel(String(info.getValue()))}</span> },
-    { header: 'Weight', accessorKey: 'weight', cell: info => <span className="font-mono text-obsidian-300">{Number(info.getValue()).toFixed(1)}</span> },
-    { header: 'Last Score', id: 'last_score', cell: ({ row }) => <ScoreBadge score={latestScores.get(row.original.id)} threshold={suite.pass_threshold} size="sm" /> },
-    {
-      header: 'Actions',
-      id: 'actions',
-      cell: ({ row }) => (
-        <div className="flex justify-end gap-1">
-          <button className="btn-ghost h-8 px-2" onClick={() => onRunCase(row.original)} title="Run just this case"><Play size={14} /></button>
-          <button className="btn-ghost h-8 px-2" onClick={() => onEdit(row.original)} title="Edit"><Pencil size={14} /></button>
-          <button className="btn-ghost h-8 px-2 text-red-300" onClick={() => onDelete(row.original)} title="Delete"><Trash2 size={14} /></button>
-        </div>
-      ),
-    },
-  ], [latestScores, onDelete, onEdit, onRunCase, suite.pass_threshold])
-
-  const table = useReactTable({ data: cases, columns, getCoreRowModel: getCoreRowModel() })
-
   if (!cases.length) {
     return (
-      <GlowCard glowColor="cyan" className="p-10 text-center">
-        <FileJson className="mx-auto mb-3 text-cyan-300" size={30} />
+      <div className="glass-card rounded-[24px] border border-dashed border-white/[0.12] p-10 text-center">
+        <FileJson className="mx-auto mb-3 text-indigo-300" size={30} />
         <div className="font-semibold text-white">No test cases yet</div>
-        <p className="mt-2 text-sm text-obsidian-500">Add cases manually or generate them from execution history.</p>
-      </GlowCard>
+        <p className="mt-2 text-sm text-[#8B9DBE]">Add cases manually or generate them from execution history.</p>
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          <button className="btn-secondary" onClick={onAddCase}><Plus size={14} /> Add Case</button>
+          <button className="btn-ghost" onClick={onImport}>Import Cases</button>
+        </div>
+      </div>
     )
   }
 
   return (
-    <GlowCard glowColor="indigo" className="overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="border-b border-white/[0.08] bg-white/[0.03] text-xs uppercase tracking-wide text-obsidian-500">
-            {table.getHeaderGroups().map(headerGroup => (
-              <tr key={headerGroup.id}>
-                {headerGroup.headers.map(header => (
-                  <th key={header.id} className="px-4 py-3 text-left last:text-right">
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                  </th>
-                ))}
-              </tr>
-            ))}
-          </thead>
-          <tbody>
-            {table.getRowModel().rows.map(row => (
-              <tr key={row.id} className="border-b border-white/[0.05] hover:bg-white/[0.025]">
-                {row.getVisibleCells().map(cell => (
-                  <td key={cell.id} className="max-w-[280px] px-4 py-4 align-top">
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <button className="btn-secondary" onClick={onAddCase}><Plus size={14} /> Add Case</button>
+          <button className="btn-ghost" onClick={onImport}>Import Cases</button>
+        </div>
+        <div className="font-mono text-xs text-[#8B9DBE]">{cases.length} cases</div>
       </div>
-    </GlowCard>
+      <div className="space-y-3">
+        {cases.map(caseItem => {
+          const latestScore = latestScores.get(caseItem.id)
+          const state = caseRunState[caseItem.id]
+          return (
+            <div key={caseItem.id} className="glass-card p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium text-white">{caseItem.name}</div>
+                  <div className="mt-2 text-sm text-[#8B9DBE]">{truncate(caseItem.input, 180)}</div>
+                  <div className="mt-2 text-sm italic text-[var(--text-3)]">
+                    {truncate(caseItem.expected_output || 'Judge quality against the expected behavior.', 160)}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {latestScore != null ? <ScoreBadge score={latestScore} threshold={suite.pass_threshold} size="sm" /> : null}
+                  <button className="btn-ghost btn-sm" onClick={() => onRunCase(caseItem)}>Run this case</button>
+                  <button className="btn-ghost h-8 px-2" onClick={() => onEdit(caseItem)} title="Edit"><Pencil size={14} /></button>
+                  <button className="btn-ghost h-8 px-2 text-red-300" onClick={() => onDelete(caseItem)} title="Delete"><Trash2 size={14} /></button>
+                </div>
+              </div>
+              {state ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {state.loading ? (
+                    <span className="badge badge-glass"><Loader2 size={12} className="animate-spin" /> running</span>
+                  ) : state.passed ? (
+                    <span className="badge badge-emerald">PASS</span>
+                  ) : (
+                    <span className="badge badge-red">FAIL</span>
+                  )}
+                  {!state.loading && state.error ? (
+                    <span className="truncate text-xs text-red-300">{truncate(state.error, 120)}</span>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
-function RunHistoryTab({ suite, runs, trend, onSelectRun }: {
+function RunHistoryTab({ suite, runs, trend, selectedRunId, selectedRun, loadingSelectedRun, onSelectRun }: {
   suite: EvalSuite
   runs: EvalRun[]
   trend: { date: string; score?: number | null; passed?: boolean | null }[]
+  selectedRunId: string | null
+  selectedRun: EvalRun | null
+  loadingSelectedRun: boolean
   onSelectRun: (run: EvalRun) => void
 }) {
   const chartData = trend.map(item => ({
@@ -535,11 +585,11 @@ function RunHistoryTab({ suite, runs, trend, onSelectRun }: {
 
   return (
     <div className="space-y-4">
-      <GlowCard glowColor="indigo" className="p-5">
+      <div className="glass-card glass-card-indigo p-5">
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h3 className="font-semibold text-white">Score trend</h3>
-            <p className="text-sm text-obsidian-500">Reference line: {Math.round(suite.pass_threshold * 100)}% threshold</p>
+            <p className="text-sm text-[#8B9DBE]">Reference line: {Math.round(suite.pass_threshold * 100)}% threshold</p>
           </div>
         </div>
         <div className="h-72">
@@ -550,132 +600,63 @@ function RunHistoryTab({ suite, runs, trend, onSelectRun }: {
               <YAxis domain={[0, 100]} tick={{ fill: '#71717f', fontSize: 11 }} tickFormatter={value => `${value}%`} tickLine={false} axisLine={false} />
               <Tooltip contentStyle={{ background: 'rgba(8,13,26,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, color: '#fff', backdropFilter: 'blur(16px)' }} formatter={value => [`${value}%`, 'Score']} />
               <ReferenceLine y={suite.pass_threshold * 100} stroke="#f59e0b" strokeDasharray="4 4" />
-              <Line type="monotone" dataKey="score" stroke="#2563EB" strokeWidth={2} dot={{ r: 4, fill: '#2563EB' }} activeDot={{ r: 6 }} />
+              <Line type="monotone" dataKey="score" stroke="#6366f1" strokeWidth={2} dot={{ r: 4, fill: '#6366f1' }} activeDot={{ r: 6 }} />
             </LineChart>
           </ResponsiveContainer>
         </div>
-      </GlowCard>
+      </div>
 
       <div className="space-y-3">
         {!runs.length ? (
-          <GlowCard glowColor="cyan" className="p-8 text-center text-obsidian-400">No runs yet. Run the suite to start tracking quality.</GlowCard>
+          <div className="glass-card rounded-2xl border border-dashed border-white/[0.12] p-8 text-center text-[#8B9DBE]">No runs yet. Run the suite to start tracking quality.</div>
         ) : runs.map((run, index) => (
-          <GlowCard key={run.id} glowColor={run.passed ? 'cyan' : 'red'} className="p-4">
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <div className="flex items-center gap-4">
-                <div className="grid h-11 w-11 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.04] font-mono text-sm text-white">#{runs.length - index}</div>
-                <div>
-                  <div className="font-medium text-white">{format(new Date(run.created_at), 'MMM d, yyyy h:mm a')}</div>
-                  <div className="mt-1 flex flex-wrap gap-2 text-xs text-obsidian-500">
-                    <span>{run.passed_cases}/{run.total_cases} passed</span>
-                    <span>{run.error_cases} errors</span>
-                    <span>{run.duration_seconds || 0}s</span>
-                    <span>${(run.total_cost_usd || 0).toFixed(5)}</span>
-                    {run.git_commit && <span className="font-mono">{run.git_commit.slice(0, 7)}</span>}
+          <div key={run.id} className="glass-card overflow-hidden">
+            <button className="data-row min-h-[44px] w-full text-left" onClick={() => onSelectRun(run)}>
+              <div className={clsx('font-mono text-sm font-semibold', (run.suite_score || 0) >= suite.pass_threshold ? 'text-emerald-300' : 'text-red-300')}>
+                {Math.round((run.suite_score || 0) * 100)}%
+              </div>
+              <div className="text-sm text-white">{run.passed_cases}/{run.total_cases} cases</div>
+              <div className="font-mono text-xs text-[#8B9DBE]">{format(new Date(run.created_at), 'MMM d, h:mm a')}</div>
+              <div className="min-w-0 flex-1 truncate text-xs text-[#8B9DBE]">{run.model_config_id || run.triggered_by}</div>
+              <span className={run.passed ? 'badge badge-emerald' : 'badge badge-red'}>{run.passed ? 'pass' : 'fail'}</span>
+            </button>
+            {selectedRunId === run.id ? (
+              <div className="border-t border-white/[0.08] p-4">
+                {loadingSelectedRun ? (
+                  <Skeleton className="h-48" />
+                ) : selectedRun ? (
+                  <div className="space-y-3">
+                    {(selectedRun.results || []).map(result => (
+                      <div key={result.id} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-white">{result.case?.name || 'Case'}</div>
+                            <div className="mt-1 truncate text-xs text-[#8B9DBE]">{truncate(result.case?.input || '', 120)}</div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={result.passed ? 'badge badge-emerald' : 'badge badge-red'}>
+                              {result.passed ? 'PASS' : 'FAIL'}
+                            </span>
+                            {result.score != null ? <ScoreBadge score={result.score} threshold={suite.pass_threshold} size="sm" /> : null}
+                          </div>
+                        </div>
+                        {!result.passed && (result.error_message || result.actual_output) ? (
+                          <div className="mt-2 text-xs text-red-300">
+                            {truncate(result.error_message || result.actual_output || '', 180)}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
                   </div>
-                </div>
+                ) : (
+                  <div className="text-sm text-[#8B9DBE]">No run details loaded.</div>
+                )}
               </div>
-              <div className="flex items-center gap-3">
-                <span className={run.passed ? 'badge-green' : 'badge-red'}>{run.passed ? 'PASSED' : 'FAILED'}</span>
-                <span className="badge-gray">{run.triggered_by}</span>
-                <ScoreBadge score={run.suite_score} threshold={suite.pass_threshold} size="lg" />
-                <button className="btn-secondary h-9 text-xs" onClick={() => onSelectRun(run)}>View Details</button>
-              </div>
-            </div>
-          </GlowCard>
+            ) : null}
+          </div>
         ))}
       </div>
     </div>
-  )
-}
-
-function RunDetailsTab({ suite, run, loading }: { suite: EvalSuite; run: EvalRun | null; loading: boolean }) {
-  const [filter, setFilter] = useState<'all' | 'passed' | 'failed' | 'errors'>('all')
-  const results = (run?.results || []).filter(result => {
-    if (filter === 'passed') return result.passed
-    if (filter === 'failed') return !result.passed && !result.error_message
-    if (filter === 'errors') return Boolean(result.error_message)
-    return true
-  })
-
-  if (loading) return <Skeleton className="h-96" />
-  if (!run) return <GlowCard glowColor="cyan" className="p-8 text-center text-obsidian-400">No run selected yet.</GlowCard>
-
-  return (
-    <div className="space-y-4">
-      <GlowCard glowColor={run.passed ? 'cyan' : 'red'} className="p-5">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h3 className="text-xl font-semibold text-white">Run summary</h3>
-            <p className="mt-1 text-sm text-obsidian-500">{format(new Date(run.created_at), 'MMM d, yyyy h:mm a')} · {run.triggered_by}</p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <ScoreBadge score={run.suite_score} threshold={suite.pass_threshold} size="lg" />
-            <Metric label="Passed" value={`${run.passed_cases}/${run.total_cases}`} />
-            <Metric label="Errors" value={String(run.error_cases)} />
-            <Metric label="Cost" value={`$${(run.total_cost_usd || 0).toFixed(5)}`} />
-          </div>
-        </div>
-      </GlowCard>
-
-      <div className="flex flex-wrap gap-2">
-        {(['all', 'passed', 'failed', 'errors'] as const).map(value => (
-          <button
-            key={value}
-            onClick={() => setFilter(value)}
-            className={clsx('rounded-lg px-3 py-2 text-sm capitalize transition', filter === value ? 'bg-accent-500 text-white' : 'bg-white/[0.04] text-obsidian-400 hover:text-white')}
-          >
-            {value}
-          </button>
-        ))}
-      </div>
-
-      <div className="space-y-3">
-        {results.map(result => <CaseResultCard key={result.id} result={result} suite={suite} />)}
-      </div>
-    </div>
-  )
-}
-
-function CaseResultCard({ result, suite }: { result: EvalCaseResult; suite: EvalSuite }) {
-  const [open, setOpen] = useState(false)
-  const details = result.scoring_details || {}
-  const reasoning = typeof details.reasoning === 'string' ? details.reasoning : ''
-  const strengths = Array.isArray(details.strengths) ? details.strengths : []
-  const weaknesses = Array.isArray(details.weaknesses) ? details.weaknesses : []
-
-  return (
-    <GlowCard glowColor={result.passed ? 'cyan' : 'red'} className="overflow-hidden">
-      <button className="flex w-full items-center justify-between gap-3 p-4 text-left" onClick={() => setOpen(value => !value)}>
-        <div className="flex min-w-0 items-center gap-3">
-          {open ? <ChevronDown size={16} className="text-obsidian-500" /> : <ChevronRight size={16} className="text-obsidian-500" />}
-          <div className="min-w-0">
-            <div className="truncate font-medium text-white">{result.case?.name || 'Eval case'}</div>
-            <div className="mt-1 flex flex-wrap gap-2 text-xs text-obsidian-500">
-              <span className="badge-purple capitalize">{methodLabel(result.case?.scoring_method)}</span>
-              <span>{(result.duration_seconds || 0).toFixed(1)}s</span>
-              <span>{result.tokens_used || 0} tokens</span>
-              <span>${(result.cost_usd || 0).toFixed(5)}</span>
-            </div>
-          </div>
-        </div>
-        <ScoreBadge score={result.score} threshold={suite.pass_threshold} />
-      </button>
-      {open && (
-        <div className="space-y-4 border-t border-white/[0.08] p-4">
-          {result.error_message && (
-            <div className="rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200">{result.error_message}</div>
-          )}
-          {reasoning && <JudgeBlock title="Judge reasoning" value={reasoning} />}
-          {!!strengths.length && <JudgeBlock title="Strengths" value={strengths.map(String).join('\n')} />}
-          {!!weaknesses.length && <JudgeBlock title="Weaknesses" value={weaknesses.map(String).join('\n')} />}
-          <DiffSection title="Input" value={result.case?.input} />
-          <DiffSection title="Expected" value={result.case?.expected_output || 'No specific expected output'} />
-          <DiffSection title="Actual" value={result.actual_output || ''} highlight />
-          <DiffSection title="Scoring details JSON" value={JSON.stringify(details, null, 2)} />
-        </div>
-      )}
-    </GlowCard>
   )
 }
 
@@ -693,29 +674,29 @@ function InsightsTab({ suite, insights, loading }: { suite: EvalSuite; insights?
 
   return (
     <div className="grid gap-4 xl:grid-cols-2">
-      <GlowCard glowColor={delta == null || delta >= 0 ? 'cyan' : 'red'} className="p-5">
+      <div className={clsx('glass-card p-5', delta != null && delta < 0 ? 'glass-card-red' : 'glass-card-emerald')}>
         <div className="flex items-center gap-3">
           <div className={clsx('grid h-11 w-11 place-items-center rounded-xl', delta == null || delta >= 0 ? 'bg-emerald-400/10 text-emerald-300' : 'bg-red-400/10 text-red-300')}>
             {delta == null || delta >= 0 ? <ArrowUpRight /> : <ArrowDownRight />}
           </div>
           <div>
-            <div className="text-sm text-obsidian-500">Score Trend</div>
+            <div className="text-sm text-[#8B9DBE]">Score trend</div>
             <div className="font-mono text-2xl font-semibold text-white">{delta == null ? '—' : `${delta >= 0 ? '+' : ''}${Math.round(delta * 100)} pts`}</div>
           </div>
         </div>
-      </GlowCard>
-      <GlowCard glowColor="indigo" className="p-5">
+      </div>
+      <div className="glass-card glass-card-indigo p-5">
         <div className="mb-2 flex items-center gap-2 font-semibold text-white"><Sparkles size={17} /> Recommendation</div>
-        <p className="text-sm leading-6 text-obsidian-300">{recommendation}</p>
-      </GlowCard>
+        <p className="text-sm leading-6 text-[#D7E0EF]">{recommendation}</p>
+      </div>
       <InsightList title="Hardest Cases" icon={AlertTriangle} items={(insights?.hardest_cases || []).filter((item: any) => (item.avg_score || 0) < 0.6).map((item: any) => `${item.case_name || item.case_id} · avg ${Math.round((item.avg_score || 0) * 100)}%`)} />
       <InsightList title="Regressions" icon={ArrowDownRight} items={(insights?.regression_cases || []).map((item: any) => item.case_name || item.case_id)} />
       <InsightList title="Most Improved" icon={ArrowUpRight} items={(insights?.most_improved_cases || []).map((item: any) => `${item.case_name || item.case_id} · +${Math.round((item.delta || 0) * 100)} pts`)} />
-      <GlowCard glowColor="cyan" className="p-5">
+      <div className="glass-card p-5">
         <div className="mb-3 font-semibold text-white">Suite threshold</div>
         <ScoreBadge score={suite.pass_threshold} threshold={suite.pass_threshold} size="lg" />
-        <p className="mt-3 text-sm text-obsidian-500">Runs pass when the weighted average reaches this threshold.</p>
-      </GlowCard>
+        <p className="mt-3 text-sm text-[#8B9DBE]">Runs pass when the weighted average reaches this threshold.</p>
+      </div>
     </div>
   )
 }
@@ -769,11 +750,11 @@ function CompareTab({
 
   return (
     <div className="space-y-4">
-      <GlowCard glowColor="blue" className="p-5">
+      <div className="glass-card glass-card-indigo p-5">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <h3 className="text-xl font-semibold text-white">Compare Models on This Suite</h3>
-            <p className="mt-2 text-sm text-obsidian-400">
+            <p className="mt-2 text-sm text-[#8B9DBE]">
               Run the same eval suite on two saved model configs and compare pass rate, speed, and cost.
             </p>
           </div>
@@ -785,7 +766,7 @@ function CompareTab({
                 </option>
               ))}
             </select>
-            <div className="grid place-items-center text-sm font-semibold text-obsidian-400">vs</div>
+            <div className="grid place-items-center text-sm font-semibold text-[#8B9DBE]">vs</div>
             <select className="input" value={modelBId} onChange={e => setModelBId(e.target.value)}>
               {models.map(model => (
                 <option key={model.id} value={model.id}>
@@ -798,7 +779,7 @@ function CompareTab({
 
         <div className="mt-5 flex flex-wrap items-center gap-3">
           <button
-            className="btn-primary"
+            className="btn-primary btn-runner"
             disabled={!modelAId || !modelBId || modelAId === modelBId || compareMutation.isPending}
             onClick={() => compareMutation.mutate()}
           >
@@ -815,13 +796,13 @@ function CompareTab({
             )}
           </button>
           {compareMutation.isPending && (
-            <span className="text-sm text-obsidian-500">This takes about {estimatedSeconds}s for two full runs.</span>
+            <span className="text-sm text-[#8B9DBE]">This takes about {estimatedSeconds}s for two full runs.</span>
           )}
         </div>
-      </GlowCard>
+      </div>
 
       {result && (
-        <GlowCard glowColor={winnerSide ? 'emerald' : 'cyan'} className="p-5">
+        <div className={clsx('glass-card p-5', winnerSide ? 'glass-card-emerald shadow-btn-approve' : 'glass-card-indigo')}>
           <div className="grid gap-4 lg:grid-cols-2">
             {([
               ['A', result.model_a],
@@ -838,11 +819,11 @@ function CompareTab({
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="text-xs uppercase tracking-[0.18em] text-obsidian-500">Model {slot}</div>
+                      <div className="text-xs uppercase tracking-[0.18em] text-[#8B9DBE]">Model {slot}</div>
                       <div className="mt-2 text-lg font-semibold text-white">{side.display_name || side.model_name}</div>
-                      <div className="mt-1 text-sm text-obsidian-400">{side.model_name}</div>
+                      <div className="mt-1 text-sm text-[#8B9DBE]">{side.model_name}</div>
                     </div>
-                    {isWinner && <span className="badge-emerald"><Trophy size={12} /> Winner</span>}
+                    {isWinner && <span className="badge badge-emerald"><Trophy size={12} /> Winner</span>}
                   </div>
                   <div className="mt-4 space-y-2 text-sm text-white/80">
                     <div className="flex items-center justify-between"><span>Pass rate</span><span className="font-semibold text-white">{side.pass_rate}%</span></div>
@@ -861,12 +842,12 @@ function CompareTab({
               </div>
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-white">Winner reason</div>
-                <p className="mt-1 text-sm leading-6 text-obsidian-400">{result.winner_reason}</p>
+                <p className="mt-1 text-sm leading-6 text-[#8B9DBE]">{result.winner_reason}</p>
               </div>
             </div>
             {winnerSide && (
               <button
-                className="btn-emerald mt-4"
+                className="btn-emerald btn-runner mt-4"
                 disabled={applyMutation.isPending}
                 onClick={() => applyMutation.mutate(winnerSide.model_config_id)}
               >
@@ -881,21 +862,21 @@ function CompareTab({
               </button>
             )}
           </div>
-        </GlowCard>
+        </div>
       )}
 
-      <GlowCard glowColor="cyan" className="overflow-hidden">
+      <div className="glass-card overflow-hidden">
         <div className="border-b border-white/[0.08] px-5 py-4">
           <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-white/70">Previous Comparisons</h4>
         </div>
         {loadingHistory ? (
           <div className="p-5"><Skeleton className="h-40" /></div>
         ) : !history.length ? (
-          <div className="p-5 text-sm text-obsidian-400">No comparisons yet. Run one to build a history for this suite.</div>
+          <div className="p-5 text-sm text-[#8B9DBE]">No comparisons yet. Run one to build a history for this suite.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-white/[0.03] text-left text-xs uppercase tracking-[0.14em] text-obsidian-500">
+              <thead className="bg-white/[0.03] text-left text-xs uppercase tracking-[0.14em] text-[#8B9DBE]">
                 <tr>
                   <th className="px-4 py-3">Date</th>
                   <th className="px-4 py-3">Model A</th>
@@ -907,15 +888,15 @@ function CompareTab({
               <tbody>
                 {history.map(item => (
                   <tr key={item.comparison_group_id} className="border-t border-white/[0.05] hover:bg-white/[0.025]">
-                    <td className="px-4 py-3 text-obsidian-400">{relative(item.created_at)}</td>
+                    <td className="px-4 py-3 text-[#8B9DBE]">{relative(item.created_at)}</td>
                     <td className="px-4 py-3 text-white">{item.model_a.display_name || item.model_a.model_name}</td>
                     <td className="px-4 py-3 text-white">{item.model_b.display_name || item.model_b.model_name}</td>
                     <td className="px-4 py-3">
-                      <span className={clsx('badge-glass', item.winner && 'badge-emerald')}>
+                      <span className={clsx('badge', item.winner ? 'badge-emerald' : 'badge-glass')}>
                         {item.winner_label}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-obsidian-400">
+                    <td className="px-4 py-3 text-[#8B9DBE]">
                       {item.pass_rates.model_a}% vs {item.pass_rates.model_b}%
                     </td>
                   </tr>
@@ -924,7 +905,7 @@ function CompareTab({
             </table>
           </div>
         )}
-      </GlowCard>
+      </div>
     </div>
   )
 }
@@ -967,7 +948,7 @@ function SuiteForm({ open, agents, onClose, onCreated }: {
           </select>
         </Field>
         <Field label={`Pass threshold (${Math.round(threshold * 100)}%)`}>
-          <input type="range" min={0.1} max={1} step={0.05} value={threshold} onChange={e => setThreshold(Number(e.target.value))} className="w-full accent-blue-500" />
+          <input type="range" min={0.1} max={1} step={0.05} value={threshold} onChange={e => setThreshold(Number(e.target.value))} className="w-full indigo-indigo-500" />
         </Field>
         <Field label="Description"><textarea className="input min-h-24 resize-none" value={description} onChange={e => setDescription(e.target.value)} /></Field>
         <button className="btn-primary w-full" disabled={!name || !agentId || mutation.isPending} onClick={() => mutation.mutate()}>
@@ -1035,10 +1016,10 @@ function CaseForm({ open, suiteId, existing, onClose, onSaved }: {
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm">
-      <div className="h-full w-full max-w-xl overflow-y-auto border-l border-white/[0.1] bg-obsidian-900 p-6 shadow-glow-md">
+      <div className="glass-elevated h-full w-full max-w-xl overflow-y-auto rounded-none border-l border-white/[0.1] p-6">
         <div className="mb-6 flex items-center justify-between">
           <div>
-            <div className="text-xs uppercase tracking-[0.2em] text-obsidian-500">Eval case</div>
+            <div className="text-xs uppercase tracking-[0.2em] text-[#8B9DBE]">Eval case</div>
             <h3 className="mt-1 text-2xl font-semibold text-white">{existing ? 'Edit case' : 'Add case'}</h3>
           </div>
           <button className="btn-ghost h-9 px-2" onClick={onClose}><X size={16} /></button>
@@ -1103,13 +1084,13 @@ function ImportCasesModal({ open, suite, onClose, onImported }: {
   return (
     <ModalShell title="Import eval cases" onClose={onClose}>
       <div className="space-y-5">
-        <GlowCard glowColor="cyan" className="p-4">
+        <div className="glass-card p-4">
           <div className="mb-2 flex items-center gap-2 font-medium text-white"><Sparkles size={16} /> Generate from history</div>
-          <p className="mb-4 text-sm text-obsidian-500">Analyzes the last 50 successful executions for this agent and creates regression cases.</p>
+          <p className="mb-4 text-sm text-[#8B9DBE]">Analyzes the last 50 successful executions for this agent and creates regression cases.</p>
           <button className="btn-secondary w-full" disabled={generating} onClick={generate}>
             {generating ? 'Analyzing last 50 executions...' : 'Generate 10 Test Cases'}
           </button>
-        </GlowCard>
+        </div>
         <Field label="Paste JSON array">
           <textarea className="input min-h-56 resize-y font-mono" value={jsonText} onChange={e => setJsonText(e.target.value)} placeholder='[{"name":"...", "input":"...", "scoring_method":"llm_judge"}]' />
         </Field>
@@ -1119,47 +1100,18 @@ function ImportCasesModal({ open, suite, onClose, onImported }: {
   )
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
-      <div className="text-xs uppercase tracking-[0.16em] text-obsidian-500">{label}</div>
-      <div className="mt-1 font-mono text-lg font-semibold text-white">{value}</div>
-    </div>
-  )
-}
-
-function DiffSection({ title, value, highlight = false }: { title: string; value?: string | null; highlight?: boolean }) {
-  return (
-    <details className="rounded-xl border border-white/[0.08] bg-black/20">
-      <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-white">{title}</summary>
-      <pre className={clsx('max-h-80 overflow-auto whitespace-pre-wrap border-t border-white/[0.08] p-4 font-mono text-xs leading-6', highlight ? 'text-cyan-100' : 'text-obsidian-300')}>
-        {value || '—'}
-      </pre>
-    </details>
-  )
-}
-
-function JudgeBlock({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-accent-400/20 bg-accent-400/10 p-3">
-      <div className="mb-1 text-xs uppercase tracking-[0.16em] text-accent-200">{title}</div>
-      <div className="whitespace-pre-wrap text-sm text-obsidian-200">{value}</div>
-    </div>
-  )
-}
-
 function InsightList({ title, icon: Icon, items }: { title: string; icon: LucideIcon; items: string[] }) {
   return (
-    <GlowCard glowColor="indigo" className="p-5">
+    <div className="glass-card glass-card-indigo p-5">
       <div className="mb-4 flex items-center gap-2 font-semibold text-white"><Icon size={17} /> {title}</div>
       {items.length ? (
         <div className="space-y-2">
-          {items.map((item, index) => <div key={`${item}-${index}`} className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-sm text-obsidian-300">{item}</div>)}
+          {items.map((item, index) => <div key={`${item}-${index}`} className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-sm text-[#D7E0EF]">{item}</div>)}
         </div>
       ) : (
-        <p className="text-sm text-obsidian-500">Nothing notable yet.</p>
+        <p className="text-sm text-[#8B9DBE]">Nothing notable yet.</p>
       )}
-    </GlowCard>
+    </div>
   )
 }
 
@@ -1170,7 +1122,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 function ModalShell({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-xl rounded-2xl border border-white/[0.1] bg-obsidian-900 p-6 shadow-glow-md">
+      <div className="glass-elevated w-full max-w-xl rounded-2xl p-6">
         <div className="mb-6 flex items-center justify-between">
           <h3 className="text-xl font-semibold text-white">{title}</h3>
           <button className="btn-ghost h-9 px-2" onClick={onClose}><X size={16} /></button>

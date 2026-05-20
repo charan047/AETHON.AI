@@ -10,14 +10,15 @@ import {
 } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
+import { motion } from 'framer-motion'
 import { clsx } from 'clsx'
 import {
+  AlertCircle,
   ArrowRight,
   AtSign,
   BarChart3,
   Building2,
   CheckCircle2,
-  ChevronLeft,
   ChevronRight,
   CirclePause,
   Clock3,
@@ -26,6 +27,8 @@ import {
   Loader2,
   MoreHorizontal,
   Paperclip,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pin,
   Plus,
   Search,
@@ -37,10 +40,11 @@ import {
   Workflow,
   Zap,
 } from 'lucide-react'
-import { toast as sonnerToast } from 'sonner'
 import { agentsApi, approvalsApi, companyApi, companyChatApi, dashboardApi } from '../api/client'
 import { MentionTextarea } from '../components/ui/MentionTextarea'
+import { GoalCard } from '../components/mission/GoalCard'
 import { ExecutionLiveView } from '../components/execution/ExecutionLiveView'
+import { MarkdownContent, cleanMarkdownContent } from '../components/ui/MarkdownContent'
 import { useAuth } from '../contexts/AuthContext'
 import { useWebSocket } from '../contexts/WebSocketContext'
 import { toast } from '../lib/toast'
@@ -130,10 +134,6 @@ function formatDayGroup(value: string) {
   return date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })
 }
 
-function cleanAssistantText(content: string) {
-  return content.replace(/<action>[\s\S]*?<\/action>/g, '').trim()
-}
-
 function initialsFromEmail(email?: string | null) {
   if (!email) return 'Founder'
   const name = email.split('@')[0]?.replace(/[._-]+/g, ' ') || 'Founder'
@@ -166,53 +166,17 @@ function normalizeOutboundMessage(raw: string) {
   return raw
 }
 
-function renderInline(text: string) {
-  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean).map((part, index) => {
-    if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={index} className="font-semibold text-white">{part.slice(2, -2)}</strong>
-    }
-    if (part.startsWith('`') && part.endsWith('`')) {
-      return <code key={index} className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[0.85em] text-blue-200">{part.slice(1, -1)}</code>
-    }
-    return <span key={index}>{part}</span>
-  })
+function MarkdownMessage({ content }: { content: string }) {
+  return <MarkdownContent content={content} />
 }
 
-function MarkdownMessage({ content }: { content: string }) {
-  const cleaned = cleanAssistantText(content)
-  const parts = cleaned.split(/```/g)
-  if (!cleaned) return null
-  return (
-    <div className="space-y-3">
-      {parts.map((part, index) => {
-        const isCode = index % 2 === 1
-        if (isCode) {
-          return (
-            <pre key={index} className="overflow-x-auto rounded-xl border border-white/10 bg-black/35 p-3 font-mono text-xs text-cyan-100">
-              <code>{part.replace(/^\w+\n/, '')}</code>
-            </pre>
-          )
-        }
-        const lines = part.split('\n')
-        return (
-          <div key={index} className="space-y-1.5">
-            {lines.map((line, lineIndex) => {
-              if (!line.trim()) return <div key={lineIndex} className="h-2" />
-              if (line.trim().startsWith('- ')) {
-                return (
-                  <div key={lineIndex} className="flex gap-2">
-                    <span className="mt-2 h-1.5 w-1.5 rounded-full bg-blue-400" />
-                    <span>{renderInline(line.trim().slice(2))}</span>
-                  </div>
-                )
-              }
-              return <p key={lineIndex}>{renderInline(line)}</p>
-            })}
-          </div>
-        )
-      })}
-    </div>
-  )
+function roleColorTone(role?: string | null) {
+  const value = (role || '').toLowerCase()
+  if (value.includes('sales') || value.includes('outreach')) return 'from-amber-500/80 to-red-500/70'
+  if (value.includes('research') || value.includes('analysis')) return 'from-indigo-500/80 to-violet-500/70'
+  if (value.includes('ops') || value.includes('automation')) return 'from-emerald-500/80 to-emerald-500/70'
+  if (value.includes('design') || value.includes('creative')) return 'from-violet-500/80 to-pink-500/70'
+  return 'from-indigo-500/80 to-violet-500/70'
 }
 
 function agentStatusTone(status: string) {
@@ -229,12 +193,14 @@ function agentStatusTone(status: string) {
 }
 
 function actionRoute(action: ChatActionResult) {
+  if (action.type === 'mission_created' && action.mission_id) return `/missions/${action.mission_id}/report`
   if (action.page === 'approvals') return '/approvals'
   if (action.page === 'agents') return '/agents'
   if (action.page === 'workflows') return '/workflows'
   if (action.page === 'messages') return '/messages'
   if (action.page === 'company-chat') return '/company-chat'
   if (action.page === 'analytics') return '/analytics'
+  if (action.mission_id) return '/missions'
   if (action.execution_id) return `/executions/${action.execution_id}`
   if (action.workflow_id) return '/workflows'
   if (action.agent_id) return '/agents'
@@ -264,13 +230,13 @@ function ExecutionProgressCard({
   const progressValue = state.status === 'completed' ? 100 : Math.min(85, 20 + recentSteps.length * 18)
 
   return (
-    <div className="mt-3 rounded-2xl border border-cyan-400/15 bg-cyan-400/10 p-3">
+    <div className="mt-3 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 p-3">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <div className="text-sm font-medium text-cyan-50">Execution live</div>
+        <div className="text-sm font-medium text-emerald-50">Execution live</div>
         <button
           type="button"
           onClick={onOpen}
-          className="text-xs text-cyan-100/70 transition hover:text-cyan-50"
+          className="text-xs text-emerald-100/70 transition hover:text-emerald-50"
         >
           View live →
         </button>
@@ -279,12 +245,12 @@ function ExecutionProgressCard({
         <div
           className={clsx(
             'h-2 rounded-full transition-all',
-            state.status === 'completed' ? 'bg-emerald-400' : 'bg-cyan-300',
+            state.status === 'completed' ? 'bg-emerald-400' : 'bg-emerald-300',
           )}
           style={{ width: `${progressValue}%` }}
         />
       </div>
-      <div className="space-y-1.5 text-xs text-cyan-50/80">
+      <div className="space-y-1.5 text-xs text-emerald-50/80">
         {recentSteps.length === 0 ? (
           <div>Preparing execution...</div>
         ) : recentSteps.map(step => (
@@ -310,16 +276,29 @@ function ActionCard({
   const Icon = isError ? Clock3 : action.type === 'show_status' ? Users : action.type === 'show_analytics' ? BarChart3 : action.type === 'summarize_week' ? FileText : action.type === 'company_insight' ? Sparkles : action.type === 'bulk_approve' ? CheckCircle2 : Zap
   const progress = actionProgress(activeExecutions, action.execution_id)
 
+  if (action.type === 'mission_created' && action.mission_id) {
+    return (
+      <GoalCard
+        missionId={action.mission_id}
+        missionTitle={action.mission_title || action.label || action.message || 'Mission'}
+        initialTasks={[]}
+      />
+    )
+  }
+
   if (isStandupAction(action)) {
     return (
-      <div className="mt-3 overflow-hidden rounded-2xl border border-emerald-400/15 bg-obsidian-900">
+      <div
+        className="mt-3 overflow-hidden rounded-2xl border border-emerald-400/15 bg-white/[0.03]"
+        style={{ backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
+      >
         <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
           <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
           <span className="text-xs font-medium text-white/70">Standup in progress</span>
           <button
             type="button"
             onClick={() => navigate(`/executions/${action.execution_id}`)}
-            className="ml-auto text-xs text-accent-400/70 transition hover:text-accent-400"
+            className="ml-auto text-xs text-indigo-400/70 transition hover:text-indigo-400"
           >
             Open →
           </button>
@@ -338,19 +317,19 @@ function ActionCard({
     <div
       className={clsx(
         'mt-3 rounded-2xl border p-4 text-left shadow-glow-sm',
-        isError ? 'border-red-400/20 bg-red-500/10 text-red-100' : 'border-accent-purple/20 bg-accent-purple/10 text-accent-100',
+        isError ? 'border-red-400/20 bg-red-500/10 text-red-100' : 'border-blue-500/20 bg-blue-500/10 text-[#DBEAFE]',
       )}
     >
       <div className="flex items-start gap-3">
-        <span className={clsx('grid h-9 w-9 place-items-center rounded-xl', isError ? 'bg-red-500/20' : 'bg-accent-purple/20')}>
+        <span className={clsx('grid h-9 w-9 place-items-center rounded-xl', isError ? 'bg-red-500/20' : 'bg-blue-500/15 text-blue-300')}>
           <Icon size={17} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-white">{action.label || action.message || 'Action completed'}</div>
-          {action.message && action.label && <div className="mt-1 text-xs text-white/65">{action.message}</div>}
+          {action.message && action.label ? <div className="mt-1 text-xs text-white/65">{action.message}</div> : null}
 
           {action.type === 'show_status' && action.agent_statuses && (
-            <div className="mt-3 rounded-2xl border border-white/10 bg-black/15 p-3">
+            <div className="mt-3 rounded-2xl border border-white/[0.08] bg-black/15 p-3">
               <div className="space-y-2">
                 {action.agent_statuses.map(status => (
                   <div key={`${status.name}_${status.role}`} className="flex items-start justify-between gap-3 text-xs">
@@ -369,26 +348,26 @@ function ActionCard({
           )}
 
           {action.type === 'summarize_week' && action.summary && (
-            <div className="mt-3 rounded-2xl border border-white/10 bg-black/15 p-3 text-sm leading-6 text-white/85">
+            <div className="mt-3 rounded-2xl border border-white/[0.08] bg-black/15 p-3 text-sm leading-6 text-white/85">
               <MarkdownMessage content={action.summary} />
             </div>
           )}
 
           {action.type === 'company_insight' && action.insight && (
-            <blockquote className="mt-3 rounded-2xl border border-accent-purple/25 bg-accent-purple/10 p-3 text-sm leading-6 text-white/85">
+            <blockquote className="mt-3 rounded-2xl border border-blue-500/20 bg-blue-500/10 p-3 text-sm leading-6 text-white/85">
               {action.insight}
             </blockquote>
           )}
 
           {action.type === 'analyze_file' && action.analysis && (
-            <div className="mt-3 rounded-2xl border border-white/10 bg-black/15 p-3 text-sm leading-6 text-white/85">
+            <div className="mt-3 rounded-2xl border border-white/[0.08] bg-black/15 p-3 text-sm leading-6 text-white/85">
               <div className="mb-2 text-xs uppercase tracking-[0.18em] text-white/35">{action.filename || 'Attachment'}</div>
               <MarkdownMessage content={action.analysis} />
             </div>
           )}
 
           {action.type === 'show_analytics' && action.data && (
-            <div className="mt-3 rounded-2xl border border-white/10 bg-black/15 p-3 text-sm text-white/85">
+            <div className="mt-3 rounded-2xl border border-white/[0.08] bg-black/15 p-3 text-sm text-white/85">
               <div>{String(action.data.executions_this_week || 0)} executions this week</div>
               <div>{String(action.data.success_rate || 0)}% success rate</div>
             </div>
@@ -407,7 +386,7 @@ function ActionCard({
           <button
             type="button"
             onClick={() => navigate(route)}
-            className="rounded-xl border border-white/10 px-2 py-1 text-xs text-white/70 transition hover:bg-white/5 hover:text-white"
+            className="rounded-xl border border-white/[0.08] px-2 py-1 text-xs text-white/70 transition hover:bg-white/5 hover:text-white"
           >
             Open
           </button>
@@ -465,35 +444,60 @@ function MessageBubble({
 
   if (isSystem) {
     return (
-      <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-full border border-cyan-300/15 bg-cyan-300/10 px-4 py-2 text-xs text-cyan-100">
+      <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-full border border-emerald-300/15 bg-emerald-300/10 px-4 py-2 text-xs text-emerald-100">
         <Sparkles size={13} />
         <span>{message.content}</span>
-        <span className="text-cyan-100/50">{formatTime(message.createdAt)}</span>
+        <span className="text-emerald-100/50">{formatTime(message.createdAt)}</span>
       </div>
     )
   }
 
   return (
     <div className={clsx('flex w-full gap-3', isUser ? 'justify-end' : 'justify-start')}>
-      {!isUser && (
-        <div className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-2xl border border-white/10 bg-gradient-to-br from-accent-purple/25 to-accent-cyan/20 text-cyan-100 shadow-glow-sm">
-          <Building2 size={18} />
-        </div>
-      )}
-      <div className={clsx('max-w-[76%]', isUser && 'flex flex-col items-end')}>
-        <div
+      <div className={clsx(isUser ? 'max-w-[72%] flex flex-col items-end' : 'max-w-[80%]')}>
+        <motion.div
+          initial={isUser ? { opacity: 0, x: 18, scale: 0.96 } : { opacity: 0, y: 12 }}
+          animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
+          transition={{ duration: 0.22, ease: 'easeOut' }}
           className={clsx(
-            'rounded-2xl px-4 py-3 text-sm leading-6',
-            isUser
-              ? 'rounded-br-md bg-gradient-to-br from-accent-purple to-indigo-600 text-white shadow-glow-sm'
-              : 'rounded-bl-md border border-white/10 bg-obsidian-900 text-obsidian-100',
+            'relative px-4 py-3 text-sm leading-6',
+            isUser ? 'rounded-[18px] rounded-br-[4px] text-white' : 'rounded-[18px] rounded-bl-[4px] text-[#F0F6FF]',
             message.pending && 'opacity-80',
-            message.failed && 'border border-red-400/20 bg-red-500/10 text-red-100',
+            !isUser && !message.failed && 'glass-card',
+            message.failed && 'glass-card glass-card-red',
           )}
+          style={
+            isUser
+              ? {
+                  background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                  boxShadow: '0 2px 8px rgba(99,102,241,0.35), inset 0 1px 0 rgba(255,255,255,0.15)',
+                }
+              : undefined
+          }
         >
-          {isUser ? <p className="whitespace-pre-wrap">{message.content}</p> : <MarkdownMessage content={message.content} />}
+          {!isUser && !message.failed ? (
+            <div className="absolute left-3 top-3 flex h-4 w-4 items-center justify-center rounded-full bg-indigo-500/15">
+              <div className="h-1.5 w-1.5 rounded-full bg-indigo-300" />
+            </div>
+          ) : null}
+
+          <div className={clsx(!isUser && !message.failed && 'pt-3')}>
+            {message.failed ? (
+              <div className="flex items-start gap-2">
+                <AlertCircle size={15} className="mt-0.5 shrink-0 text-red-400" />
+                <div className="text-red-200">
+                  <MarkdownMessage content={message.content} />
+                </div>
+              </div>
+            ) : isUser ? (
+              <p className="whitespace-pre-wrap">{message.content}</p>
+            ) : (
+              <MarkdownMessage content={message.content} />
+            )}
+          </div>
+
           {message.streaming && (
-            <span className="ml-1 inline-block h-4 w-1 animate-pulse rounded-full bg-accent-cyan align-middle" />
+            <span className="ml-1 inline-block h-4 w-2 animate-blink rounded-[2px] bg-indigo-300 align-middle" />
           )}
           {!isUser && message.actions?.map((action, index) => (
             <ActionCard
@@ -502,8 +506,8 @@ function MessageBubble({
               activeExecutions={activeExecutions}
             />
           ))}
-        </div>
-        <div className="mt-1 px-1 font-mono text-[10px] uppercase tracking-[0.16em] text-obsidian-500">
+        </motion.div>
+        <div className="mt-1 px-1 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint">
           {formatTime(message.createdAt)}
         </div>
         {!isUser && (
@@ -540,7 +544,7 @@ function CommandMenu({
 
   let currentGroup = ''
   return (
-    <div className="absolute bottom-full left-0 mb-3 w-[360px] rounded-2xl border border-white/10 bg-[#0f1520]/95 p-2 shadow-2xl backdrop-blur-xl">
+    <div className="absolute bottom-full left-0 mb-3 w-[360px] rounded-2xl border border-white/[0.08] bg-[#0f1520]/95 p-2 shadow-2xl backdrop-blur-xl">
       {filtered.map((command, index) => {
         const groupHeader = command.group !== currentGroup
         currentGroup = command.group
@@ -557,7 +561,7 @@ function CommandMenu({
               onClick={() => onSelect(command)}
               className={clsx(
                 'flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition',
-                activeIndex === index ? 'bg-accent-purple/15 text-white' : 'hover:bg-white/5',
+                activeIndex === index ? 'bg-blue-600/12 text-white' : 'hover:bg-white/5',
               )}
             >
               <span className="grid h-8 w-8 place-items-center rounded-lg bg-white/5 text-white/70">{command.icon}</span>
@@ -578,13 +582,13 @@ function EmptyPromptCard({ icon, title, prompt, onPick }: { icon: ReactNode; tit
     <button
       type="button"
       onClick={() => onPick(prompt)}
-      className="glass-card group cursor-pointer rounded-2xl p-5 text-left transition duration-150 hover:-translate-y-1 hover:border-blue-500/25 hover:shadow-glow-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 motion-reduce:hover:translate-y-0"
+      className="glass-card group cursor-pointer rounded-2xl p-4 text-left transition duration-150 hover:-translate-y-0.5 hover:border-indigo-500/25 hover:shadow-glow-md focus:outline-none focus:ring-2 focus:ring-indigo-500/30 motion-reduce:hover:translate-y-0"
     >
-      <div className="mb-4 grid h-10 w-10 place-items-center rounded-xl bg-blue-500/10 text-blue-300 group-hover:bg-blue-500/15">
+      <div className="mb-4 grid h-10 w-10 place-items-center rounded-xl bg-white/[0.05] text-indigo-300 group-hover:bg-indigo-500/12">
         {icon}
       </div>
       <div className="font-medium text-white">{title}</div>
-      <div className="mt-2 text-sm leading-5 text-[#8B9DBE]">{prompt}</div>
+      <div className="mt-2 text-xs leading-5 text-[#8B9DBE]">{prompt}</div>
     </button>
   )
 }
@@ -689,6 +693,18 @@ export function CompanyChat() {
     handleResize()
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  useEffect(() => {
+    const handler = (e: globalThis.KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+        e.preventDefault()
+        setSidebarOpen(v => !v)
+      }
+    }
+
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
   }, [])
 
   useEffect(() => {
@@ -1028,110 +1044,116 @@ export function CompanyChat() {
     return { pinned, recent }
   }, [sidebarConversations])
 
-  const quickCards = useMemo(() => {
-    if (pendingApprovals.length > 0) {
-      return [
-        { icon: <CheckCircle2 size={18} />, title: `${pendingApprovals.length} items need your approval`, prompt: 'Approve them' },
-        { icon: <Users size={18} />, title: `${firstActiveAgent?.name || 'Your team'} is active`, prompt: `What is ${firstActiveAgent?.name || 'the team'} working on?` },
-        { icon: <BarChart3 size={18} />, title: `Your company generated ${summary?.this_week.tasks_completed || 0} completions this week`, prompt: 'Show me the summary' },
-      ]
-    }
-    return [
-      { icon: <Users size={18} />, title: `${firstActiveAgent?.name || 'Your team'} hasn't reported in yet`, prompt: `@${firstActiveAgent?.name || 'Maya'} run weekly research` },
-      { icon: <BarChart3 size={18} />, title: `Your company generated ${summary?.this_week.tasks_completed || 0} completions this week`, prompt: 'Show me the summary' },
-      { icon: <Sparkles size={18} />, title: 'Nothing urgent right now', prompt: 'What should I focus on next?' },
-    ]
-  }, [pendingApprovals.length, firstActiveAgent, summary?.this_week.tasks_completed])
+  const quickCards = useMemo(() => [
+    { icon: <Search size={18} />, title: 'Research', prompt: `Research this week's competitor moves for ${firstActiveAgent?.name || 'the team'}` },
+    { icon: <BarChart3 size={18} />, title: 'Analytics', prompt: 'Show me company analytics' },
+    { icon: <CheckCircle2 size={18} />, title: 'Approvals', prompt: pendingApprovals.length > 0 ? `Review ${pendingApprovals.length} pending approvals` : 'Do I have anything waiting for approval?' },
+    { icon: <FileText size={18} />, title: 'Summary', prompt: 'Generate a weekly company summary' },
+    { icon: <Workflow size={18} />, title: 'Workflows', prompt: 'Run the weekly research workflow' },
+    { icon: <Users size={18} />, title: 'Team status', prompt: 'What is everyone working on right now?' },
+  ], [firstActiveAgent?.name, pendingApprovals.length])
 
   const conversationSidebar = (
-    <aside className="flex h-full w-[280px] shrink-0 flex-col bg-[rgba(8,13,26,0.9)] backdrop-blur-xl">
-      <div className="border-b border-white/[0.06] px-4 py-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-white">Agency Chat</div>
-            <div className="mt-1 text-xs text-white/35">Command your AI agency</div>
+    <aside
+      className="flex h-full w-[260px] shrink-0 flex-col"
+      style={{
+        background: 'rgba(5,9,20,0.88)',
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
+        borderRight: '1px solid rgba(255,255,255,0.07)',
+      }}
+    >
+      <div className="flex h-14 items-center justify-between px-4">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white">
+            <Building2 size={15} />
           </div>
-          <button
-            type="button"
-            onClick={handleNewConversation}
-            className="cursor-pointer rounded-xl border border-white/10 bg-white/[0.03] p-2 text-white/70 transition hover:bg-white/[0.06] hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-            title="New conversation"
-          >
-            <Plus size={15} />
-          </button>
+          <span className="text-sm font-bold tracking-tight text-white">Agency Chat</span>
         </div>
-        <div className="mt-4 flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2">
-          <Search size={14} className="text-white/35" />
+        <button
+          type="button"
+          onClick={handleNewConversation}
+          className="btn-icon"
+          title="New conversation"
+        >
+          <Plus size={16} />
+        </button>
+      </div>
+
+      <div className="px-4 pb-3">
+        <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2">
+          <Search size={14} className="text-[#4B5A73]" />
           <input
             value={search}
             onChange={event => setSearch(event.target.value)}
-            placeholder="Search conversations"
-            className="w-full bg-transparent text-sm text-white outline-none placeholder:text-white/25"
+            placeholder="Search"
+            className="w-full bg-transparent text-sm text-white outline-none placeholder:text-[#4B5A73]"
           />
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {groupedSidebar.pinned.length > 0 && (
-          <div className="mb-5">
-            <div className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/25">Pinned</div>
-            <div className="space-y-1.5">
-              {groupedSidebar.pinned.map(conversation => (
-                <button
-                  key={conversation.id}
-                  type="button"
-                  onClick={() => void loadConversation(conversation.id)}
-                  className={clsx(
-                    'w-full cursor-pointer rounded-2xl border px-3 py-3 text-left transition duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500/30',
-                    conversationId === conversation.id ? 'border-blue-500/25 bg-blue-500/10' : 'border-white/5 bg-white/[0.02] hover:border-white/10 hover:bg-white/[0.04]',
-                  )}
-                >
-                  <div className="flex items-start gap-2">
-                    <Pin size={12} className="mt-0.5 text-amber-300" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-white">{conversation.title}</div>
-                      <div className="mt-1 text-xs text-white/35">{conversation.message_count} messages · {formatRelative(conversation.last_message_at)}</div>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+        <p className="px-3 pb-1 pt-1 font-mono text-[9px] font-semibold uppercase tracking-[0.22em]" style={{ color: 'rgba(255,255,255,0.18)' }}>
+          Recent
+        </p>
+        <div className="space-y-1">
+          {sidebarConversations.map(conversation => {
+            const conversationTitle = conversation.title?.trim() || 'New conversation'
 
-        <div>
-          <div className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/25">Recent</div>
-          <div className="space-y-1.5">
-            {groupedSidebar.recent.map(conversation => (
+            return (
               <button
                 key={conversation.id}
                 type="button"
                 onClick={() => void loadConversation(conversation.id)}
                 className={clsx(
-                  'group w-full cursor-pointer rounded-2xl border px-3 py-3 text-left transition duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500/30',
-                  conversationId === conversation.id ? 'border-blue-500/25 bg-blue-500/10' : 'border-white/5 bg-white/[0.02] hover:border-white/10 hover:bg-white/[0.04]',
+                  'data-row relative min-h-[44px] w-full rounded-xl border border-transparent px-3 py-2.5 text-left transition-all',
+                  conversationId === conversation.id
+                    ? 'bg-indigo-500/[0.08] border-l-2 border-indigo-500'
+                    : 'hover:bg-white/[0.04]',
                 )}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-white">{conversation.title}</div>
-                    <div className="mt-1 text-xs text-white/35">{conversation.message_count} messages · {formatRelative(conversation.last_message_at)}</div>
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/80 to-violet-500/70 text-[10px] font-bold text-white">
+                    {conversationTitle.charAt(0).toUpperCase()}
                   </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-white">{conversationTitle}</div>
+                    <div className="mt-0.5 truncate text-xs text-[#8B9DBE]">
+                      {conversation.message_count} messages · {formatRelative(conversation.last_message_at)}
+                    </div>
+                  </div>
+                  {conversation.pinned ? <Pin size={12} className="shrink-0 text-amber-300" /> : null}
                 </div>
               </button>
-            ))}
-          </div>
+            )
+          })}
         </div>
+      </div>
+
+      <div className="border-t border-white/[0.07] p-3">
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(false)}
+          className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs text-[#8B9DBE] transition hover:bg-white/[0.04] hover:text-white"
+        >
+          <span className="flex items-center gap-2">
+            <PanelLeftClose size={14} className="transition-colors hover:text-indigo-300" />
+            Hide sidebar
+          </span>
+          <span className="font-mono text-[10px] text-[#4B5A73]">⌘\</span>
+        </button>
       </div>
     </aside>
   )
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-transparent">
+    <div className="relative flex h-full min-h-0 flex-1 flex-row overflow-hidden bg-transparent">
       {isDesktopSidebar ? (
-        <div className="hidden shrink-0 border-r border-white/[0.06] lg:flex">
-          {conversationSidebar}
-        </div>
+        sidebarOpen ? (
+          <div className="hidden shrink-0 lg:flex">
+            {conversationSidebar}
+          </div>
+        ) : null
       ) : sidebarOpen ? (
         <>
           <div
@@ -1144,56 +1166,62 @@ export function CompanyChat() {
         </>
       ) : null}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.08] bg-[rgba(8,13,26,0.82)] px-5 backdrop-blur-xl">
-          <div className="flex items-center gap-3">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {!sidebarOpen && (
+          <div className="absolute left-3 top-1/2 z-20 -translate-y-1/2">
             <button
               type="button"
-              onClick={() => setSidebarOpen(value => !value)}
-              className="inline-flex cursor-pointer rounded-xl p-2 text-white/40 transition hover:bg-white/5 hover:text-white/70 focus:outline-none focus:ring-2 focus:ring-blue-500/30 lg:hidden"
-              aria-label={sidebarOpen ? 'Hide conversations' : 'Show conversations'}
-              title={sidebarOpen ? 'Hide conversations' : 'Show conversations'}
+              onClick={() => setSidebarOpen(true)}
+              className="glass-elevated group flex cursor-pointer flex-col items-center gap-1.5 rounded-2xl px-2 py-4 transition-all duration-200 hover:-translate-x-0.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+              title="Open sidebar"
             >
-              {sidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+              <PanelLeftOpen size={15} className="text-[#4B5A73] transition-colors duration-150 group-hover:text-indigo-300" />
+              <div className="flex flex-col items-center gap-0.5">
+                {'Chat'.split('').map((char, i) => (
+                  <span
+                    key={i}
+                    className="text-[10px] font-semibold tracking-wide text-[#4B5A73] transition-colors duration-150 group-hover:text-[#8B9DBE]"
+                  >
+                    {char}
+                  </span>
+                ))}
+              </div>
             </button>
-            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-gradient-to-br from-blue-500/20 to-emerald-500/12 text-blue-100 shadow-glow-sm ring-1 ring-white/10">
+          </div>
+        )}
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.08] bg-[rgba(8,13,26,0.82)] px-5 backdrop-blur-xl">
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500/20 to-violet-500/12 text-indigo-100 shadow-glow-sm ring-1 ring-white/10">
               <Building2 size={20} />
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight text-white">{currentConversation?.title || 'Agency Chat'}</h1>
-              <p className="text-xs text-[#8B9DBE]">
-                {companyState?.agents.length || 0} agents · {companyState?.workflows.length || 0} workflows · {connected ? 'live now' : 'reconnecting'}
-              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[#8B9DBE]">
+                <span className={clsx('badge', connected ? 'badge-emerald' : 'badge-amber')}>{connected ? 'Realtime' : 'Reconnecting'}</span>
+                <span className="badge badge-glass">{activeAgentCount} active agents</span>
+                <button
+                  type="button"
+                  onClick={() => setContextOpen(value => !value)}
+                  className="inline-flex items-center gap-1 text-[#8B9DBE] transition hover:text-white"
+                >
+                  Company Context <ChevronRight size={13} className={contextOpen ? 'rotate-90' : ''} />
+                </button>
+              </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-medium text-white/60 md:inline-flex">
-              <span className={clsx('h-2 w-2 rounded-full', connected ? 'bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.8)]' : 'bg-amber-300')} />
-              {connected ? 'Realtime connected' : 'Realtime reconnecting'}
-            </div>
-            <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-medium text-white/60 md:inline-flex">
-              <Users size={12} className="text-blue-300" />
-              {activeAgentCount} active agents
-            </div>
-            <button
-              type="button"
-              onClick={() => setContextOpen(value => !value)}
-              className="hidden cursor-pointer rounded-xl border border-white/10 px-3 py-2 text-xs text-white/65 transition hover:bg-white/5 hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 lg:inline-flex"
-            >
-              Company Context {contextOpen ? <ChevronRight size={14} className="ml-1 rotate-90" /> : <ChevronRight size={14} className="ml-1" />}
-            </button>
             {conversationId && (
               <div className="relative">
                 <button
                   type="button"
                   onClick={() => setShowMenu(value => !value)}
-                  className="rounded-xl border border-white/10 p-2 text-white/55 transition hover:bg-white/5 hover:text-white"
+                  className="rounded-xl border border-white/[0.08] p-2 text-white/55 transition hover:bg-white/5 hover:text-white"
                 >
                   <MoreHorizontal size={16} />
                 </button>
                 {showMenu && currentConversation && (
-                  <div className="absolute right-0 top-11 z-30 w-48 rounded-2xl border border-white/10 bg-[#0f1520]/95 p-2 shadow-2xl backdrop-blur-xl">
+                  <div className="absolute right-0 top-11 z-30 w-48 rounded-2xl border border-white/[0.08] bg-[#0f1520]/95 p-2 shadow-2xl backdrop-blur-xl">
                     <button type="button" onClick={() => pinMutation.mutate(currentConversation.id)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-white/70 transition hover:bg-white/5 hover:text-white">
                       <Pin size={14} /> {currentConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}
                     </button>
@@ -1227,13 +1255,13 @@ export function CompanyChat() {
                 </div>
               )}
               {messages.length === 0 ? (
-            <div className="mx-auto flex min-h-full max-w-5xl flex-col items-center justify-center text-center">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.22em] text-blue-300">
-                    <Sparkles size={13} /> Chief of Staff Online
+                <div className="mx-auto flex min-h-full max-w-5xl flex-col items-center justify-center text-center">
+                  <div className="flex h-20 w-20 items-center justify-center rounded-[24px] bg-gradient-to-br from-indigo-500/20 to-violet-500/12 text-indigo-200 animate-float">
+                    <Building2 size={34} />
                   </div>
-                  <h2 className="mt-5 text-4xl font-semibold tracking-tight text-white">Good {new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}, {founderName}</h2>
+                  <h2 className="mt-6 text-4xl font-semibold tracking-tight text-white">Agency Chat</h2>
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-[#8B9DBE]">
-                    Ask for status, run workflows, analyze files, and direct your agency from one command surface.
+                    Command your AI agency in plain language.
                   </p>
 
                   <div className="mt-8 grid w-full gap-4 md:grid-cols-3">
@@ -1242,23 +1270,15 @@ export function CompanyChat() {
                     ))}
                   </div>
 
-                  <div className="mt-8 grid w-full max-w-3xl gap-3 md:grid-cols-3">
-                    {[
-                      { icon: <Search size={16} />, label: 'Research', value: '@Maya research this week\'s competitor moves' },
-                      { icon: <BarChart3 size={16} />, label: 'Analytics', value: '/analytics' },
-                      { icon: <CheckCircle2 size={16} />, label: 'Approve all', value: '/approve-all' },
-                      { icon: <FileText size={16} />, label: 'Summary', value: '/summary' },
-                      { icon: <Zap size={16} />, label: 'Run workflow', value: 'Run the weekly research workflow' },
-                      { icon: <Users size={16} />, label: 'Team status', value: '/status' },
-                    ].map(item => (
+                  <div className="mt-8 flex w-full max-w-4xl flex-wrap items-center justify-center gap-3">
+                    {dynamicChips.map(chip => (
                       <button
-                        key={item.label}
+                        key={chip}
                         type="button"
-                        onClick={() => setInput(item.value)}
-                        className="glass-card cursor-pointer rounded-2xl px-4 py-3 text-left transition duration-150 hover:border-blue-500/25 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                        onClick={() => setInput(chip)}
+                        className="rounded-full border border-white/[0.08] bg-white/[0.03] px-4 py-2 text-xs text-[#8B9DBE] transition hover:border-indigo-500/25 hover:bg-indigo-600/[0.06] hover:text-indigo-300"
                       >
-                        <div className="mb-2 text-blue-300">{item.icon}</div>
-                        <div className="text-sm font-medium text-white">{item.label}</div>
+                        {chip}
                       </button>
                     ))}
                   </div>
@@ -1283,7 +1303,7 @@ export function CompanyChat() {
                           message={message}
                           activeExecutions={activeExecutions}
                           onCopy={() => {
-                            void navigator.clipboard.writeText(cleanAssistantText(message.content))
+                            void navigator.clipboard.writeText(cleanMarkdownContent(message.content))
                             toast.success('Copied')
                           }}
                           onRegenerate={regenerateLast}
@@ -1301,7 +1321,7 @@ export function CompanyChat() {
               )}
             </div>
 
-            <footer className="sticky bottom-0 z-10 shrink-0 border-t border-white/[0.08] bg-obsidian-925/95 px-5 py-4 backdrop-blur-xl">
+            <footer className="sticky bottom-0 z-10 shrink-0 border-t border-white/[0.08] bg-[rgba(8,13,26,0.95)] px-5 py-4 backdrop-blur-xl">
               <div className="mx-auto max-w-5xl">
                 <div className="mb-3 flex flex-wrap gap-2">
                   {dynamicChips.map(chip => (
@@ -1309,14 +1329,14 @@ export function CompanyChat() {
                       key={chip}
                       type="button"
                       onClick={() => setInput(chip)}
-                      className="cursor-pointer rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-[#8B9DBE] transition duration-150 hover:border-blue-500/25 hover:bg-blue-500/10 hover:text-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                      className="cursor-pointer rounded-full border border-white/[0.08] bg-white/[0.03] px-4 py-2 text-xs font-medium text-[#8B9DBE] transition duration-150 hover:border-indigo-500/25 hover:bg-indigo-600/[0.06] hover:text-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 backdrop-blur-sm"
                     >
                       {chip}
                     </button>
                   ))}
                 </div>
 
-                <form onSubmit={onSubmit} className="glass-card relative rounded-2xl p-3 shadow-glow-sm focus-within:border-blue-500/40">
+                <form onSubmit={onSubmit} className="glass-elevated relative rounded-2xl px-4 py-3 shadow-glow-sm focus-within:border-indigo-500/40">
                   {showCommandMenu && (
                     <CommandMenu
                       query={slashQuery}
@@ -1329,7 +1349,7 @@ export function CompanyChat() {
                   {attachments.length > 0 && (
                     <div className="mb-3 flex flex-wrap gap-2">
                       {attachments.map((attachment, index) => (
-                        <div key={`${attachment.filename}_${index}`} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/70">
+                        <div key={`${attachment.filename}_${index}`} className="inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-white/70">
                           <FileText size={12} />
                           <span>{String(attachment.filename || 'attachment')}</span>
                           <button
@@ -1348,10 +1368,10 @@ export function CompanyChat() {
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="grid h-11 w-11 place-items-center rounded-xl bg-white/[0.04] text-obsidian-300 transition hover:bg-white/[0.08] hover:text-white"
+                      className="btn-icon h-9 w-9 shrink-0"
                       title="Attach file"
                     >
-                      <Paperclip size={18} />
+                      <Paperclip size={16} />
                     </button>
                     <div className="flex-1">
                       <MentionTextarea
@@ -1360,25 +1380,25 @@ export function CompanyChat() {
                         agents={agents}
                         rows={1}
                         minHeightClassName="min-h-11 max-h-40"
-                        placeholder="Type a message... or / for commands · @Maya to tag"
-                        className="max-h-40 flex-1 resize-none border-0 bg-transparent py-3 placeholder:text-obsidian-500 focus:border-transparent"
+                        placeholder="Type a command or @mention an agent..."
+                        className="max-h-40 flex-1 resize-none border-0 bg-transparent py-2 placeholder:text-ink-faint focus:border-transparent"
                         onKeyDown={handleInputKeyDown}
                       />
                       <div className="mt-2 flex items-center justify-between text-[11px] text-white/30">
                         <span>Use @ to mention agents · Cmd+Enter to send</span>
                         <div className="flex items-center gap-2">
-                          <button type="button" onClick={() => setInput('/status')} className="rounded-lg px-2 py-1 transition hover:bg-white/5 hover:text-white/65"><AtSign size={12} className="inline mr-1" />Status</button>
-                          <button type="button" onClick={() => setInput('/summary')} className="rounded-lg px-2 py-1 transition hover:bg-white/5 hover:text-white/65"><Clock3 size={12} className="inline mr-1" />Summary</button>
+                          <button type="button" onClick={() => setInput('/status')} className="btn-ghost px-2 py-1 text-xs"><AtSign size={12} className="inline mr-1" />Status</button>
+                          <button type="button" onClick={() => setInput('/summary')} className="btn-ghost px-2 py-1 text-xs"><Clock3 size={12} className="inline mr-1" />Summary</button>
                         </div>
                       </div>
                     </div>
                     <button
                       type="submit"
                       disabled={!input.trim() || sending}
-                      className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-blue-600 to-blue-700 text-white shadow-glow-sm transition duration-150 hover:shadow-glow-md disabled:cursor-not-allowed disabled:opacity-50"
+                      className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-indigo-500 to-indigo-700 text-white shadow-btn-primary transition duration-150 hover:shadow-glow-md disabled:cursor-not-allowed disabled:opacity-50"
                       title="Send"
                     >
-                      {sending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+                      {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
                     </button>
                   </div>
                   <input
@@ -1395,53 +1415,82 @@ export function CompanyChat() {
           </main>
 
           {contextOpen && (
-            <aside className="hidden w-[300px] shrink-0 border-l border-white/[0.06] bg-[rgba(8,13,26,0.78)] backdrop-blur-xl lg:block">
-              <div className="p-4">
-                <div className="mb-4 text-sm font-semibold text-white">Company Context</div>
-                <div className="space-y-4 rounded-3xl border border-white/8 bg-white/[0.03] p-4">
-                  <div>
-                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/25">Team status</div>
-                    <div className="space-y-2">
-                      {(summary?.team_status || []).slice(0, 6).map(agent => (
-                        <div key={agent.agent_id} className="flex items-center justify-between gap-2 text-sm">
-                          <div className="min-w-0">
-                            <div className="truncate text-white">{agent.name}</div>
-                            <div className="truncate text-xs text-white/30">{agent.current_task || 'Idle'}</div>
+            <aside className="hidden w-[320px] shrink-0 border-l border-white/[0.06] bg-[rgba(8,13,26,0.78)] p-4 backdrop-blur-xl lg:block">
+              <div className="space-y-3">
+                <div className="glass-card rounded-2xl p-3">
+                  <div className="section-title mb-3 border-0 pb-0">Team Status</div>
+                  <div className="space-y-2.5">
+                    {(summary?.team_status || []).slice(0, 6).map(agent => {
+                      const agentName = agent.name?.trim() || 'Agent'
+                      return (
+                        <div key={agent.agent_id} className="flex items-center gap-2.5">
+                          <div className={clsx('status-dot', agent.status === 'working' ? 'dot-live dot-green' : 'dot-muted')} />
+                          <div className={clsx('flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-[10px] font-bold text-white', roleColorTone(agent.role || agentName))}>
+                            {agentName.charAt(0)}
                           </div>
-                          <div className={clsx('text-xs', agentStatusTone(agent.status))}>{agent.status}</div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xs font-semibold text-white">{agentName}</p>
+                            <p className="truncate text-[11px] text-[#8B9DBE]">{agent.role || agent.current_task || 'Idle'}</p>
+                          </div>
+                          <div className="text-right text-[11px] text-[#8B9DBE]">
+                            {agent.status}
+                          </div>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/25">Recent activity</div>
-                    <div className="space-y-2">
-                      {(summary?.recent_artifacts || []).slice(0, 4).map((artifact, index) => (
-                        <div key={`${artifact.title}_${index}`} className="text-sm">
-                          <div className="truncate text-white/80">{artifact.title}</div>
-                          <div className="text-xs text-white/30">{artifact.agent_name} · {formatRelative(artifact.created_at)}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/25">Pending approvals</div>
-                    {pendingApprovals.length > 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => navigate('/approvals')}
-                        className="w-full rounded-2xl border border-amber-400/15 bg-amber-500/10 px-3 py-3 text-left transition hover:bg-amber-500/15"
-                      >
-                        <div className="text-sm text-amber-100">{pendingApprovals.length} items need attention</div>
-                        <div className="mt-1 text-xs text-amber-100/60">View →</div>
-                      </button>
-                    ) : (
-                      <div className="text-sm text-white/45">Nothing waiting right now.</div>
+                      )
+                    })}
+                    {(summary?.team_status || []).length === 0 && (
+                      <p className="text-xs text-[#8B9DBE]">No agents active.</p>
                     )}
                   </div>
                 </div>
+
+                <div className="glass-card rounded-2xl p-3">
+                  <div className="section-title mb-3 border-0 pb-0">Recent Activity</div>
+                  <div className="space-y-2">
+                    {(summary?.recent_artifacts || []).slice(0, 4).map((artifact, index) => (
+                      <div key={`${artifact.title}_${index}`} className="flex items-start gap-2">
+                        <div className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-400/70" />
+                        <div className="min-w-0">
+                          <p className="truncate text-xs text-[#F0F6FF]">{artifact.title}</p>
+                          <p className="mt-0.5 text-[11px] text-[#8B9DBE]">
+                            {artifact.agent_name} · {formatRelative(artifact.created_at)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                    {(summary?.recent_artifacts || []).length === 0 && (
+                      <p className="text-xs text-[#8B9DBE]">No activity yet.</p>
+                    )}
+                  </div>
+                </div>
+
+                {pendingApprovals.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/approvals')}
+                    className="glass-card glass-card-amber w-full rounded-2xl p-3 text-left transition duration-150 hover:border-amber-500/35"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/15 ring-1 ring-amber-500/25">
+                        <AlertCircle size={13} className="text-amber-400" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold text-amber-200">
+                          {pendingApprovals.length} pending · Review →
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                ) : (
+                  <div className="glass-card rounded-2xl p-3">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/10 ring-1 ring-emerald-500/20">
+                        <CheckCircle2 size={13} className="text-emerald-400" />
+                      </div>
+                      <p className="text-xs text-[#8B9DBE]">Nothing waiting right now.</p>
+                    </div>
+                  </div>
+                )}
               </div>
             </aside>
           )}

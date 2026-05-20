@@ -61,7 +61,7 @@ export function ReputationCard({ agent }: { agent: Agent }) {
 
         <div className="min-w-0 flex-1">
           <h3 className="text-lg font-semibold text-white">Reputation</h3>
-          <p className="mt-1 text-sm text-obsidian-400">
+          <p className="mt-1 text-sm text-ink-muted">
             {reputation?.approved_count || 0} of {reputation?.total_tasks || 0} tasks approved
           </p>
           <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-5">
@@ -69,7 +69,7 @@ export function ReputationCard({ agent }: { agent: Agent }) {
             <Stat label="Approved" value={reputation?.approved_count || 0} tone="text-emerald-300" />
             <Stat label="Rejected" value={reputation?.rejected_count || 0} tone="text-red-300" />
             <Stat label="Edited" value={reputation?.edited_count || 0} tone="text-amber-300" />
-            <Stat label="Accuracy" value={`${outputAccuracy}%`} tone="text-cyan-300" />
+            <Stat label="Accuracy" value={`${outputAccuracy}%`} tone="text-emerald-300" />
           </div>
         </div>
       </div>
@@ -117,7 +117,7 @@ export function ReputationCard({ agent }: { agent: Agent }) {
                   <div>
                     <p className="text-sm leading-6 text-slate-300">{text}</p>
                     {createdAt && (
-                      <p className="mt-1 font-mono text-[11px] text-obsidian-500">
+                      <p className="mt-1 font-mono text-[11px] text-ink-faint">
                         from {formatDistanceToNow(new Date(createdAt), { addSuffix: true })}
                       </p>
                     )}
@@ -126,7 +126,7 @@ export function ReputationCard({ agent }: { agent: Agent }) {
               </div>
             )
           }) : (
-            <div className="rounded-xl border border-white/[0.08] bg-obsidian-950/60 p-4 text-sm text-obsidian-500">
+            <div className="rounded-xl border border-white/[0.08] bg-obsidian-950/60 p-4 text-sm text-ink-faint">
               No learnings yet. Give feedback to help this agent improve.
             </div>
           )}
@@ -140,7 +140,7 @@ function Stat({ label, value, tone = 'text-white' }: { label: string; value: str
   return (
     <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-center">
       <div className={`font-mono text-sm font-semibold ${tone}`}>{value}</div>
-      <div className="mt-1 text-[10px] uppercase tracking-wide text-obsidian-500">{label}</div>
+      <div className="mt-1 text-[10px] uppercase tracking-wide text-ink-faint">{label}</div>
     </div>
   )
 }

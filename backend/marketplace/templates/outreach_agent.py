@@ -38,7 +38,7 @@ TEMPLATE: MarketplaceTemplate = {
     },
     "agent": {
         "name": "Outreach Agent",
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "temperature": 0.3,
         "max_iterations": 18,
         "tools": ["web_search", "web_scrape", "news_search", "gmail_send"],

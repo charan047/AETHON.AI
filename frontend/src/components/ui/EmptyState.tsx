@@ -1,57 +1,58 @@
-import type { ReactNode } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 
 interface EmptyStateProps {
-  icon: ReactNode
+  icon?: ComponentType<{ size?: number; className?: string }> | ReactNode
   title: string
-  description: string
-  action?: {
-    label: string
-    onClick: () => void
-  }
+  description?: string
+  action?: (() => void) | { label: string; onClick: () => void }
+  actionLabel?: string
   secondaryAction?: {
     label: string
     onClick: () => void
   }
+  dashed?: boolean
 }
 
 export function EmptyState({
-  icon,
   title,
   description,
   action,
+  actionLabel,
   secondaryAction,
+  icon: Icon,
+  dashed = false,
 }: EmptyStateProps) {
+  const primaryAction = typeof action === 'function' ? { onClick: action, label: actionLabel || 'Get started' } : action
+  const isIconComponent = typeof Icon === 'function'
+
   return (
-    <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
-      <div className="relative mb-6">
-        <div className="grid h-16 w-16 place-items-center rounded-2xl border border-white/[0.08] bg-blue-600/10 text-blue-400 shadow-glow-sm">
-          {icon}
+    <div
+      className={`flex flex-col items-center justify-center rounded-2xl px-6 py-12 text-center ${dashed ? 'border border-dashed border-white/[0.12]' : ''}`}
+    >
+      {Icon ? (
+        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-indigo-500/15 bg-indigo-500/10">
+          {isIconComponent ? <Icon size={22} className="text-indigo-400" /> : Icon}
         </div>
-      </div>
-
-      <h3 className="mb-2 text-lg font-semibold text-white">{title}</h3>
-
-      <p className="mb-6 max-w-xs text-sm leading-relaxed text-ink-secondary">
-        {description}
-      </p>
-
-      {action && (
-        <button
-          onClick={action.onClick}
-          className="btn-primary"
-        >
-          {action.label}
+      ) : null}
+      <p className="font-semibold text-ink-secondary">{title}</p>
+      {description ? (
+        <p className="mt-1.5 max-w-xs text-sm text-ink-muted">{description}</p>
+      ) : null}
+      {primaryAction ? (
+        <button className="btn btn-secondary btn-sm mt-5" onClick={primaryAction.onClick}>
+          {primaryAction.label}
         </button>
-      )}
-
-      {secondaryAction && (
+      ) : null}
+      {secondaryAction ? (
         <button
           onClick={secondaryAction.onClick}
           className="mt-3 text-xs text-ink-muted transition-colors hover:text-ink-secondary"
         >
           {secondaryAction.label}
         </button>
-      )}
+      ) : null}
     </div>
   )
 }
+
+export default EmptyState

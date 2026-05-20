@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { customToolsApi, extractApiError, type ToolParam } from '../api/client'
+import { useNavigate } from 'react-router-dom'
+import { customToolsApi, extractApiError, toolsApi, type ToolParam } from '../api/client'
 import {
-  Plus, Trash2, Play, Save, X, Wrench, CheckCircle2,
+  Plus, Play, Save, X, Wrench, CheckCircle2,
   AlertCircle, ChevronRight, Code2, FlaskConical, RefreshCw,
+  Search, Mail, Slack, Github, FileText, Table2,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { CustomTool } from '../types'
@@ -11,6 +13,77 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog'
 import { toast } from '../lib/toast'
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
+
+const STARTER_TOOLS_SEED_KEY = 'aethon-custom-tools-starter-pack-seeded'
+
+const BLANK_TOOL_TEMPLATE = {
+  name: 'utility_helper',
+  description: 'Custom helper that returns a formatted string for agents to use in workflows.',
+  code: `def run(query: str, max_results: int = 3) -> str:
+    """Describe what this tool does — the LLM reads this to decide when to call it."""
+    results = [f"Result {i + 1} for '{query}'" for i in range(max_results)]
+    return "\\n".join(results)
+`,
+}
+
+const STARTER_TOOL_TEMPLATES = [
+  {
+    name: 'client_summary_builder',
+    description: 'Build a client-ready weekly summary from accomplishments, blockers, and next steps.',
+    code: `def run(client_name: str, accomplishments: list, blockers: list = None, next_steps: list = None) -> str:
+    blockers = blockers or []
+    next_steps = next_steps or []
+
+    def bullets(items: list) -> str:
+        if not items:
+            return "- None"
+        return "\\n".join(f"- {item}" for item in items)
+
+    return (
+        f"# {client_name} Weekly Update\\n\\n"
+        f"## Accomplished\\n{bullets(accomplishments)}\\n\\n"
+        f"## Blockers\\n{bullets(blockers)}\\n\\n"
+        f"## Next Steps\\n{bullets(next_steps)}"
+    )
+`,
+  },
+  {
+    name: 'lead_csv_formatter',
+    description: 'Convert lead records into a clean CSV preview or email-ready table snippet.',
+    code: `def run(rows: list, include_header: bool = True) -> str:
+    if not rows:
+        return "name,email,company"
+
+    normalized = []
+    for row in rows:
+        normalized.append(
+            {
+                "name": str(row.get("name", "")).strip(),
+                "email": str(row.get("email", "")).strip(),
+                "company": str(row.get("company", "")).strip(),
+            }
+        )
+
+    lines = []
+    if include_header:
+        lines.append("name,email,company")
+
+    for row in normalized:
+        lines.append(f"{row['name']},{row['email']},{row['company']}")
+
+    return "\\n".join(lines)
+`,
+  },
+] as const
+
+function makeToolDraft(template = BLANK_TOOL_TEMPLATE): Partial<CustomTool> {
+  return {
+    name: template.name,
+    description: template.description,
+    code: template.code,
+    is_active: true,
+  }
+}
 
 function typeDefault(type: string): unknown {
   const t = type.toLowerCase()
@@ -123,11 +196,12 @@ function ToolEditor({
   onClose: () => void
 }) {
   const qc = useQueryClient()
+  const draft = tool ?? makeToolDraft()
   const isNew = !tool?.id
 
-  const [name, setName] = useState(tool?.name ?? '')
-  const [description, setDescription] = useState(tool?.description ?? '')
-  const [code, setCode] = useState(tool?.code ?? '')
+  const [name, setName] = useState(draft.name ?? '')
+  const [description, setDescription] = useState(draft.description ?? '')
+  const [code, setCode] = useState(draft.code ?? BLANK_TOOL_TEMPLATE.code)
 
   // Param state
   const [params, setParams] = useState<ToolParam[]>([])
@@ -376,12 +450,25 @@ function ToolEditor({
 
 export function Tools() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [editing, setEditing] = useState<Partial<CustomTool> | null | false>(false)
   const [toolToDelete, setToolToDelete] = useState<CustomTool | null>(null)
+  const [selectedBuiltIn, setSelectedBuiltIn] = useState<any | null>(null)
+  const builtInDetailsRef = useRef<HTMLDivElement | null>(null)
 
   const { data: tools = [], isLoading } = useQuery({
     queryKey: ['custom-tools'],
     queryFn: customToolsApi.list,
+  })
+
+  const { data: catalog = [] } = useQuery({
+    queryKey: ['tools', 'catalog'],
+    queryFn: toolsApi.catalog,
+  })
+
+  const { data: providerHealth = {} } = useQuery({
+    queryKey: ['tools', 'provider-health'],
+    queryFn: toolsApi.providerHealth,
   })
 
   const deleteMut = useMutation({
@@ -399,55 +486,333 @@ export function Tools() {
       customToolsApi.update(id, { is_active }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-tools'] }),
   })
+  const starterPackMut = useMutation({
+    mutationFn: async () => {
+      const results = await Promise.allSettled(
+        STARTER_TOOL_TEMPLATES.map(template => customToolsApi.create({ ...template })),
+      )
+
+      let created = 0
+      let duplicate = 0
+      let failed = 0
+      let firstError = ''
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          created += 1
+          continue
+        }
+
+        const message = extractApiError(result.reason)
+        if (message.toLowerCase().includes('already exists')) {
+          duplicate += 1
+        } else {
+          failed += 1
+          firstError ||= message
+        }
+      }
+
+      if (!created && failed) {
+        throw new Error(firstError || 'Failed to add starter tools')
+      }
+
+      return { created, duplicate }
+    },
+    onSuccess: async ({ created, duplicate }) => {
+      window.localStorage.setItem(STARTER_TOOLS_SEED_KEY, '1')
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['custom-tools'] }),
+        qc.invalidateQueries({ queryKey: ['agent-tools'] }),
+      ])
+      if (created > 0) {
+        toast.success(`Added ${created} starter custom tools`)
+      } else if (duplicate > 0) {
+        toast.info('Starter tools already exist')
+      }
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (isLoading || tools.length > 0 || starterPackMut.isPending) return
+    if (window.localStorage.getItem(STARTER_TOOLS_SEED_KEY) === '1') return
+    starterPackMut.mutate()
+  }, [isLoading, starterPackMut, tools.length])
+
+  useEffect(() => {
+    if (!selectedBuiltIn || !builtInDetailsRef.current) return
+    builtInDetailsRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [selectedBuiltIn])
 
   if (editing !== false) {
     return <ToolEditor tool={editing} onClose={() => setEditing(false)} />
   }
 
-  return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-100">Custom Tools</h1>
-          <p className="text-slate-400 text-sm mt-1">
-            Write Python functions with typed parameters that agents call during workflows
-          </p>
-        </div>
-        <button className="btn-primary" onClick={() => setEditing(null)}>
-          <Plus size={16} /> New Tool
-        </button>
-      </div>
+  const builtIns = catalog.filter((tool: any) => tool.category !== 'custom')
 
-      {isLoading ? (
-        <div className="space-y-3">
-          {[...Array(2)].map((_, i) => <div key={i} className="card h-20 animate-pulse bg-slate-800/50" />)}
+  const iconForTool = (name: string) => {
+    const value = name.toLowerCase()
+    if (value.includes('search') || value.includes('brave') || value.includes('serper')) return Search
+    if (value.includes('gmail') || value.includes('email')) return Mail
+    if (value.includes('slack')) return Slack
+    if (value.includes('github')) return Github
+    if (value.includes('google') || value.includes('docs')) return FileText
+    return Table2
+  }
+
+  const healthForTool = (name: string) => {
+    const value = name.toLowerCase()
+    const healthMap = Array.isArray(providerHealth)
+      ? Object.fromEntries(
+          providerHealth
+            .map((item: any) => [item?.provider || item?.name, item])
+            .filter(([key]) => Boolean(key)),
+        )
+      : providerHealth
+
+    const searchProvider = healthMap.search
+    const gmailProvider = healthMap.gmail
+    const slackProvider = healthMap.slack
+    const githubProvider = healthMap.github
+
+    if (value.includes('search') || value.includes('brave') || value.includes('serper')) return searchProvider
+    if (value.includes('gmail') || value.includes('email') || value.includes('google')) return gmailProvider
+    if (value.includes('slack')) return slackProvider
+    if (value.includes('github')) return githubProvider
+    return null
+  }
+
+  const destinationForTool = (name: string) => {
+    const value = name.toLowerCase()
+    if (value.includes('model') || value.includes('openai') || value.includes('anthropic') || value.includes('groq')) {
+      return '/settings/models'
+    }
+    return '/integrations'
+  }
+
+  const builtInDetails = (tool: any) => {
+    const name = String(tool.name || tool.display_name || 'tool').toLowerCase()
+    const provider = healthForTool(tool.name || tool.display_name || 'tool')
+
+    if (name.includes('search') || name.includes('brave') || name.includes('serper') || name.includes('news')) {
+      return {
+        title: 'Search provider',
+        detail:
+          provider?.note ||
+          'Web search is configured through environment variables like BRAVE_SEARCH_API_KEY or SERPER_API_KEY, not an OAuth connection.',
+        actionLabel: null,
+        action: null,
+      }
+    }
+
+    if (name.includes('gmail') || name.includes('google')) {
+      return {
+        title: 'Google integration',
+        detail: provider?.note || 'Connect or reconnect Google in Integrations to enable this tool.',
+        actionLabel: 'Open Integrations',
+        action: () => navigate('/integrations'),
+      }
+    }
+
+    if (name.includes('slack')) {
+      return {
+        title: 'Slack integration',
+        detail: provider?.note || 'Connect Slack in Integrations to enable this tool.',
+        actionLabel: 'Open Integrations',
+        action: () => navigate('/integrations'),
+      }
+    }
+
+    if (name.includes('github')) {
+      return {
+        title: 'GitHub integration',
+        detail: provider?.note || 'Connect a GitHub token in Integrations to enable this tool.',
+        actionLabel: 'Open Integrations',
+        action: () => navigate('/integrations'),
+      }
+    }
+
+    return {
+      title: 'Built-in tool',
+      detail: provider?.note || tool.description || 'This tool is available to your agents when included in their toolset.',
+      actionLabel: null,
+      action: null,
+    }
+  }
+
+  return (
+    <div className="space-y-6 p-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="page-title">Tools</h1>
+          <p className="page-subtitle">Custom integrations</p>
         </div>
-      ) : !tools.length ? (
-        <div className="text-center py-24">
-          <div className="w-16 h-16 rounded-2xl bg-violet-900/20 border border-violet-900/40 flex items-center justify-center mx-auto mb-4">
-            <Wrench size={28} className="text-violet-500" />
-          </div>
-          <div className="text-slate-300 font-medium text-lg mb-1">No custom tools yet</div>
-          <div className="text-slate-600 text-sm mb-5 max-w-sm mx-auto">
-            Create Python tools with multiple typed parameters — fetch weather, query APIs, process data, and more.
-          </div>
-          <button className="btn-primary" onClick={() => setEditing(null)}>
-            <Plus size={15} /> Create your first tool
+        <div className="flex gap-2">
+          <button
+            className="btn-secondary"
+            onClick={() => starterPackMut.mutate()}
+            disabled={starterPackMut.isPending}
+          >
+            <Wrench size={16} /> {starterPackMut.isPending ? 'Adding starter tools…' : 'Add Starter Pack'}
+          </button>
+          <button className="btn-primary" onClick={() => setEditing(makeToolDraft())}>
+            <Plus size={16} /> Add Tool
           </button>
         </div>
-      ) : (
-        <div className="space-y-2">
-          {tools.map((t: CustomTool) => (
-            <ToolRow
-              key={t.id}
-              tool={t}
-              onEdit={() => setEditing(t)}
-              onDelete={() => setToolToDelete(t)}
-              onToggle={() => toggleMut.mutate({ id: t.id, is_active: !t.is_active })}
-            />
-          ))}
+      </div>
+
+      <section className="space-y-3">
+        <div className="section-title">Built-In</div>
+        <div className="overflow-hidden rounded-[24px] border border-white/[0.06] bg-white/[0.03]">
+          {builtIns.map((tool: any) => {
+            const Icon = iconForTool(tool.name || tool.display_name || 'tool')
+            const provider = healthForTool(tool.name || tool.display_name || 'tool')
+            const configured = provider ? provider.status !== 'not_configured' : !tool.requires_auth
+            const isSelected = selectedBuiltIn?.name === tool.name
+            return (
+              <div
+                key={tool.name}
+                className={clsx(
+                  'data-row w-full text-left transition hover:bg-white/[0.05]',
+                  isSelected && 'bg-white/[0.05]',
+                )}
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.05] text-indigo-300">
+                  <Icon size={16} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold text-white">{tool.display_name || tool.name}</div>
+                  <div className="truncate text-sm text-[#8B9DBE]">
+                    {provider?.note || tool.description || 'Built-in tool'}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 text-xs font-mono text-[#8B9DBE]">
+                    <span className={clsx('status-dot', configured ? 'dot-green' : 'dot-amber')} />
+                    {configured ? 'configured' : 'needs config'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedBuiltIn((current: any) => (current?.name === tool.name ? null : tool))
+                    }
+                    className={clsx(
+                      'btn-ghost btn-sm',
+                      configured ? 'text-indigo-300 hover:text-indigo-200' : 'text-amber-300 hover:text-amber-200',
+                    )}
+                  >
+                    {isSelected ? 'hide' : 'details'}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
         </div>
-      )}
+
+        {selectedBuiltIn ? (
+          <div ref={builtInDetailsRef} className="glass-card mt-4 rounded-[24px] p-5">
+            {(() => {
+              const Icon = iconForTool(selectedBuiltIn.name || selectedBuiltIn.display_name || 'tool')
+              const provider = healthForTool(selectedBuiltIn.name || selectedBuiltIn.display_name || 'tool')
+              const configured = provider ? provider.status !== 'not_configured' : !selectedBuiltIn.requires_auth
+              const details = builtInDetails(selectedBuiltIn)
+              return (
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/[0.05] text-indigo-300">
+                        <Icon size={18} />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-white">
+                          {selectedBuiltIn.display_name || selectedBuiltIn.name}
+                        </div>
+                        <div className="text-xs text-[#8B9DBE]">{details.title}</div>
+                      </div>
+                    </div>
+                    <p className="mt-4 text-sm text-[#8B9DBE]">{details.detail}</p>
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <span className={clsx('badge', configured ? 'badge-emerald' : 'badge-amber')}>
+                        {configured ? 'configured' : 'needs config'}
+                      </span>
+                      <span className="badge-glass">{selectedBuiltIn.category}</span>
+                      {selectedBuiltIn.auth_type ? <span className="badge-glass">{selectedBuiltIn.auth_type}</span> : null}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {details.action ? (
+                      <button className="btn-primary btn-sm" onClick={details.action}>
+                        {details.actionLabel}
+                      </button>
+                    ) : null}
+                    <button className="btn-ghost btn-sm" onClick={() => setSelectedBuiltIn(null)}>
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="space-y-3">
+        <div className="section-title">Custom</div>
+        {isLoading ? (
+          <div className="grid gap-4 md:grid-cols-2">
+            {[...Array(2)].map((_, i) => <div key={i} className="glass-card h-40 animate-pulse" />)}
+          </div>
+        ) : !tools.length ? (
+          <div className="glass-card rounded-[24px] border border-dashed border-white/[0.10] px-6 py-20 text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-white/[0.04]">
+              <Wrench size={28} className="text-indigo-300" />
+            </div>
+            <div className="mb-1 text-lg font-medium text-white">Add your first custom tool</div>
+            <div className="mx-auto mb-5 max-w-sm text-sm text-[#8B9DBE]">
+              Create Python tools with typed parameters for agents to call inside workflows.
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                className="btn-secondary"
+                onClick={() => starterPackMut.mutate()}
+                disabled={starterPackMut.isPending}
+              >
+                <Wrench size={15} /> {starterPackMut.isPending ? 'Adding starter tools…' : 'Install starter tools'}
+              </button>
+              <button className="btn-primary" onClick={() => setEditing(makeToolDraft())}>
+                <Plus size={15} /> Add Tool
+              </button>
+            </div>
+            <div className="mx-auto mt-6 grid max-w-3xl gap-3 text-left md:grid-cols-2">
+              {STARTER_TOOL_TEMPLATES.map(template => (
+                <button
+                  key={template.name}
+                  type="button"
+                  onClick={() => setEditing(makeToolDraft(template))}
+                  className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 transition hover:border-indigo-500/25 hover:bg-white/[0.05]"
+                >
+                  <div className="text-sm font-semibold text-white">{template.name}</div>
+                  <div className="mt-2 text-xs text-[#8B9DBE]">{template.description}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2">
+            {tools.map((t: CustomTool) => (
+              <ToolRow
+                key={t.id}
+                tool={t}
+                onEdit={() => setEditing(t)}
+                onDelete={() => setToolToDelete(t)}
+                onToggle={() => toggleMut.mutate({ id: t.id, is_active: !t.is_active })}
+              />
+            ))}
+          </div>
+        )}
+      </section>
       <ConfirmDialog
         open={Boolean(toolToDelete)}
         title={`Delete ${toolToDelete?.name || 'tool'}?`}
@@ -478,45 +843,65 @@ function ToolRow({
   }, [tool.code])
 
   return (
-    <div className="card p-4 flex items-center gap-4 hover:border-slate-600 transition-colors">
-      <div className={clsx(
-        'w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0',
-        tool.is_active ? 'bg-violet-900/40 text-violet-400' : 'bg-slate-800 text-slate-600'
-      )}>
-        <Code2 size={16} />
-      </div>
+    <div className="glass-card group overflow-hidden p-5 transition duration-150 hover:-translate-y-0.5 hover:border-white/[0.12]">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <div
+              className={clsx(
+                'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl',
+                tool.is_active ? 'bg-indigo-500/12 text-indigo-300' : 'bg-white/[0.04] text-[#8B9DBE]',
+              )}
+            >
+              <Code2 size={16} />
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-white">{tool.name}</div>
+              <div className="font-mono text-xs text-[#8B9DBE]">/tools/{tool.id}/test</div>
+            </div>
+            <span className="badge-glass">POST</span>
+          </div>
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-mono font-semibold text-slate-100 text-sm">{tool.name}</span>
-          {/* Param badges */}
-          {params.map(p => (
-            <span key={p.name} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-slate-500">
-              {p.name}: {p.type}{!p.required && '?'}
-            </span>
-          ))}
-          {!tool.is_active && <span className="badge-gray text-[10px]">disabled</span>}
+          <div className="mt-3 text-sm text-[#8B9DBE]">{tool.description}</div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {params.map(p => (
+              <span key={p.name} className="badge-glass">
+                {p.name}: {p.type}{!p.required && '?'}
+              </span>
+            ))}
+            {!tool.is_active && <span className="badge-red">disabled</span>}
+          </div>
         </div>
-        <div className="text-xs text-slate-500 mt-0.5 truncate">{tool.description}</div>
+
+        <div className="flex items-center gap-2 opacity-100 transition md:opacity-0 md:group-hover:opacity-100">
+          <button className="btn-secondary btn-sm" onClick={onEdit}>
+            Test
+          </button>
+          <button className="btn-ghost btn-sm" onClick={onEdit}>
+            Edit
+          </button>
+          <button className="btn-danger btn-sm" onClick={onDelete}>
+            Delete
+          </button>
+        </div>
       </div>
 
-      <div className="flex items-center gap-2 flex-shrink-0">
+      <div className="mt-4 flex items-center justify-between gap-3 border-t border-white/[0.06] pt-4">
         <button
           onClick={onToggle}
           className={clsx(
-            'text-xs px-2.5 py-1 rounded-lg border transition-colors',
-            tool.is_active
-              ? 'border-emerald-900/60 text-emerald-400 hover:bg-emerald-900/20'
-              : 'border-slate-700 text-slate-500 hover:bg-slate-800'
+            'inline-flex items-center gap-2 text-xs font-medium transition',
+            tool.is_active ? 'text-emerald-300' : 'text-[#8B9DBE]',
           )}
         >
-          {tool.is_active ? 'Active' : 'Disabled'}
+          <span className={clsx('status-dot', tool.is_active ? 'dot-green' : 'dot-amber')} />
+          {tool.is_active ? 'configured' : 'disabled'}
         </button>
-        <button className="btn-secondary text-xs px-3" onClick={onEdit}>
-          <ChevronRight size={13} /> Edit
-        </button>
-        <button className="btn-danger text-xs px-3" onClick={onDelete}>
-          <Trash2 size={13} />
+
+        <button className="btn-ghost btn-sm" onClick={onEdit}>
+          <ChevronRight size={13} />
+          Open
         </button>
       </div>
     </div>

@@ -170,6 +170,7 @@ async def _agents_overview(org_id: str) -> dict:
                 "client_id": agent.client_id,
                 "client_name": client_name,
                 "client_color": client_color or "#6366F1",
+                "trust_score": agent.trust_score,
                 "tasks_completed": agent.total_tasks_completed or 0,
             }
         )
@@ -315,16 +316,138 @@ async def _activity_overview(org_id: str) -> dict:
     }
 
 
+async def _needs_attention(org_id: str) -> list[dict]:
+    yesterday = datetime.utcnow() - timedelta(hours=24)
+
+    async with AsyncSessionLocal() as db:
+        review_rows = (
+            await db.execute(
+                select(Execution, Workflow, Client.name.label("client_name"))
+                .join(Workflow, Execution.workflow_id == Workflow.id)
+                .outerjoin(Client, Client.id == Execution.client_id)
+                .where(
+                    Execution.org_id == org_id,
+                    Workflow.org_id == org_id,
+                    Execution.status == ExecutionStatus.pending_review,
+                )
+                .order_by(Execution.started_at.asc())
+                .limit(10)
+            )
+        ).all()
+
+        approval_rows = (
+            await db.execute(
+                select(AgentApprovalRequest, Agent)
+                .join(Agent, AgentApprovalRequest.requesting_agent_id == Agent.id)
+                .where(
+                    AgentApprovalRequest.org_id == org_id,
+                    Agent.org_id == org_id,
+                    AgentApprovalRequest.status == "pending",
+                )
+                .order_by(AgentApprovalRequest.created_at.asc())
+                .limit(5)
+            )
+        ).all()
+
+        failed_rows = (
+            await db.execute(
+                select(Execution, Workflow)
+                .join(Workflow, Execution.workflow_id == Workflow.id)
+                .where(
+                    Execution.org_id == org_id,
+                    Workflow.org_id == org_id,
+                    Execution.status == ExecutionStatus.failed,
+                    Execution.started_at >= yesterday,
+                )
+                .order_by(Execution.started_at.desc())
+                .limit(5)
+            )
+        ).all()
+
+    items: list[dict] = []
+
+    for execution, workflow, client_name in review_rows:
+        age_minutes = (
+            int((datetime.utcnow() - execution.started_at).total_seconds() / 60)
+            if execution.started_at
+            else 0
+        )
+        items.append(
+            {
+                "type": "pending_review",
+                "urgency": "high",
+                "title": f"Review ready: {workflow.name}",
+                "subtitle": _preview(execution.input_message, 60),
+                "client_name": client_name,
+                "execution_id": str(execution.id),
+                "approval_id": None,
+                "age_minutes": age_minutes,
+                "url": f"/executions/{execution.id}",
+            }
+        )
+
+    for approval, agent in approval_rows:
+        age_minutes = (
+            int((datetime.utcnow() - approval.created_at).total_seconds() / 60)
+            if approval.created_at
+            else 0
+        )
+        risk_level = (approval.risk_level or "medium").lower()
+        items.append(
+            {
+                "type": "approval_request",
+                "urgency": "critical" if risk_level in {"high", "critical"} else "medium",
+                "title": f"Approval needed: {agent.persona_name or agent.name}",
+                "subtitle": approval.title,
+                "client_name": None,
+                "execution_id": str(approval.execution_id) if approval.execution_id else None,
+                "approval_id": str(approval.id),
+                "age_minutes": age_minutes,
+                "url": "/approvals",
+            }
+        )
+
+    for execution, workflow in failed_rows:
+        age_minutes = (
+            int((datetime.utcnow() - execution.started_at).total_seconds() / 60)
+            if execution.started_at
+            else 0
+        )
+        items.append(
+            {
+                "type": "failed_execution",
+                "urgency": "medium",
+                "title": f"Failed: {workflow.name}",
+                "subtitle": (execution.error or "Unknown error")[:80],
+                "client_name": None,
+                "execution_id": str(execution.id),
+                "approval_id": None,
+                "age_minutes": age_minutes,
+                "url": f"/executions/{execution.id}",
+            }
+        )
+
+    urgency_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    items.sort(
+        key=lambda item: (
+            urgency_order.get(item["urgency"], 3),
+            -(item.get("age_minutes") or 0),
+        )
+    )
+    return items
+
+
 @router.get("/overview")
 async def agency_overview(
     current_user: User = Depends(get_current_user),
     ctx: OrgContext = Depends(get_org_context),
 ):
-    clients, agents, approvals, activity = await asyncio.gather(
+    clients, agents, approvals, activity, needs_attention = await asyncio.gather(
         _clients_overview(ctx.org.id),
         _agents_overview(ctx.org.id),
         _approvals_overview(ctx.org.id),
         _activity_overview(ctx.org.id),
+        _needs_attention(ctx.org.id),
     )
     return {
         "agency_name": ctx.org.name,
@@ -333,5 +456,7 @@ async def agency_overview(
         "agents": agents,
         "approvals": approvals,
         "activity": activity,
+        "needs_attention": needs_attention,
+        "attention_count": len(needs_attention),
         "generated_at": datetime.utcnow().isoformat(),
     }

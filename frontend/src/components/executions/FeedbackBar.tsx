@@ -96,10 +96,10 @@ function FeedbackButton({
   children: ReactNode
 }) {
   const tones = {
-    green: active ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : 'text-obsidian-400 hover:text-emerald-200',
-    amber: active ? 'border-amber-400/30 bg-amber-400/10 text-amber-200' : 'text-obsidian-400 hover:text-amber-200',
-    red: active ? 'border-red-400/30 bg-red-400/10 text-red-200' : 'text-obsidian-400 hover:text-red-200',
-    gray: active ? 'border-white/20 bg-white/[0.06] text-white' : 'text-obsidian-400 hover:text-white',
+    green: active ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : 'text-ink-muted hover:text-emerald-200',
+    amber: active ? 'border-amber-400/30 bg-amber-400/10 text-amber-200' : 'text-ink-muted hover:text-amber-200',
+    red: active ? 'border-red-400/30 bg-red-400/10 text-red-200' : 'text-ink-muted hover:text-red-200',
+    gray: active ? 'border-white/20 bg-white/[0.06] text-white' : 'text-ink-muted hover:text-white',
   }
   return (
     <button

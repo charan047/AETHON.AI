@@ -80,6 +80,34 @@ async def get_gmail_service(org_id: str, user_id: str, prefetched_config: dict |
             "google-auth-httplib2, and google-auth-oauthlib."
         ) from exc
 
+    creds = await get_google_credentials(
+        org_id,
+        user_id,
+        prefetched_config=prefetched_config,
+        required_scopes=[
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.compose",
+        ],
+    )
+    service = await asyncio.to_thread(lambda: build("gmail", "v1", credentials=creds, cache_discovery=False))
+    return service
+
+
+async def get_google_credentials(
+    org_id: str,
+    user_id: str,
+    prefetched_config: dict | None = None,
+    required_scopes: list[str] | None = None,
+):
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+    except ImportError as exc:  # pragma: no cover
+        raise ValueError(
+            "Google OAuth dependencies are not installed. Install google-api-python-client, "
+            "google-auth-httplib2, and google-auth-oauthlib."
+        ) from exc
+
     integration, config = await get_active_integration_config(
         org_id,
         user_id,
@@ -100,9 +128,16 @@ async def get_gmail_service(org_id: str, user_id: str, prefetched_config: dict |
     refresh_token = config.get("refresh_token")
     scopes = config.get("scopes") or ["https://www.googleapis.com/auth/gmail.modify"]
     if not access_token:
-        raise ValueError("Gmail access token is missing. Reconnect Gmail in Settings > Integrations.")
+        raise ValueError("Google access token is missing. Reconnect Google in Settings > Integrations.")
     if not refresh_token:
-        raise ValueError("Gmail refresh token is missing. Reconnect Gmail with offline access enabled.")
+        raise ValueError("Google refresh token is missing. Reconnect Google with offline access enabled.")
+    if required_scopes:
+        missing_scopes = [scope for scope in required_scopes if scope not in scopes]
+        if missing_scopes:
+            raise ValueError(
+                "Google integration is missing required scopes. Reconnect Google in /integrations "
+                f"to grant: {', '.join(missing_scopes)}"
+            )
     if not settings.google_client_id or not settings.google_client_secret:
         raise ValueError("Google OAuth credentials are not configured on the server.")
 
@@ -122,8 +157,7 @@ async def get_gmail_service(org_id: str, user_id: str, prefetched_config: dict |
             config["token_expires_at"] = creds.expiry.astimezone(timezone.utc).isoformat()
         await save_integration_config(integration.id, config)
 
-    service = await asyncio.to_thread(lambda: build("gmail", "v1", credentials=creds, cache_discovery=False))
-    return service
+    return creds
 
 
 async def get_slack_token(org_id: str, user_id: str, prefetched_config: dict | None = None) -> str:

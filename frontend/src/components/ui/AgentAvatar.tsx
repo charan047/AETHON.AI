@@ -3,12 +3,12 @@ import { clsx } from 'clsx'
 type AvatarSize = 'sm' | 'md' | 'lg' | 'xl'
 
 const palettes = [
-  ['#2563EB', '#10B981'],
-  ['#1D4ED8', '#3B82F6'],
-  ['#059669', '#34D399'],
-  ['#F59E0B', '#D97706'],
-  ['#0F766E', '#2563EB'],
-  ['#2563EB', '#14B8A6'],
+  ['#1A1A1A', '#2A2A2A'],
+  ['#141414', '#242424'],
+  ['#0F0F0F', '#2F2F2F'],
+  ['#111111', '#202020'],
+  ['#151515', '#2A2A2A'],
+  ['#0D0D0D', '#252525'],
 ]
 
 const sizes: Record<AvatarSize, string> = {
@@ -50,7 +50,7 @@ export function AgentAvatar({
     <div className={clsx('relative inline-flex shrink-0', running && 'animate-pulse-ring rounded-full', className)}>
       <div
         className={clsx(
-          'grid place-items-center rounded-2xl font-mono font-semibold text-white ring-1 ring-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]',
+          'grid place-items-center rounded-2xl border border-white/[0.08] font-mono font-semibold text-white shadow-none',
           sizes[size],
         )}
         style={{ background }}
@@ -58,7 +58,7 @@ export function AgentAvatar({
       >
         {imageUrl ? <img src={imageUrl} alt="" className="h-full w-full rounded-full object-cover" /> : initials(name)}
       </div>
-      {running && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-base-bg bg-emerald-400" />}
+      {running && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-black bg-signal-green" />}
     </div>
   )
 }

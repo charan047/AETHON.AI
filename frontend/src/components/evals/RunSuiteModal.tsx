@@ -85,11 +85,11 @@ export function RunSuiteModal({
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-white/[0.1] bg-obsidian-900 shadow-glow-md">
+      <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-white/[0.1] bg-base-surface shadow-glow-md">
         <div className="flex items-center justify-between border-b border-white/[0.08] px-6 py-4">
           <div>
             <div className="font-semibold text-white">Run eval suite</div>
-            <div className="mt-1 text-sm text-obsidian-400">{suite.name} · {caseCount} cases</div>
+            <div className="mt-1 text-sm text-ink-muted">{suite.name} · {caseCount} cases</div>
           </div>
           <button className="btn-ghost h-9 px-2" onClick={onClose}><X size={16} /></button>
         </div>
@@ -114,7 +114,7 @@ export function RunSuiteModal({
           <label className="flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
             <div>
               <div className="text-sm font-medium text-white">Run in background</div>
-              <div className="text-xs text-obsidian-500">Auto-enabled for suites with 20+ cases.</div>
+              <div className="text-xs text-ink-faint">Auto-enabled for suites with 20+ cases.</div>
             </div>
             <input
               type="checkbox"
@@ -125,13 +125,13 @@ export function RunSuiteModal({
           </label>
 
           {running && (
-            <div className="rounded-xl border border-accent-400/20 bg-accent-400/10 p-4">
+            <div className="rounded-xl border border-indigo-400/20 bg-indigo-400/10 p-4">
               <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="text-accent-100">Running cases</span>
-                <span className="font-mono text-accent-200">{caseResults.length}/{caseCount}</span>
+                <span className="text-indigo-100">Running cases</span>
+                <span className="font-mono text-indigo-200">{caseResults.length}/{caseCount}</span>
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-white/[0.08]">
-                <div className="h-full rounded-full bg-accent-500 transition-all" style={{ width: `${progress}%` }} />
+                <div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${progress}%` }} />
               </div>
               <div className="mt-4 max-h-44 space-y-2 overflow-y-auto">
                 {caseResults.map((result, index) => (
@@ -159,7 +159,7 @@ export function RunSuiteModal({
 function InfoPill({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-4">
-      <div className="text-xs uppercase tracking-[0.16em] text-obsidian-500">{label}</div>
+      <div className="text-xs uppercase tracking-[0.16em] text-ink-faint">{label}</div>
       <div className="mt-2 font-mono text-lg font-semibold text-white">{value}</div>
     </div>
   )

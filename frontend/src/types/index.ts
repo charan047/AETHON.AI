@@ -161,6 +161,15 @@ export interface WorkflowEdge {
   label?: string
 }
 
+export interface WorkflowInputVariable {
+  name: string
+  label: string
+  type: 'text' | 'select' | 'number'
+  required: boolean
+  default?: string
+  options?: string[]
+}
+
 export interface Workflow {
   id: string
   name: string
@@ -173,8 +182,9 @@ export interface Workflow {
   schedule_enabled?: boolean
   schedule_timezone?: string
   last_run_at?: string | null
+  requires_review?: boolean
   input_template?: string
-  input_variables?: Array<Record<string, unknown>>
+  input_variables?: WorkflowInputVariable[]
   configured_inputs?: Record<string, unknown>
   template_id: string | null
   execution_mode: 'sequential' | 'orchestrator'
@@ -207,6 +217,109 @@ export interface WorkflowWebhookUrl {
   workflow_id: string
   webhook_url: string
   curl_example: string
+}
+
+export type MissionStatus = 'planning' | 'active' | 'paused' | 'completed' | 'failed'
+export type MissionTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+
+export interface MissionTask {
+  id: string
+  mission_id: string
+  org_id: string
+  sequence: number
+  title: string
+  description?: string | null
+  agent_id?: string | null
+  depends_on?: string | null
+  status: MissionTaskStatus
+  output_summary?: string | null
+  execution_id?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+}
+
+export interface MissionStats {
+  total: number
+  pending: number
+  running: number
+  completed: number
+  failed: number
+  skipped: number
+}
+
+export interface Mission {
+  id: string
+  org_id: string
+  client_id?: string | null
+  client_name?: string | null
+  goal: string
+  title?: string | null
+  status: MissionStatus
+  report?: string | null
+  report_delivered: boolean
+  created_by?: string | null
+  created_at: string
+  completed_at?: string | null
+  stats: MissionStats
+  tasks: MissionTask[]
+}
+
+export interface MissionReportResponse {
+  mission_id: string
+  status: MissionStatus
+  report?: string | null
+}
+
+export type A2ATaskStatus = 'submitted' | 'working' | 'input-required' | 'completed' | 'failed'
+export type A2ATaskDirection = 'incoming' | 'outgoing'
+
+export interface A2ATaskRecord {
+  id: string
+  agent_id: string
+  agent_name: string
+  direction: A2ATaskDirection
+  external_agent_id?: string | null
+  external_agent_name?: string | null
+  status: A2ATaskStatus
+  caller_identity?: string | null
+  input_text: string
+  output_text?: string | null
+  execution_id?: string | null
+  payment_amount?: number | null
+  payment_currency?: string | null
+  created_at: string
+  completed_at?: string | null
+  duration_seconds?: number | null
+}
+
+export interface A2ATasksResponse {
+  enabled: boolean
+  active_count: number
+  tasks: A2ATaskRecord[]
+}
+
+export interface ExternalAgentRecord {
+  id: string
+  agent_card_url: string
+  name: string
+  description?: string | null
+  provider_name?: string | null
+  provider_url?: string | null
+  task_endpoint: string
+  skills: Array<Record<string, unknown>>
+  trust_status: 'pending' | 'trusted' | 'blocked'
+  agent_did?: string | null
+  tool_name: string
+  total_calls: number
+  successful_calls: number
+  total_cost_usd: number
+  has_api_key: boolean
+  added_at: string
+  last_used_at?: string | null
+}
+
+export interface ExternalAgentsResponse {
+  items: ExternalAgentRecord[]
 }
 
 export interface NotificationPreference {
@@ -248,17 +361,29 @@ export interface WorkflowVersionDiff {
 export interface Execution {
   id: string
   workflow_id: string
+  client_id?: string | null
+  client_name?: string | null
+  parent_execution_id?: string | null
   workflow_name?: string
   agent_name?: string
   model_name?: string
   duration_seconds?: number | null
   trigger: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'waiting_approval' | 'rejected' | 'timed_out'
+  status: 'pending' | 'running' | 'pending_review' | 'completed' | 'failed' | 'cancelled' | 'waiting_approval' | 'rejected' | 'timed_out'
   input?: string
   input_message: string
+  output?: string | null
   output_message: string
+  revision_number?: number
+  ceo_feedback?: string | null
   started_at: string
   completed_at: string | null
+  approved_by?: string | null
+  approved_at?: string | null
+  approval_note?: string | null
+  delivered_at?: string | null
+  delivery_method?: 'email' | 'google_doc' | 'portal' | null
+  delivery_target?: string | null
   token_count: number
   cost: number
   error: string | null
@@ -266,11 +391,18 @@ export interface Execution {
   steps?: ExecutionStep[]
 }
 
+export interface ExecutionDeliveryResponse {
+  delivered: boolean
+  method: 'email' | 'google_doc' | 'portal'
+  target: string
+  delivered_at: string
+}
+
 export interface ExecutionStep {
   id: string
   execution_id: string
   org_id: string
-  step_type: 'thought' | 'action' | 'observation' | 'final_answer' | 'speaking' | 'update' | 'error' | 'human_input_required' | 'retry'
+  step_type: 'thought' | 'action' | 'observation' | 'tool_call' | 'final_answer' | 'speaking' | 'update' | 'error' | 'human_input_required' | 'retry'
   content: string
   tool_name?: string | null
   tool_input?: unknown
@@ -290,6 +422,23 @@ export interface ExecutionRunResponse {
   status: string
   websocket_channel: string
   message: string
+}
+
+export interface ExecutionRegenerateResponse {
+  revision_id: string
+  revision_number: number
+  status: string
+}
+
+export interface ExecutionRevisionSummary {
+  id: string
+  revision_number: number
+  status: string
+  ceo_feedback?: string | null
+  output?: string | null
+  started_at: string
+  approved_at?: string | null
+  approved_by?: string | null
 }
 
 export interface ModelTemplate {
@@ -412,6 +561,18 @@ export interface AgentMemoryItem {
   metadata: Record<string, unknown>
 }
 
+export interface AgentPreference {
+  id: string
+  agent_id: string
+  org_id: string
+  content_preview?: string | null
+  memory_type: string
+  importance_score: number
+  always_inject: boolean
+  source?: string | null
+  created_at: string
+}
+
 export interface OnboardingStatus {
   onboarding_completed: boolean
   onboarding_complete?: boolean
@@ -514,6 +675,8 @@ export interface UserIntegration {
   integration_type: 'github' | 'email_smtp' | 'gmail' | 'slack' | 'notion' | 'linear'
   name: string
   connected_account?: string | null
+  needs_reauth?: boolean
+  reauth_reason?: string | null
   is_active: boolean
   last_tested_at: string | null
   last_test_result: string | null
@@ -628,6 +791,7 @@ export interface AgencyOverviewAgent {
   client_id?: string | null
   client_name?: string | null
   client_color?: string | null
+  trust_score?: number | null
   tasks_completed: number
 }
 
@@ -648,6 +812,18 @@ export interface AgencyOverviewActivity {
   status: string
   started_at: string | null
   input_preview: string
+}
+
+export interface AgencyOverviewAttentionItem {
+  type: 'pending_review' | 'approval_request' | 'failed_execution'
+  urgency: 'critical' | 'high' | 'medium' | 'low' | string
+  title: string
+  subtitle: string
+  client_name?: string | null
+  execution_id?: string | null
+  approval_id?: string | null
+  age_minutes: number
+  url: string
 }
 
 export interface AgencyOverview {
@@ -676,6 +852,8 @@ export interface AgencyOverview {
     completed_today: number
     recent: AgencyOverviewActivity[]
   }
+  needs_attention: AgencyOverviewAttentionItem[]
+  attention_count: number
 }
 
 export interface AnalyticsCosts {
@@ -1044,6 +1222,9 @@ export interface ChatActionResult {
   execution_count?: number
   active_count?: number
   status?: string
+  mission_id?: string
+  mission_title?: string
+  task_count?: number
 }
 
 export interface CompanyChatStreamEvent {

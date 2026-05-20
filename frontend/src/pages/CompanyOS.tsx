@@ -125,7 +125,7 @@ function StatList({
   const styles = {
     green: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-200',
     yellow: 'border-amber-400/20 bg-amber-400/10 text-amber-200',
-    gray: 'border-white/10 bg-white/[0.03] text-slate-400',
+    gray: 'border-white/[0.08] bg-white/[0.03] text-slate-400',
   }
   return (
     <div>
@@ -136,7 +136,7 @@ function StatList({
             {item}
           </div>
         )) : (
-          <div className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-sm text-slate-600">
+          <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2 text-sm text-slate-600">
             None
           </div>
         )}
@@ -220,11 +220,11 @@ export function CompanyOS() {
   }
 
   return (
-    <div className="flex h-full min-h-[calc(100vh-0px)] flex-col bg-obsidian-950 text-slate-100">
+    <div className="flex h-full min-h-[calc(100vh-0px)] flex-col bg-base-bg text-slate-100">
       <header className="border-b border-white/[0.08] bg-obsidian-925 px-6 py-5">
         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
           <div>
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.22em] text-cyan-200">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.22em] text-emerald-200">
               <TerminalSquare className="h-3.5 w-3.5" />
               Company as Code
             </div>
@@ -263,9 +263,9 @@ export function CompanyOS() {
         <section className="flex min-h-[640px] flex-col border-r border-white/[0.08]">
           <div className="flex items-center justify-between border-b border-white/[0.08] bg-white/[0.02] px-4 py-3">
             <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.2em] text-slate-500">
-              <FileCode2 className="h-4 w-4 text-cyan-300" />
+              <FileCode2 className="h-4 w-4 text-emerald-300" />
               company.yaml
-              <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-600">{lineCount} lines</span>
+              <span className="rounded-full border border-white/[0.08] px-2 py-0.5 text-[10px] text-slate-600">{lineCount} lines</span>
             </div>
             <button className="btn-ghost h-8 px-3 text-xs" onClick={downloadYaml}>
               <Download size={14} /> Export
@@ -304,7 +304,7 @@ export function CompanyOS() {
                 onClick={() => setActiveTab(tab)}
                 className={`h-9 rounded-lg px-4 text-sm font-medium capitalize transition ${
                   activeTab === tab
-                    ? 'bg-accent-500/15 text-accent-100 shadow-glow-sm'
+                    ? 'bg-indigo-500/15 text-indigo-100 shadow-glow-sm'
                     : 'text-slate-500 hover:bg-white/[0.04] hover:text-slate-200'
                 }`}
               >
@@ -318,7 +318,7 @@ export function CompanyOS() {
               <div className="space-y-5">
                 <GlowCard glowColor="cyan" active className="p-5">
                   <div className="flex items-start gap-3">
-                    <Sparkles className="mt-0.5 h-5 w-5 text-cyan-300" />
+                    <Sparkles className="mt-0.5 h-5 w-5 text-emerald-300" />
                     <div>
                       <h2 className="text-lg font-semibold text-white">Change preview</h2>
                       <p className="mt-1 text-sm leading-6 text-slate-400">
@@ -337,14 +337,14 @@ export function CompanyOS() {
                     <StatList title="Workflows to update" items={preview.workflows_to_update} tone="yellow" />
                   </div>
                 ) : (
-                  <div className="rounded-xl border border-white/10 bg-white/[0.02] p-8 text-center text-sm text-slate-500">
+                  <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-8 text-center text-sm text-slate-500">
                     No preview yet. Make edits, then click Preview Changes.
                   </div>
                 )}
 
                 {applySummary && (
                   <GlowCard glowColor="indigo" active className="p-5">
-                    <p className="font-mono text-xs uppercase tracking-[0.22em] text-accent-200">Last apply</p>
+                    <p className="font-mono text-xs uppercase tracking-[0.22em] text-indigo-200">Last apply</p>
                     <p className="mt-2 text-sm text-slate-300">{summaryText(applySummary)}</p>
                   </GlowCard>
                 )}
@@ -382,7 +382,7 @@ export function CompanyOS() {
                     Role names are the glue. Workflow steps reference team roles, and `hitl_before` inserts approval nodes before those roles.
                   </p>
                 </GlowCard>
-                <pre className="overflow-x-auto rounded-xl border border-white/10 bg-obsidian-950 p-4 font-mono text-xs leading-6 text-slate-300">
+                <pre className="overflow-x-auto rounded-xl border border-white/[0.08] bg-base-bg p-4 font-mono text-xs leading-6 text-slate-300">
                   {schemaExample}
                 </pre>
               </div>

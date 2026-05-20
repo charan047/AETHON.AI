@@ -74,6 +74,8 @@ duckduckgo-search==6.3.7
 apscheduler==3.10.4
 croniter==2.0.5
 svix==1.20.0
+reportlab==4.2.2
+python-docx==1.1.2
 
 # Phase 5 additions
 rouge-score==0.1.2

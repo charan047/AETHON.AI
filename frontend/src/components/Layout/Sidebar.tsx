@@ -10,18 +10,19 @@ import {
   FlaskConical,
   LayoutDashboard,
   Link2,
-  LogOut,
   MessageCircle,
   Settings,
   ShoppingBag,
+  Target,
   Wrench,
   Workflow,
+  Zap,
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { clsx } from 'clsx'
 import { useAuth } from '../../contexts/AuthContext'
-import { approvalsApi, messagesApi, modelsApi } from '../../api/client'
-import { AgentAvatar } from '../ui/AgentAvatar'
+import { a2aApi, approvalsApi, messagesApi, missionsApi, modelsApi } from '../../api/client'
+import { ThemeToggle } from '../ui/ThemeToggle'
 import { OrgSwitcher } from '../org/OrgSwitcher'
 
 type NavItem = {
@@ -29,7 +30,8 @@ type NavItem = {
   icon: typeof LayoutDashboard
   label: string
   activePrefixes?: string[]
-  badge?: 'approvals' | 'models' | 'messages'
+  badge?: 'approvals' | 'models' | 'messages' | 'missions'
+  requiresA2A?: boolean
 }
 
 type NavGroup = {
@@ -52,6 +54,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/agents', icon: Bot, label: 'Agents', activePrefixes: ['/agents'] },
       { to: '/messages', icon: MessageCircle, label: 'Agent Messages', activePrefixes: ['/messages'], badge: 'messages' },
       { to: '/workflows', icon: Workflow, label: 'Workflows', activePrefixes: ['/workflows'] },
+      { to: '/missions', icon: Target, label: 'Missions', activePrefixes: ['/missions'], badge: 'missions' },
       { to: '/monitoring', icon: BarChart3, label: 'Executions', activePrefixes: ['/monitoring', '/executions'] },
       { to: '/approvals', icon: CheckCircle2, label: 'Approvals', activePrefixes: ['/approvals'], badge: 'approvals' },
     ],
@@ -60,6 +63,7 @@ const NAV_GROUPS: NavGroup[] = [
     title: 'TOOLS',
     items: [
       { to: '/integrations', icon: Link2, label: 'Integrations', activePrefixes: ['/integrations'] },
+      { to: '/a2a-tasks', icon: Target, label: 'A2A Tasks', activePrefixes: ['/a2a-tasks'], requiresA2A: true },
       { to: '/marketplace', icon: ShoppingBag, label: 'Marketplace', activePrefixes: ['/marketplace'] },
       { to: '/tools', icon: Wrench, label: 'Custom Tools', activePrefixes: ['/tools'] },
       { to: '/memory', icon: Brain, label: 'Memory', activePrefixes: ['/memory'] },
@@ -70,6 +74,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/settings/org', icon: Settings, label: 'Settings', activePrefixes: ['/settings/org', '/company'] },
       { to: '/settings/notifications', icon: Bell, label: 'Notifications', activePrefixes: ['/settings/notifications'] },
+      { to: '/settings/external-agents', icon: Link2, label: 'External Agents', activePrefixes: ['/settings/external-agents'] },
       { to: '/settings/models', icon: Bot, label: 'AI Models', activePrefixes: ['/settings/models'], badge: 'models' },
       { to: '/analytics', icon: BarChart3, label: 'Analytics', activePrefixes: ['/analytics'] },
       { to: '/evals', icon: FlaskConical, label: 'Evals', activePrefixes: ['/evals'] },
@@ -95,17 +100,7 @@ function Badge({
     amber: 'bg-amber-500/15 text-amber-300 border-amber-500/20',
   }
 
-  return (
-    <span
-      className={clsx(
-        'inline-flex items-center justify-center rounded-full border text-[10px] font-semibold',
-        tones[tone],
-        compact ? 'h-5 min-w-5 px-1.5' : 'min-w-5 px-1.5 py-0.5',
-      )}
-    >
-      {count}
-    </span>
-  )
+  return <span className={clsx('inline-flex items-center justify-center text-[10px] font-semibold', tones[tone], compact ? 'h-5 min-w-5 px-1.5 rounded-full border' : 'min-w-5 px-1.5 py-0.5 rounded-full border')}>{count}</span>
 }
 
 export function Sidebar({
@@ -144,15 +139,24 @@ export function Sidebar({
     enabled: canLoadOrgScopedSidebarData,
     refetchInterval: 30_000,
   })
+  const missionsQuery = useQuery({
+    queryKey: ['missions', 'sidebar'],
+    queryFn: missionsApi.list,
+    enabled: canLoadOrgScopedSidebarData,
+    refetchInterval: 15_000,
+  })
+  const a2aTasksQuery = useQuery({
+    queryKey: ['a2a', 'sidebar'],
+    queryFn: a2aApi.listTasks,
+    enabled: canLoadOrgScopedSidebarData,
+    refetchInterval: 30_000,
+  })
 
   const unreadMessages = unreadData?.count || 0
   const combinedApprovals = pendingApprovals.length + (agentRequestsQuery.data?.pending_count || 0)
   const hasFailedModels = modelConfigs.some(config => config.test_status === 'failed')
-
-  const signOut = () => {
-    auth.logout()
-    navigate('/login')
-  }
+  const activeMissionsCount = (missionsQuery.data || []).filter(mission => mission.status === 'active' || mission.status === 'planning').length
+  const a2aEnabled = a2aTasksQuery.data?.enabled !== false
 
   const isActive = (item: NavItem) => {
     const prefixes = item.activePrefixes || [item.to]
@@ -166,29 +170,54 @@ export function Sidebar({
     onCloseMobile?.()
   }
 
-  const displayName = auth.activeOrg?.name || auth.email?.split('@')[0] || 'Agency Owner'
+  const profileName = auth.email
+    ? auth.email
+      .split('@')[0]
+      .split(/[._-]+/)
+      .filter(Boolean)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+    : auth.activeOrg?.name || 'Agency Owner'
+  const profileMeta = auth.email || auth.activeOrg?.name || 'Open settings'
+  const userInitials = profileName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0]?.toUpperCase())
+    .join('') || 'AO'
 
   return (
     <aside
       className={clsx(
-        'fixed inset-y-0 left-0 z-30 flex h-full w-[240px] shrink-0 flex-col overflow-hidden',
-        'bg-[rgba(8,13,26,0.85)] shadow-[1px_0_0_rgba(255,255,255,0.06),0_18px_48px_rgba(0,0,0,0.35)] backdrop-blur-xl',
+        'fixed inset-y-0 left-0 z-30 flex h-full w-[220px] shrink-0 flex-col overflow-visible',
+        'shadow-none',
         'transition-transform duration-300 ease-out lg:static',
         mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
       )}
+      style={{
+        background: 'rgba(5,9,20,0.88)',
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
+        borderRight: '1px solid rgba(255,255,255,0.07)',
+      }}
     >
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-56 bg-[radial-gradient(ellipse_at_top,rgba(37,99,235,0.18),transparent_60%)]" />
-
-      <div className="relative z-10 flex h-full flex-col">
-        <div className="flex h-14 items-center gap-3 px-5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 shadow-[0_0_12px_rgba(37,99,235,0.4)]">
-            <Briefcase size={16} className="text-white" />
+      <div className="relative z-10 flex h-full flex-col overflow-visible">
+        <div className="flex min-h-14 items-center gap-3 px-4 py-3">
+          <div
+            className="flex h-8 w-8 items-center justify-center rounded-xl"
+            style={{
+              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+              boxShadow: '0 0 18px rgba(99,102,241,0.28)',
+            }}
+          >
+            <Zap size={16} className="text-white" />
           </div>
-          <div className="min-w-0">
-            <span className="text-sm font-extrabold tracking-tight text-white">Aethon</span>
-            <span className="ml-1.5 rounded bg-blue-600/15 px-1.5 py-0.5 text-[10px] font-semibold text-blue-400">
-              Agency OS
-            </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-bold tracking-tight text-white">Aethon</div>
+            <span className="badge-indigo mt-1 inline-flex rounded-md px-1.5 py-0.5 text-[10px] leading-none">Agency OS</span>
+          </div>
+          <div className="shrink-0">
+            <ThemeToggle />
           </div>
         </div>
 
@@ -199,11 +228,14 @@ export function Sidebar({
         <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
           {NAV_GROUPS.map(group => (
             <div key={group.title} className="pb-3">
-              <p className="px-5 pb-1.5 pt-4 text-[10px] font-bold uppercase tracking-[0.20em] text-[#2D3748]">
+              <p
+                className="px-3 pb-1 pt-4 font-mono text-[9px] font-semibold uppercase tracking-[0.22em]"
+                style={{ color: 'rgba(255,255,255,0.18)' }}
+              >
                 {group.title}
               </p>
               <div className="space-y-1">
-                {group.items.map(item => {
+                {group.items.filter(item => !item.requiresA2A || a2aEnabled).map(item => {
                   const active = isActive(item)
                   const Icon = item.icon
 
@@ -213,21 +245,34 @@ export function Sidebar({
                       to={item.to}
                       onClick={handleNavClick}
                       className={clsx(
-                        'group relative flex cursor-pointer items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-150',
-                        'focus:outline-none focus:ring-2 focus:ring-blue-500/30',
+                        'group relative flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150',
+                        'focus:outline-none focus:ring-2 focus:ring-indigo-500/25',
                         active
-                          ? 'bg-blue-600/12 text-blue-300'
-                          : 'text-[#4B5A73] hover:bg-white/[0.04] hover:text-[#8B9DBE]',
+                          ? 'border border-indigo-500/15 bg-indigo-500/10 text-indigo-300'
+                          : 'border border-transparent text-ink-muted hover:bg-white/[0.04] hover:text-ink-secondary',
                       )}
                     >
-                      {active && <div className="absolute left-0 h-5 w-0.5 rounded-r-full bg-blue-500" />}
-                      <Icon size={16} className={active ? 'text-blue-400' : 'text-[#4B5A73] transition-colors group-hover:text-[#8B9DBE]'} />
+                      {active && <div className="absolute left-0 h-5 w-0.5 rounded-r-full bg-indigo-400" />}
+                      <Icon size={16} className="shrink-0" />
                       <span className="truncate">{item.label}</span>
-                      {item.badge === 'approvals' && <span className="ml-auto"><Badge count={combinedApprovals} tone="red" compact /></span>}
-                      {item.badge === 'messages' && <span className="ml-auto"><Badge count={unreadMessages} tone="blue" compact /></span>}
+                      {item.badge === 'approvals' && (
+                        <span className="ml-auto rounded-md bg-red-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-red-400">
+                          {combinedApprovals}
+                        </span>
+                      )}
+                      {item.badge === 'messages' && unreadMessages > 0 && (
+                        <span className="ml-auto rounded-md bg-red-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-red-400">
+                          {unreadMessages}
+                        </span>
+                      )}
+                      {item.badge === 'missions' && activeMissionsCount > 0 && (
+                        <span className="ml-auto rounded-md bg-red-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-red-400">
+                          {activeMissionsCount}
+                        </span>
+                      )}
                       {item.badge === 'models' && hasFailedModels && (
-                        <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-amber-500/20 bg-amber-500/15 px-1.5 text-[10px] font-semibold text-amber-300">
-                          !
+                        <span className="ml-auto rounded-md bg-red-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-red-400">
+                          1
                         </span>
                       )}
                     </Link>
@@ -238,33 +283,35 @@ export function Sidebar({
           ))}
         </nav>
 
-        <div className="border-t border-white/[0.06] p-3">
-          <div className="flex items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.03] px-3 py-3">
-            <AgentAvatar name={displayName} color="linear-gradient(135deg, #2563EB, #10B981)" size="md" />
+        <div className="border-t border-white/[0.08] p-3">
+          <div className="grid grid-cols-[auto,1fr,auto] items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] px-3 py-3">
+            <div
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white"
+              style={{
+                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+              }}
+            >
+              {userInitials}
+            </div>
             <Link
               to="/settings/org"
               onClick={handleNavClick}
-              className="min-w-0 flex-1 cursor-pointer focus:outline-none"
+              className="min-w-0 cursor-pointer focus:outline-none"
             >
-              <div className="truncate text-sm font-semibold text-white">{displayName}</div>
-              <div className="truncate text-xs text-[#4B5A73]">{auth.email || 'Open settings'}</div>
+              <div className="break-words text-sm font-semibold leading-5 text-white">{profileName}</div>
+              <div className="mt-1 break-all text-[11px] leading-4 text-white/35">{profileMeta}</div>
             </Link>
-            <Link
-              to="/settings/org"
-              aria-label="Open settings"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-[#8B9DBE] transition duration-150 hover:bg-white/[0.05] hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-              onClick={handleNavClick}
-            >
-              <Settings size={16} />
-            </Link>
-            <button
-              type="button"
-              aria-label="Sign out"
-              onClick={signOut}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-[#8B9DBE] transition duration-150 hover:bg-white/[0.05] hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-            >
-              <LogOut size={16} />
-            </button>
+            <div className="flex flex-col gap-2">
+              <Link
+                to="/settings/org"
+                aria-label="Open settings"
+                className="btn-icon text-white/45 hover:text-white"
+                onClick={handleNavClick}
+              >
+                <Settings size={16} />
+              </Link>
+              <ThemeToggle />
+            </div>
           </div>
         </div>
       </div>

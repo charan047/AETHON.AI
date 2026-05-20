@@ -25,7 +25,7 @@ export function ScoreBadge({
         'inline-flex items-center justify-center rounded-full border font-mono font-semibold tabular-nums',
         classes[size],
         empty
-          ? 'border-white/10 bg-white/[0.04] text-obsidian-500'
+          ? 'border-white/[0.08] bg-white/[0.04] text-ink-faint'
           : good
           ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
           : 'border-red-400/20 bg-red-400/10 text-red-300',

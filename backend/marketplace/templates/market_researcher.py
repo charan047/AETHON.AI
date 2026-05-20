@@ -39,7 +39,7 @@ TEMPLATE: MarketplaceTemplate = {
     },
     "agent": {
         "name": "Market Researcher",
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "temperature": 0.1,
         "max_iterations": 20,
         "tools": ["web_search", "web_scrape", "news_search", "slack_post", "gmail_send"],

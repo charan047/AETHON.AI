@@ -14,7 +14,7 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       CORS_ORIGINS: '["http://localhost:5173","http://localhost"]'
       DOCKER_EXECUTION_IMAGE: platform-executor:latest
-      RUN_MIGRATIONS_ON_STARTUP: "false"
+      RUN_MIGRATIONS_ON_STARTUP: "true"
       ENABLE_TESTING_API: "true"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

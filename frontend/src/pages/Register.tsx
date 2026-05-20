@@ -34,24 +34,20 @@ export function Register() {
     <AuthShell
       mode="signup"
       title="Start your AI agency"
-      subtitle="Set up your workspace in 2 minutes."
+      subtitle="Your workspace is ready in 2 minutes."
     >
       <form onSubmit={submit} className="space-y-4">
-        {error && (
-          <div className="rounded-xl border border-red-400/20 bg-red-400/10 px-3 py-2 text-sm text-red-200">
-            {error}
-          </div>
-        )}
         <FloatingField label="Full name" type="text" autoComplete="name" value={fullName} onChange={setFullName} />
         <FloatingField label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} required />
         <FloatingField label="Password" type="password" autoComplete="new-password" value={password} onChange={setPassword} required />
-        <button className="btn-primary h-12 w-full" type="submit" disabled={loading}>
+        {error ? <p className="-mt-1 text-xs text-[var(--red)]">{error}</p> : null}
+        <button className="btn-runner btn-primary btn-lg w-full justify-center" type="submit" disabled={loading}>
           {loading ? <Loader2 size={16} className="animate-spin" /> : <UserPlus size={16} />}
           {loading ? 'Creating account...' : 'Create account'}
         </button>
-        <div className="pt-2 text-center text-sm text-obsidian-400">
+        <div className="pt-2 text-center text-sm text-[var(--text-3)]">
           Already have an account?{' '}
-          <Link className="font-medium text-blue-300 hover:text-blue-200" to="/login">
+          <Link className="font-medium text-[var(--text-2)] transition-colors hover:text-indigo-300 hover:underline" to="/login">
             Sign in
           </Link>
         </div>

@@ -87,11 +87,11 @@ function tone(type: string) {
   if (type.includes('error') || type.includes('rejected') || type.includes('exceeded')) return 'bg-red-400'
   if (type.includes('budget')) return 'bg-red-400'
   if (type.includes('hitl') || type.includes('approval')) return 'bg-amber-400'
-  if (type.includes('workflow') || type.includes('execution')) return 'bg-cyan-400'
+  if (type.includes('workflow') || type.includes('execution')) return 'bg-emerald-400'
   if (type.includes('long_task')) return 'bg-emerald-400'
   if (type.includes('agent_message')) return 'bg-sky-400'
   if (type.includes('parallel')) return 'bg-fuchsia-400'
-  return 'bg-accent-400'
+  return 'bg-indigo-400'
 }
 
 function secondsLabel(seconds?: number) {
@@ -125,14 +125,14 @@ const ActivityEventItem = memo(function ActivityEventItem({ event }: { event: Fo
         <AgentAvatar name={event.agentName} size="sm" running={event.type.includes('started') || event.type === 'tool_call'} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm text-obsidian-100">{event.text}</p>
-          <p className="mt-1 font-mono text-[11px] text-obsidian-500">
+          <p className="mt-1 font-mono text-[11px] text-ink-faint">
             {event.timestamp ? formatDistanceToNow(new Date(event.timestamp), { addSuffix: true }) : 'just now'}
           </p>
         </div>
         {event.actionUrl ? (
           <Link to={event.actionUrl} className="btn-secondary h-8 px-3 text-xs">Open</Link>
         ) : (
-          <Activity size={15} className="text-obsidian-600 transition group-hover:text-accent-300" />
+          <Activity size={15} className="text-obsidian-600 transition group-hover:text-indigo-300" />
         )}
       </div>
     </div>
@@ -165,7 +165,7 @@ function LongTaskProgressCard({
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-white">{task.task_preview || task.task || 'Long-running agent task'}</div>
           <div className="mt-3 h-2 overflow-hidden rounded-full bg-obsidian-800">
-            <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-cyan-300" style={{ width: `${Math.min(100, Math.max(0, task.progress))}%` }} />
+            <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-300" style={{ width: `${Math.min(100, Math.max(0, task.progress))}%` }} />
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-emerald-100/80">
             <span className="font-mono">{Math.round(task.progress)}%</span>
@@ -209,37 +209,37 @@ function LongTaskSlideOver({ task, onClose }: { task: LongTaskStatus | null; onC
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-white/10 bg-obsidian-925 p-6 text-white shadow-glow-lg" onClick={event => event.stopPropagation()}>
+      <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-white/[0.08] bg-obsidian-925 p-6 text-white shadow-glow-lg" onClick={event => event.stopPropagation()}>
         <div className="mb-6 flex items-start justify-between gap-4">
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.22em] text-emerald-300">Long-running task</p>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight">{detail.task_preview || detail.task || 'Agent background work'}</h2>
-            <p className="mt-2 text-sm text-obsidian-400">{detail.status} · {secondsLabel(detail.elapsed_seconds)} elapsed</p>
+            <p className="mt-2 text-sm text-ink-muted">{detail.status} · {secondsLabel(detail.elapsed_seconds)} elapsed</p>
           </div>
           <button className="btn-ghost px-2" onClick={onClose}><X size={18} /></button>
         </div>
 
-        <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+        <div className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4">
           <div className="mb-2 flex items-center justify-between text-sm">
             <span className="text-obsidian-300">{detail.current_step}</span>
             <span className="font-mono text-emerald-300">{Math.round(detail.progress)}%</span>
           </div>
           <div className="h-3 overflow-hidden rounded-full bg-obsidian-800">
-            <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-cyan-300" style={{ width: `${Math.min(100, Math.max(0, detail.progress))}%` }} />
+            <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-300" style={{ width: `${Math.min(100, Math.max(0, detail.progress))}%` }} />
           </div>
-          <p className="mt-3 text-xs text-obsidian-500">Estimated completion updates as checkpoints arrive.</p>
+          <p className="mt-3 text-xs text-ink-faint">Estimated completion updates as checkpoints arrive.</p>
         </div>
 
         <div className="mt-6">
           <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.18em] text-white">Progress Timeline</h3>
           <div className="space-y-3">
             {detail.intermediate_outputs?.length ? detail.intermediate_outputs.map((output, index) => (
-              <div key={`${detail.task_id}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
-                <div className="mb-2 font-mono text-xs text-cyan-300">Checkpoint {index + 1}</div>
+              <div key={`${detail.task_id}-${index}`} className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4">
+                <div className="mb-2 font-mono text-xs text-emerald-300">Checkpoint {index + 1}</div>
                 <p className="whitespace-pre-wrap text-sm leading-6 text-obsidian-300">{output}</p>
               </div>
             )) : (
-              <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-6 text-sm text-obsidian-500">
+              <div className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6 text-sm text-ink-faint">
                 No intermediate output yet. The agent is still sharpening its pencils.
               </div>
             )}
@@ -314,13 +314,13 @@ export function LiveActivityFeed() {
   const visibleLongTasks = Object.values(longTasks).sort((a, b) => a.task_id.localeCompare(b.task_id)).slice(-4).reverse()
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden border-x border-white/[0.08] bg-obsidian-950">
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden border-x border-white/[0.08] bg-base-bg">
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.08] px-5">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-white">Live Activity</h2>
-          <p className="text-xs text-obsidian-500">The heartbeat of your AI company.</p>
+          <p className="text-xs text-ink-faint">The heartbeat of your AI company.</p>
         </div>
-        <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-obsidian-400">
+        <div className="flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1 text-xs text-ink-muted">
           <span className={`h-2 w-2 rounded-full ${connected ? 'animate-pulse bg-emerald-400' : 'bg-obsidian-600'}`} />
           {connected ? 'Live' : 'Offline'}
         </div>
@@ -336,7 +336,7 @@ export function LiveActivityFeed() {
         ) : !formatted.length ? (
           <div className="grid h-full place-items-center">
             <div className="text-center">
-              <div className="breathing mx-auto mb-5 grid h-20 w-20 place-items-center rounded-3xl border border-accent-400/20 bg-accent-400/10 text-accent-200 shadow-glow-md">
+              <div className="breathing mx-auto mb-5 grid h-20 w-20 place-items-center rounded-3xl border border-indigo-400/20 bg-indigo-400/10 text-indigo-200 shadow-glow-md">
                 <Radio size={30} />
               </div>
               <p className="text-sm font-medium text-obsidian-300">Quiet right now - your team will show activity here</p>

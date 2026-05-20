@@ -8,9 +8,9 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
 
   if (isLoading) {
     return (
-      <div className="grid min-h-screen place-items-center bg-obsidian-950 text-slate-300">
-        <div className="rounded-2xl border border-white/10 bg-obsidian-900 px-6 py-5 text-center shadow-glow-sm">
-          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
+      <div className="grid min-h-screen place-items-center bg-base-bg text-slate-300">
+        <div className="rounded-2xl border border-white/[0.08] bg-base-surface px-6 py-5 text-center shadow-glow-sm">
+          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
           <p className="font-mono text-xs uppercase tracking-[0.24em] text-slate-500">Restoring session</p>
         </div>
       </div>

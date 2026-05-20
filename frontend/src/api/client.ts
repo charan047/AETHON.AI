@@ -7,6 +7,9 @@ import type {
   AutomationTemplate,
   WorkflowWebhookUrl,
   Execution,
+  ExecutionDeliveryResponse,
+  ExecutionRevisionSummary,
+  ExecutionRegenerateResponse,
   ExecutionRunResponse,
   Stats,
   Template,
@@ -16,6 +19,7 @@ import type {
   AgentMemoryConfig,
   AgentMemoryStats,
   AgentMemoryItem,
+  AgentPreference,
   OnboardingStatus,
   OnboardingHireResponse,
   CompanyProfile,
@@ -75,13 +79,26 @@ import type {
   ClientCreateInput,
   ClientDetail,
   ClientListResponse,
+  Mission,
+  MissionReportResponse,
   NotificationPreference,
+  A2ATasksResponse,
+  ExternalAgentRecord,
+  ExternalAgentsResponse,
 } from '../types'
 
 export const api = axios.create({ baseURL: '/api', withCredentials: true })
 export const apiClient = api
 export const ACTIVE_ORG_STORAGE_KEY = 'ai-company-os-active-org-id'
 const SESSION_HINT_STORAGE_KEY = 'ai-company-os-has-session'
+
+function parseAttachmentFilename(contentDisposition?: string | null): string | null {
+  if (!contentDisposition) return null
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1])
+  const basicMatch = contentDisposition.match(/filename=\"?([^\";]+)\"?/i)
+  return basicMatch?.[1] || null
+}
 
 export function extractApiError(error: unknown): string {
   if (!error) return 'An unexpected error occurred'
@@ -178,6 +195,12 @@ export const agentsApi = {
   getMemoryConfig: (id: string) => api.get<AgentMemoryConfig>(`/agents/${id}/memory-config`).then(r => r.data),
   updateMemoryConfig: (id: string, data: Partial<AgentMemoryConfig>) =>
     api.put<AgentMemoryConfig>(`/agents/${id}/memory-config`, data).then(r => r.data),
+  getPreferences: (id: string) => api.get<AgentPreference[]>(`/agents/${id}/preferences`).then(r => r.data),
+  listPreferences: (id: string) => api.get<AgentPreference[]>(`/agents/${id}/preferences`).then(r => r.data),
+  addPreference: (id: string, preference: string) =>
+    api.post<AgentPreference>(`/agents/${id}/preferences`, { preference }).then(r => r.data),
+  deletePreference: (id: string, memoryId: string) =>
+    api.delete(`/agents/${id}/preferences/${memoryId}`).then(r => r.data),
   startLongTask: (id: string, data: { task: string; max_duration_hours?: number }) =>
     api.post<{ task_id: string; status: string }>(`/agents/${id}/long-tasks`, data).then(r => r.data),
   getLongTaskStatus: (taskId: string) => api.get<LongTaskStatus>(`/agents/long-tasks/${taskId}`).then(r => r.data),
@@ -216,6 +239,31 @@ export const portalApi = {
   get: (token: string) => api.get(`/portal/${token}`).then(r => r.data),
 }
 
+export const a2aApi = {
+  listTasks: () => api.get<A2ATasksResponse>('/a2a/tasks').then(r => r.data),
+  listExternalAgents: () => api.get<ExternalAgentsResponse>('/a2a/external-agents').then(r => r.data),
+  discoverExternalAgent: (agent_card_url: string) =>
+    api.post<ExternalAgentRecord>('/a2a/external-agents/discover', { agent_card_url }).then(r => r.data),
+  trustExternalAgent: (id: string) =>
+    api.post<ExternalAgentRecord>(`/a2a/external-agents/${id}/trust`).then(r => r.data),
+  blockExternalAgent: (id: string) =>
+    api.post<ExternalAgentRecord>(`/a2a/external-agents/${id}/block`).then(r => r.data),
+  untrustExternalAgent: (id: string) =>
+    api.post<ExternalAgentRecord>(`/a2a/external-agents/${id}/untrust`).then(r => r.data),
+  setExternalAgentApiKey: (id: string, api_key: string) =>
+    api.post<ExternalAgentRecord>(`/a2a/external-agents/${id}/api-key`, { api_key }).then(r => r.data),
+}
+
+export const missionsApi = {
+  list: () => api.get<Mission[]>('/missions').then(r => r.data),
+  get: (id: string) => api.get<Mission>(`/missions/${id}`).then(r => r.data),
+  create: (data: { goal: string; client_id?: string | null }) =>
+    api.post<Mission>('/missions', data).then(r => r.data),
+  retry: (id: string) => api.post<Mission>(`/missions/${id}/retry`).then(r => r.data),
+  getReport: (id: string) => api.get<MissionReportResponse>(`/missions/${id}/report`).then(r => r.data),
+  remove: (id: string) => api.delete(`/missions/${id}`).then(r => r.data),
+}
+
 // Workflows
 export const workflowsApi = {
   list: () => api.get<Workflow[]>('/workflows').then(r => r.data),
@@ -241,6 +289,11 @@ export const workflowsApi = {
     api.get<WorkflowVersionDiff>(`/workflows/${id}/versions/diff`, { params: { a, b } }).then(r => r.data),
   rollback: (id: string, targetVersion: number) =>
     api.post<Workflow>(`/workflows/${id}/rollback`, { target_version: targetVersion, confirm: true }).then(r => r.data),
+  run: (id: string, inputValues: Record<string, string>, clientId?: string | null) =>
+    api.post<ExecutionRunResponse>(`/executions/workflows/${id}/run`, {
+      input_values: inputValues,
+      client_id: clientId || null,
+    }).then(r => r.data),
 }
 
 // Executions
@@ -248,8 +301,29 @@ export const executionsApi = {
   list: (workflowId?: string) =>
     api.get<Execution[]>('/executions', { params: { workflow_id: workflowId } }).then(r => r.data),
   get: (id: string) => api.get<Execution>(`/executions/${id}`).then(r => r.data),
-  run: (workflowId: string, input: string) =>
-    api.post<ExecutionRunResponse>(`/executions/workflows/${workflowId}/run`, { input_message: input }).then(r => r.data),
+  run: (workflowId: string, input: string, clientId?: string | null) =>
+    api.post<ExecutionRunResponse>(`/executions/workflows/${workflowId}/run`, {
+      input_message: input,
+      client_id: clientId || null,
+    }).then(r => r.data),
+  approve: (executionId: string, note?: string) =>
+    api.post<{ status: string; execution_id: string }>(`/executions/${executionId}/approve`, { note }).then(r => r.data),
+  revisions: (executionId: string) =>
+    api.get<ExecutionRevisionSummary[]>(`/executions/${executionId}/revisions`).then(r => r.data),
+  regenerate: (executionId: string, feedback: string) =>
+    api.post<ExecutionRegenerateResponse>(`/executions/${executionId}/regenerate`, { feedback }).then(r => r.data),
+  export: (executionId: string, format: 'pdf' | 'docx') =>
+    api.get<Blob>(`/executions/${executionId}/export`, {
+      params: { format },
+      responseType: 'blob',
+    }).then(response => ({
+      blob: response.data,
+      filename:
+        parseAttachmentFilename(response.headers['content-disposition']) ||
+        `report.${format}`,
+    })),
+  deliver: (executionId: string, payload: { method: 'email' | 'google_doc' | 'portal'; email_to?: string; doc_title?: string }) =>
+    api.post<ExecutionDeliveryResponse>(`/executions/${executionId}/deliver`, payload).then(r => r.data),
   cancel: (id: string) =>
     api.delete(`/executions/${id}`).then(r => r.data),
   getMessages: (id: string) =>
@@ -338,6 +412,7 @@ export const approvalsApi = {
 
 // Agent memory
 export const memoryApi = {
+  status: () => api.get<{ mem0_enabled: boolean; mem0_configured: boolean }>('/settings/memory-status').then(r => r.data),
   stats: (agentId: string) => api.get<AgentMemoryStats>(`/memory/agents/${agentId}/stats`).then(r => r.data),
   history: (agentId: string, lastN = 10) =>
     api.get<AgentMemoryItem[]>(`/memory/agents/${agentId}/history`, { params: { last_n: lastN } }).then(r => r.data),

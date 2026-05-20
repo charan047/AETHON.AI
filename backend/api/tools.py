@@ -98,7 +98,10 @@ async def create_tool(data: ToolCreate, db: AsyncSession = Depends(get_db), ctx:
     existing = await db.execute(select(CustomTool).where(CustomTool.name == data.name, CustomTool.org_id == ctx.org.id))
     if existing.scalar_one_or_none():
         raise HTTPException(400, f"A tool named '{data.name}' already exists")
-    ct = CustomTool(id=str(uuid4()), org_id=ctx.org.id, **data.model_dump())
+    payload = data.model_dump()
+    if not payload["code"].strip():
+        payload["code"] = DEFAULT_CODE
+    ct = CustomTool(id=str(uuid4()), org_id=ctx.org.id, **payload)
     db.add(ct)
     await db.commit()
     await db.refresh(ct)

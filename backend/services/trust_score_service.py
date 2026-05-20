@@ -27,23 +27,22 @@ TOOL_SKILL_MAP = {
 }
 
 AUTONOMY_THRESHOLDS = {
-    "restricted": (0, 40),
-    "supervised": (40, 65),
-    "semi_autonomous": (65, 85),
-    "autonomous": (85, 100),
+    "restricted": (0, 35),
+    "supervised": (35, 62),
+    "semi_autonomous": (62, 78),
+    "autonomous": (78, 100),
 }
 
 AUTONOMY_EVAL_REQUIREMENTS = {
-    "semi_autonomous": 60.0,
     "autonomous": 80.0,
 }
 
 OVERALL_SCORE_WEIGHTS = {
-    "task_success_rate": 0.30,
+    "task_success_rate": 0.40,
     "review_pass_rate": 0.20,
-    "risky_action_rate": 0.12,
-    "on_time_rate": 0.09,
-    "cost_efficiency": 0.09,
+    "risky_action_rate": 0.08,
+    "on_time_rate": 0.10,
+    "cost_efficiency": 0.07,
     "eval_pass_rate": 0.15,
 }
 
@@ -145,7 +144,7 @@ class TrustScoreService:
         score.eval_pass_rate = max(0.0, min(100.0, float(pass_rate or 0.0)))
         score.eval_runs_count = int(score.eval_runs_count or 0) + 1
 
-        await self._recalculate(score, agent_id, old_score, db)
+        await self._recalculate(score, agent_id, old_score, db, learning_rate_override=1.0)
         await db.commit()
 
         return {
@@ -203,25 +202,38 @@ class TrustScoreService:
         agent_id: str,
         old_score: float,
         db: AsyncSession,
+        learning_rate_override: float | None = None,
     ) -> None:
-        score.overall_score = round(
-            min(
-                100,
-                max(
-                    0,
-                    (
-                        (score.task_success_rate * OVERALL_SCORE_WEIGHTS["task_success_rate"])
-                        + (score.review_pass_rate * OVERALL_SCORE_WEIGHTS["review_pass_rate"])
-                        + (score.risky_action_rate * OVERALL_SCORE_WEIGHTS["risky_action_rate"])
-                        + (score.on_time_rate * OVERALL_SCORE_WEIGHTS["on_time_rate"])
-                        + (score.cost_efficiency * OVERALL_SCORE_WEIGHTS["cost_efficiency"])
-                        + (score.eval_pass_rate * OVERALL_SCORE_WEIGHTS["eval_pass_rate"])
-                        + (max(0, 100 - (score.human_overrides * 5)) * 0.05)
-                    ),
-                ),
-            ),
-            1,
+        evidence_count = max(
+            int(score.total_tasks or 0),
+            int(score.total_reviews or 0),
+            int(score.eval_runs_count or 0),
         )
+
+        if evidence_count == 0:
+            score.overall_score = 50.0
+        else:
+            raw_score = (
+                (score.task_success_rate * OVERALL_SCORE_WEIGHTS["task_success_rate"])
+                + (score.review_pass_rate * OVERALL_SCORE_WEIGHTS["review_pass_rate"])
+                + (score.risky_action_rate * OVERALL_SCORE_WEIGHTS["risky_action_rate"])
+                + (score.on_time_rate * OVERALL_SCORE_WEIGHTS["on_time_rate"])
+                + (score.cost_efficiency * OVERALL_SCORE_WEIGHTS["cost_efficiency"])
+                + (score.eval_pass_rate * OVERALL_SCORE_WEIGHTS["eval_pass_rate"])
+                + (max(0, 100 - (score.human_overrides * 5)) * 0.05)
+            )
+            learning_rate = (
+                learning_rate_override
+                if learning_rate_override is not None
+                else (0.15 if (score.total_tasks or 0) <= 20 else 0.05)
+            )
+            score.overall_score = round(
+                min(
+                    100,
+                    max(0, (old_score * (1 - learning_rate)) + (raw_score * learning_rate)),
+                ),
+                1,
+            )
 
         if score.total_tasks >= 5:
             delta = score.overall_score - old_score
@@ -308,10 +320,11 @@ class TrustScoreService:
             logger.warning("WebSocket autonomy notification failed: %s", exc)
 
     def _score_to_autonomy(self, score: float) -> str:
-        for level, (lo, hi) in AUTONOMY_THRESHOLDS.items():
+        ordered = sorted(AUTONOMY_THRESHOLDS.items(), key=lambda item: item[1][0])
+        for level, (lo, hi) in ordered:
             if lo <= score < hi:
                 return level
-        return "autonomous" if score >= 85 else "restricted"
+        return ordered[-1][0] if score >= ordered[-1][1][0] else ordered[0][0]
 
     def _passes_eval_gate(self, level: str, score: AgentTrustScore) -> bool:
         required = AUTONOMY_EVAL_REQUIREMENTS.get(level)
@@ -334,11 +347,18 @@ class TrustScoreService:
             score = AgentTrustScore(
                 id=str(uuid4()),
                 agent_id=agent_id,
+                task_success_rate=0.0,
+                review_pass_rate=0.0,
                 overall_score=50.0,
                 risky_action_rate=100.0,
                 cost_efficiency=100.0,
                 on_time_rate=100.0,
                 eval_pass_rate=0.0,
+                total_tasks=0,
+                successful_tasks=0,
+                failed_tasks=0,
+                total_reviews=0,
+                passed_reviews=0,
                 eval_runs_count=0,
             )
             db.add(score)

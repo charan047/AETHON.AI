@@ -1,9 +1,10 @@
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from auth.security import create_access_token, hash_password
-from database.models import Agent, OrgMember, OrgMemberRole, Organization, User, UserRole
+from database.models import Agent, AgentMemoryEntry, OrgMember, OrgMemberRole, Organization, User, UserRole
 from tests.factories import AgentFactory
 
 
@@ -166,3 +167,54 @@ async def test_agent_memory_config_defaults(authed_client, test_agent):
     data = response.json()
     assert data["memory_enabled"] is True
     assert data["max_memories_per_query"] == 5
+
+
+@pytest.mark.asyncio
+async def test_agent_preferences_can_be_added_listed_and_deleted(authed_client, db, test_org, test_agent):
+    create_response = await authed_client.post(
+        f"/api/agents/{test_agent.id}/preferences",
+        json={"preference": "Keep responses under 400 words."},
+    )
+
+    assert create_response.status_code == 201
+    payload = create_response.json()
+    assert payload["always_inject"] is True
+    assert payload["source"] == "manual"
+    assert payload["content_preview"] == "Keep responses under 400 words."
+
+    memory_id = payload["id"]
+    created = await db.scalar(
+        select(AgentMemoryEntry).where(
+            AgentMemoryEntry.id == memory_id,
+            AgentMemoryEntry.org_id == test_org.id,
+        )
+    )
+    assert created is not None
+    assert created.memory_type == "ceo_preference"
+
+    list_response = await authed_client.get(f"/api/agents/{test_agent.id}/preferences")
+    assert list_response.status_code == 200
+    listed = list_response.json()
+    assert len(listed) == 1
+    assert listed[0]["id"] == memory_id
+
+    delete_response = await authed_client.delete(f"/api/agents/{test_agent.id}/preferences/{memory_id}")
+    assert delete_response.status_code == 204
+
+    deleted = await db.scalar(
+        select(AgentMemoryEntry).where(
+            AgentMemoryEntry.id == memory_id,
+            AgentMemoryEntry.org_id == test_org.id,
+        )
+    )
+    assert deleted is None
+
+
+@pytest.mark.asyncio
+async def test_agent_preference_requires_meaningful_text(authed_client, test_agent):
+    response = await authed_client.post(
+        f"/api/agents/{test_agent.id}/preferences",
+        json={"preference": "hey"},
+    )
+
+    assert response.status_code == 422

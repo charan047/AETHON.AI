@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 
 import { agentsApi, extractApiError, modelsApi } from '../api/client'
+import { FloatingField } from '../components/AuthShell'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
 import { GlowCard } from '../components/ui/GlowCard'
 import { SkeletonCard } from '../components/ui/Skeleton'
@@ -25,6 +26,7 @@ import type { ModelConfigRecord, ModelTemplate, ModelTestResult } from '../types
 
 
 type ProviderName = ModelConfigRecord['provider']
+type ProviderPill = ProviderName | 'custom-groq'
 
 interface AddModelDraft {
   provider: ProviderName
@@ -106,6 +108,7 @@ function ModelCard({
   onEdit,
   onDelete,
   testing,
+  lastTestResult,
 }: {
   config: ModelConfigRecord
   onSetDefault: () => void
@@ -113,66 +116,69 @@ function ModelCard({
   onEdit: () => void
   onDelete: () => void
   testing: boolean
+  lastTestResult?: ModelTestResult | null
 }) {
   const providerMeta = PROVIDER_META[config.provider]
   const ProviderIcon = providerMeta.icon
+  const latency = lastTestResult?.success ? lastTestResult.latency_ms : null
 
   return (
-    <GlowCard className="overflow-hidden p-0">
-      <div className="h-0.5 w-full bg-gradient-to-r from-blue-500 via-blue-400 to-emerald-400" />
-      <div className="space-y-4 p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${providerMeta.tone}`}>
-              <ProviderIcon size={12} />
-              {providerLabel(config.provider)}
-            </span>
-            {config.is_default && (
-              <span className="rounded-full border border-blue-500/20 bg-blue-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-200">
-                Default
-              </span>
-            )}
+    <GlowCard className="group p-5">
+      <div className="space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 space-y-1">
+            <div className="flex items-center gap-3">
+              <div className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border ${providerMeta.tone}`}>
+                <ProviderIcon size={18} />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <div className="truncate font-bold text-white">{config.display_name}</div>
+                  {config.is_default ? <span className="badge-indigo">Default</span> : null}
+                </div>
+                <div className="font-mono text-xs text-[#8B9DBE]">{config.model_id}</div>
+              </div>
+            </div>
           </div>
-          <div className="text-lg font-semibold text-white">{config.display_name}</div>
-          <div className="font-mono text-xs text-white/35">{config.model_id}</div>
         </div>
-      </div>
 
-      <div className="space-y-2 text-sm text-white/55">
-        <div>Context: {config.context_window ? `${Math.round(config.context_window / 1000)}K tokens` : '—'} · Tool calling: {config.supports_tools ? '✓' : '—'}</div>
-        <div>Cost: {formatCurrency(config.cost_per_million_input_tokens)} / {formatCurrency(config.cost_per_million_output_tokens)} per 1M tokens</div>
-      </div>
-
-      <div className="space-y-2 rounded-xl border border-white/8 bg-white/[0.03] p-3 text-sm">
-        <div className="flex items-center gap-2 text-white/70">
-          <span>API Key:</span>
-          <code className="font-mono text-xs text-white/45">{config.masked_api_key ?? 'Not stored'}</code>
-          <StatusDot status={config.test_status} />
-          <span className="text-xs text-white/35">{formatRelative(config.last_tested_at)}</span>
+        <div className="font-mono text-xs text-[#8B9DBE]">
+          {config.context_window ? `${Math.round(config.context_window / 1000)}k context` : 'context —'} · {config.supports_tools ? 'tools on' : 'tools off'} · {config.supports_vision ? 'vision on' : 'vision off'}
         </div>
-        <div className="text-white/45">{config.agent_count} agents using this model</div>
-        {config.test_status === 'failed' && config.test_error && (
-          <div className="text-xs text-red-300">{config.test_error.slice(0, 100)}</div>
-        )}
-      </div>
 
-      <div className="flex flex-wrap gap-2">
-        {!config.is_default && (
-          <button className="btn-secondary text-xs" onClick={onSetDefault}>
-            Set Default
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {config.test_status === 'ok' ? (
+            <span className="badge-emerald">{latency ? `${latency}ms` : 'Passed'}</span>
+          ) : null}
+          {config.test_status === 'failed' ? (
+            <span className="badge-red">Failed</span>
+          ) : null}
+          <span className="font-mono text-[#8B9DBE]">{formatRelative(config.last_tested_at)}</span>
+          <span className="font-mono text-[#8B9DBE]">{config.agent_count} agent{config.agent_count === 1 ? '' : 's'}</span>
+        </div>
+
+        {config.test_status === 'failed' && config.test_error ? (
+          <div className="rounded-xl border border-red-400/20 bg-red-400/[0.08] px-3 py-2 text-xs text-red-200">
+            {config.test_error.slice(0, 120)}
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap gap-2 opacity-100 transition-opacity duration-150 lg:opacity-80 lg:group-hover:opacity-100">
+          <button className="btn-secondary btn-sm" onClick={onTest} disabled={testing}>
+            {testing ? <><Loader2 size={14} className="animate-spin" /> Testing…</> : 'Test'}
           </button>
-        )}
-        <button className="btn-secondary text-xs" onClick={onTest} disabled={testing}>
-          {testing ? <><Loader2 size={14} className="animate-spin" /> Testing…</> : 'Test'}
-        </button>
-        <button className="btn-secondary text-xs" onClick={onEdit}>
-          <Pencil size={14} /> Edit
-        </button>
-        <button className="btn-danger text-xs" onClick={onDelete}>
-          <Trash2 size={14} /> Delete
-        </button>
-      </div>
+          {!config.is_default ? (
+            <button className="btn-ghost btn-sm" onClick={onSetDefault}>
+              Set Default
+            </button>
+          ) : null}
+          <button className="btn-secondary btn-sm" onClick={onEdit}>
+            <Pencil size={14} /> Edit
+          </button>
+          <button className="btn-danger btn-sm" onClick={onDelete}>
+            <Trash2 size={14} /> Delete
+          </button>
+        </div>
       </div>
     </GlowCard>
   )
@@ -374,7 +380,7 @@ function AddModelModal({
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4 backdrop-blur-sm">
       <div className="glass-elevated flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden">
-        <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
+        <div className="flex items-center justify-between border-b border-white/[0.08] px-6 py-4">
           <div>
             <div className="text-xs uppercase tracking-[0.24em] text-[#4B5A73]">Model Control Plane</div>
             <div className="mt-1 text-xl font-semibold text-white">Add Model</div>
@@ -402,7 +408,7 @@ function AddModelModal({
                 className="grid w-full cursor-pointer place-items-center rounded-2xl border border-dashed border-white/15 bg-white/[0.02] py-12 text-center text-white/65 transition duration-150 hover:border-blue-500/30 hover:bg-white/[0.04] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
               >
                 <div className="space-y-2">
-                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03]">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.03]">
                     <Plus size={18} />
                   </div>
                   <div className="text-base font-semibold text-white">Add Custom Model</div>
@@ -414,9 +420,53 @@ function AddModelModal({
 
           {step === 2 && (
             <div className="mx-auto max-w-2xl space-y-6">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+              <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-5">
                 <div className="text-sm text-white/45">{providerLabel(draft.provider)}</div>
                 <div className="mt-1 text-lg font-semibold text-white">{draft.display_name || 'New model config'}</div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="label">Provider</div>
+                <div className="flex flex-wrap gap-2">
+                  {([
+                    { key: 'openai', label: 'OpenAI' },
+                    { key: 'anthropic', label: 'Anthropic' },
+                    { key: 'custom-groq', label: 'Groq' },
+                    { key: 'custom', label: 'Custom' },
+                    { key: 'ollama', label: 'Ollama' },
+                  ] as Array<{ key: ProviderPill; label: string }>).map(option => {
+                    const active =
+                      (option.key === 'custom-groq' && draft.provider === 'custom' && customProviderName === 'Groq') ||
+                      option.key === draft.provider
+                    const basePillClass = active
+                      ? 'rounded-full border border-blue-500/30 bg-blue-500/15 px-4 py-2 text-sm font-medium text-blue-300'
+                      : 'btn-secondary rounded-full px-4 py-2 text-sm'
+
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        onClick={() => {
+                          if (option.key === 'custom-groq') {
+                            setCustomProviderName('Groq')
+                            setDraft(prev => ({ ...prev, provider: 'custom', base_url: prev.base_url || '' }))
+                            return
+                          }
+                          if (option.key === 'custom') {
+                            setCustomProviderName('Other')
+                            setDraft(prev => ({ ...prev, provider: 'custom' }))
+                            return
+                          }
+                          const provider: ProviderName = option.key
+                          setDraft(prev => ({ ...prev, provider }))
+                        }}
+                        className={basePillClass}
+                      >
+                        {option.label}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
 
               {draft.provider === 'custom' && (
@@ -431,27 +481,17 @@ function AddModelModal({
               )}
 
               <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="label">Display Name</label>
-                  <input className="input" value={draft.display_name} onChange={e => setDraft(prev => ({ ...prev, display_name: e.target.value }))} />
-                </div>
-                <div>
-                  <label className="label">Model ID</label>
-                  <input className="input" value={draft.model_id} onChange={e => setDraft(prev => ({ ...prev, model_id: e.target.value }))} />
-                </div>
+                <FloatingField label="Display Name" type="text" value={draft.display_name} onChange={value => setDraft(prev => ({ ...prev, display_name: value }))} required />
+                <FloatingField label="Model ID" type="text" value={draft.model_id} onChange={value => setDraft(prev => ({ ...prev, model_id: value }))} required />
               </div>
 
               {(draft.provider === 'openai' || draft.provider === 'anthropic' || draft.provider === 'custom') && (
-                <div>
-                  <label className="label">API Key</label>
-                  <input type="password" className="input" value={draft.api_key} onChange={e => setDraft(prev => ({ ...prev, api_key: e.target.value }))} />
-                </div>
+                <FloatingField label="API Key" type="password" value={draft.api_key} onChange={value => setDraft(prev => ({ ...prev, api_key: value }))} />
               )}
 
               {(draft.provider === 'ollama' || draft.provider === 'custom') && (
                 <div>
-                  <label className="label">Base URL</label>
-                  <input className="input" value={draft.base_url} onChange={e => setDraft(prev => ({ ...prev, base_url: e.target.value }))} />
+                  <FloatingField label="Base URL" type="text" value={draft.base_url} onChange={value => setDraft(prev => ({ ...prev, base_url: value }))} />
                   {draft.provider === 'ollama' && (
                     <div className="mt-2 text-xs text-white/40">
                       Make sure Ollama is running: <code>ollama serve</code>. <a className="text-blue-300 transition hover:text-blue-200" href="https://ollama.ai" target="_blank" rel="noreferrer">Install Ollama →</a>
@@ -468,14 +508,14 @@ function AddModelModal({
               <label className="flex items-center gap-3 text-sm text-white/65">
                 <input
                   type="checkbox"
-                  className="accent-blue-500"
+                  className="indigo-blue-500"
                   checked={draft.set_as_default}
                   onChange={e => setDraft(prev => ({ ...prev, set_as_default: e.target.checked }))}
                 />
                 Set as org default
               </label>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
                 <div className="mb-3 text-sm font-semibold text-white">Test Before Save</div>
                 <button className="btn-primary" onClick={() => testMutation.mutate()} disabled={testMutation.isPending}>
                   {testMutation.isPending ? <><Loader2 size={16} className="animate-spin" /> Testing connection…</> : 'Test Connection'}
@@ -598,11 +638,11 @@ function EditModelModal({
             <textarea className="input min-h-[110px] resize-y" value={notes ?? ''} onChange={e => setNotes(e.target.value)} />
           </div>
           <label className="flex items-center gap-3 text-sm text-white/65">
-            <input type="checkbox" className="accent-blue-500" checked={isActive} onChange={e => setIsActive(e.target.checked)} />
+            <input type="checkbox" className="indigo-blue-500" checked={isActive} onChange={e => setIsActive(e.target.checked)} />
             Active
           </label>
 
-          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+          <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
             <div className="mb-3 text-sm font-semibold text-white">Rotate API Key</div>
             <input type="password" className="input" value={rotateKey} onChange={e => setRotateKey(e.target.value)} placeholder="Enter new API key" />
             <button className="btn-secondary mt-3" onClick={() => rotateMutation.mutate()} disabled={!rotateKey || rotateMutation.isPending}>
@@ -629,6 +669,7 @@ export function ModelsPage() {
   const [configToDelete, setConfigToDelete] = useState<ModelConfigRecord | null>(null)
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null)
   const [testingConfigId, setTestingConfigId] = useState<string | null>(null)
+  const [latestTestResults, setLatestTestResults] = useState<Record<string, ModelTestResult>>({})
 
   const { data: configs = [], isLoading: loadingConfigs } = useQuery({
     queryKey: ['model-configs'],
@@ -647,6 +688,9 @@ export function ModelsPage() {
       return modelsApi.testSaved(config.id)
     },
     onSuccess: result => {
+      if (testingConfigId) {
+        setLatestTestResults(prev => ({ ...prev, [testingConfigId]: result }))
+      }
       queryClient.invalidateQueries({ queryKey: ['model-configs'] })
       queryClient.invalidateQueries({ queryKey: SIDEBAR_MODEL_QUERY_KEY })
       if (result.success) toast.success(`Connected in ${result.latency_ms}ms`)
@@ -696,10 +740,10 @@ export function ModelsPage() {
       <section className="space-y-5">
         <div className="flex items-end justify-between gap-4">
           <div>
-            <h1 className="text-4xl font-semibold tracking-[-0.05em] text-white">AI Models</h1>
-            <p className="mt-2 text-sm text-[#8B9DBE]">Test, assign, and monitor the models your agency relies on across every agent.</p>
+            <h1 className="page-title">AI Models</h1>
+            <p className="page-subtitle">Test, assign, and monitor the models your agency relies on across every agent.</p>
           </div>
-          <button className="btn-primary h-11" onClick={() => setAddOpen(true)}>
+          <button className="btn-primary" onClick={() => setAddOpen(true)}>
             <Plus size={16} /> Add Model
           </button>
         </div>
@@ -719,11 +763,12 @@ export function ModelsPage() {
                 onEdit={() => setEditingConfig(config)}
                 onDelete={() => setConfigToDelete(config)}
                 testing={testingConfigId === config.id}
+                lastTestResult={latestTestResults[config.id]}
               />
             ))}
             {!configs.length && (
               <GlowCard className="col-span-full py-20 text-center">
-                <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] text-white/40">
+                <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-2xl border border-white/[0.08] bg-white/[0.03] text-white/40">
                   <Cpu size={24} />
                 </div>
                 <div className="text-lg font-medium text-white">No model configs yet</div>
@@ -766,7 +811,7 @@ export function ModelsPage() {
                         <div className="flex items-center gap-2 text-white/75">
                           <span>{currentConfig?.display_name || agent.model || 'Default'}</span>
                           {usingDefault && (
-                            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/45">
+                            <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/45">
                               default
                             </span>
                           )}

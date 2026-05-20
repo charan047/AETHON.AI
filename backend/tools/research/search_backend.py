@@ -109,9 +109,13 @@ class SearchBackend:
             logger.warning("DuckDuckGo search failed: %s", exc)
             return [
                 {
-                    "title": "Search unavailable",
+                    "title": "⚠ Search unavailable",
                     "url": "",
-                    "snippet": "Configure BRAVE_SEARCH_API_KEY or SERPER_API_KEY for reliable search.",
+                    "snippet": (
+                        "SEARCH_FAILED: Web search is unavailable. "
+                        "Configure BRAVE_SEARCH_API_KEY or SERPER_API_KEY "
+                        "for reliable search. Current task cannot be completed."
+                    ),
                 }
             ]
 
@@ -196,11 +200,11 @@ class SearchBackend:
         else:
             result = {
                 "provider": "ddg",
-                "status": "degraded",
+                "status": "not_configured",
                 "last_check": now,
                 "note": (
-                    "Using free DuckDuckGo fallback. "
-                    "Configure BRAVE_SEARCH_API_KEY or SERPER_API_KEY for reliable search."
+                    "No search API configured. Agents that use web search will fail silently. "
+                    "Add BRAVE_SEARCH_API_KEY or SERPER_API_KEY to .env."
                 ),
             }
 

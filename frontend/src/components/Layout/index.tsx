@@ -93,14 +93,7 @@ export function Layout() {
   }, [location.pathname])
 
   return (
-    <div className="relative flex h-screen overflow-hidden bg-base-100 text-content-primary">
-      <div
-        className="pointer-events-none fixed inset-x-0 top-0 z-0 h-[280px]"
-        style={{
-          background:
-            'radial-gradient(ellipse 70% 60% at 50% 0%, rgba(37,99,235,0.14) 0%, rgba(16,185,129,0.08) 35%, transparent 75%)',
-        }}
-      />
+    <div className="relative flex h-screen overflow-hidden bg-transparent text-content-primary">
       <div className="relative z-10 flex h-full w-full overflow-hidden">
         {mobileSidebarOpen && (
           <button
@@ -111,18 +104,18 @@ export function Layout() {
           />
         )}
         <Sidebar mobileOpen={mobileSidebarOpen} onCloseMobile={() => setMobileSidebarOpen(false)} />
-        <main className="app-shell relative flex flex-1 flex-col overflow-hidden bg-transparent">
-          <div className="flex h-14 items-center px-4 shadow-[0_1px_0_rgba(255,255,255,0.06)] lg:hidden">
+        <main className="app-shell relative flex min-w-0 flex-1 flex-col overflow-hidden bg-transparent">
+          <div className="flex h-14 items-center border-b border-white/[0.06] px-4 lg:hidden">
             <button
               type="button"
               aria-label="Open navigation"
               onClick={() => setMobileSidebarOpen(true)}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-white/80 transition duration-150 hover:bg-white/[0.05] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-white/80 transition duration-150 hover:bg-white/[0.05] focus:outline-none focus:ring-2 focus:ring-white/10"
             >
               <PanelLeft size={18} />
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto">
+          <div className="min-w-0 flex-1 overflow-y-auto">
             <Outlet />
           </div>
         </main>

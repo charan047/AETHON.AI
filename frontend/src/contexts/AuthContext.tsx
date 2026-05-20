@@ -40,14 +40,50 @@ const initialState: AuthState = {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 const SESSION_HINT_STORAGE_KEY = 'ai-company-os-has-session'
+const AUTH_SNAPSHOT_STORAGE_KEY = 'ai-company-os-auth-snapshot'
+const ACTIVE_ORG_SNAPSHOT_STORAGE_KEY = 'ai-company-os-active-org-snapshot'
+
+type AuthSnapshot = {
+  userId: string | null
+  role: string | null
+  email: string | null
+}
+
+function readJsonStorage<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    return JSON.parse(raw) as T
+  } catch {
+    return null
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
-  const [auth, setAuth] = useState<AuthState>(initialState)
-  const [email, setEmail] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [activeOrg, setActiveOrg] = useState<Organization | null>(null)
-  const [userOrgs, setUserOrgs] = useState<Organization[]>([])
+  const hasSessionHint = typeof window !== 'undefined' && Boolean(localStorage.getItem(SESSION_HINT_STORAGE_KEY))
+  const storedAuthSnapshot = typeof window !== 'undefined'
+    ? readJsonStorage<AuthSnapshot>(AUTH_SNAPSHOT_STORAGE_KEY)
+    : null
+  const storedOrgSnapshot = typeof window !== 'undefined'
+    ? readJsonStorage<Organization>(ACTIVE_ORG_SNAPSHOT_STORAGE_KEY)
+    : null
+
+  const [auth, setAuth] = useState<AuthState>(() => {
+    if (hasSessionHint && storedAuthSnapshot?.userId && storedAuthSnapshot?.role) {
+      return {
+        accessToken: null,
+        userId: storedAuthSnapshot.userId,
+        role: storedAuthSnapshot.role,
+        isAuthenticated: true,
+      }
+    }
+    return initialState
+  })
+  const [email, setEmail] = useState<string | null>(() => storedAuthSnapshot?.email || null)
+  const [isLoading, setIsLoading] = useState<boolean>(() => Boolean(hasSessionHint && !storedAuthSnapshot))
+  const [activeOrg, setActiveOrg] = useState<Organization | null>(() => storedOrgSnapshot)
+  const [userOrgs, setUserOrgs] = useState<Organization[]>(() => (storedOrgSnapshot ? [storedOrgSnapshot] : []))
 
   const applyOrgHeader = (orgId: string | null) => {
     if (orgId) {
@@ -59,16 +95,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const persistAuthSnapshot = (snapshot: AuthSnapshot | null) => {
+    if (!snapshot?.userId || !snapshot.role) {
+      localStorage.removeItem(AUTH_SNAPSHOT_STORAGE_KEY)
+      return
+    }
+    localStorage.setItem(AUTH_SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshot))
+  }
+
+  const persistOrgSnapshot = (org: Organization | null) => {
+    if (!org) {
+      localStorage.removeItem(ACTIVE_ORG_SNAPSHOT_STORAGE_KEY)
+      return
+    }
+    localStorage.setItem(ACTIVE_ORG_SNAPSHOT_STORAGE_KEY, JSON.stringify(org))
+  }
+
   const setTokens = (tokens: TokenResponse, nextEmail?: string) => {
     api.defaults.headers.common.Authorization = `Bearer ${tokens.access_token}`
     localStorage.setItem(SESSION_HINT_STORAGE_KEY, '1')
+    const resolvedEmail = nextEmail || tokens.email || null
     setAuth({
       accessToken: tokens.access_token,
       userId: tokens.user_id,
       role: tokens.role,
       isAuthenticated: true,
     })
-    setEmail(nextEmail || tokens.email || null)
+    setEmail(resolvedEmail)
+    persistAuthSnapshot({
+      userId: tokens.user_id,
+      role: tokens.role,
+      email: resolvedEmail,
+    })
   }
 
   const loadOrganizations = async (preferredOrgId?: string | null) => {
@@ -78,6 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const selected = orgs.find(org => org.id === storedOrgId) || orgs[0] || null
     setActiveOrg(selected)
     applyOrgHeader(selected?.id || null)
+    persistOrgSnapshot(selected)
     return orgs
   }
 
@@ -105,6 +164,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUserOrgs([])
     delete api.defaults.headers.common.Authorization
     localStorage.removeItem(SESSION_HINT_STORAGE_KEY)
+    localStorage.removeItem(AUTH_SNAPSHOT_STORAGE_KEY)
+    localStorage.removeItem(ACTIVE_ORG_SNAPSHOT_STORAGE_KEY)
     applyOrgHeader(null)
     queryClient.clear()
   }
@@ -114,6 +175,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!nextOrg) return
     setActiveOrg(nextOrg)
     applyOrgHeader(nextOrg.id)
+    persistOrgSnapshot(nextOrg)
     void queryClient.invalidateQueries()
   }
 
@@ -131,7 +193,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await loadOrganizations()
       } catch {
         // Stay logged out when silent refresh is unavailable or expired.
+        setAuth(initialState)
+        setEmail(null)
+        setActiveOrg(null)
+        setUserOrgs([])
+        delete api.defaults.headers.common.Authorization
         localStorage.removeItem(SESSION_HINT_STORAGE_KEY)
+        localStorage.removeItem(AUTH_SNAPSHOT_STORAGE_KEY)
+        localStorage.removeItem(ACTIVE_ORG_SNAPSHOT_STORAGE_KEY)
         applyOrgHeader(null)
       } finally {
         setIsLoading(false)

@@ -44,7 +44,7 @@ function DiffSummary({ diff }: { diff: Awaited<ReturnType<typeof workflowsApi.di
       {rows.map(row => (
         <div key={row.label} className="rounded-lg border border-white/[0.08] bg-white/[0.03] p-3">
           <div className={`text-lg font-semibold ${row.tone}`}>{row.value}</div>
-          <div className="text-[11px] text-obsidian-500">{row.label}</div>
+          <div className="text-[11px] text-ink-faint">{row.label}</div>
         </div>
       ))}
     </div>
@@ -101,11 +101,11 @@ export function VersionHistory({ workflow, open, onClose, onRestored }: VersionH
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-sm">
       <button className="flex-1 cursor-default" onClick={onClose} aria-label="Close version history" />
-      <aside className="flex h-full w-full max-w-5xl flex-col border-l border-white/[0.08] bg-obsidian-950 shadow-glow-md">
+      <aside className="flex h-full w-full max-w-5xl flex-col border-l border-white/[0.08] bg-base-bg shadow-glow-md">
         <div className="flex h-16 items-center justify-between border-b border-white/[0.08] px-5">
           <div>
             <div className="text-lg font-semibold text-white">Version History</div>
-            <div className="text-xs text-obsidian-500">{workflow.name || 'Untitled workflow'}</div>
+            <div className="text-xs text-ink-faint">{workflow.name || 'Untitled workflow'}</div>
           </div>
           <button className="btn-ghost" onClick={onClose}><X size={16} /></button>
         </div>
@@ -117,13 +117,13 @@ export function VersionHistory({ workflow, open, onClose, onRestored }: VersionH
                 {[...Array(5)].map((_, i) => <SkeletonCard key={i} className="h-24" />)}
               </div>
             ) : !versions.length ? (
-              <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-5 text-sm text-obsidian-400">
+              <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-5 text-sm text-ink-muted">
                 No saved versions yet. Save this workflow to start its history.
               </div>
             ) : (
               <div className="space-y-3">
                 {versions.map(version => (
-                  <div key={version.id} className="rounded-xl border border-white/[0.08] bg-obsidian-900 p-3">
+                  <div key={version.id} className="rounded-xl border border-white/[0.08] bg-base-surface p-3">
                     <div className="mb-2 flex items-start justify-between gap-2">
                       <div>
                         <span className="rounded-full border border-indigo-400/25 bg-indigo-400/10 px-2 py-0.5 text-xs font-semibold text-indigo-200">
@@ -134,7 +134,7 @@ export function VersionHistory({ workflow, open, onClose, onRestored }: VersionH
                       <Clock3 size={14} className="mt-1 text-obsidian-600" />
                     </div>
 
-                    <div className="mb-3 flex items-center gap-2 text-xs text-obsidian-500">
+                    <div className="mb-3 flex items-center gap-2 text-xs text-ink-faint">
                       <AgentAvatar name={version.created_by || 'System'} size="sm" />
                       <span>{version.created_by || 'System'}</span>
                       <span>·</span>
@@ -168,13 +168,13 @@ export function VersionHistory({ workflow, open, onClose, onRestored }: VersionH
                     <div className="flex items-center gap-2 text-sm font-semibold text-white">
                       <GitCompareArrows size={16} /> Diff v{diffVersion.version_number} → v{latestVersionNumber}
                     </div>
-                    <div className="text-xs text-obsidian-500">Green means added, red means removed, amber means modified.</div>
+                    <div className="text-xs text-ink-faint">Green means added, red means removed, amber means modified.</div>
                   </div>
                   <button className="btn-secondary text-xs" onClick={() => setDiffVersion(null)}>Close diff</button>
                 </div>
                 {diffQuery.isLoading ? <SkeletonCard className="h-32" /> : <DiffSummary diff={diffQuery.data} />}
                 {diffQuery.data && (
-                  <pre className="max-h-[520px] overflow-auto rounded-xl border border-white/[0.08] bg-obsidian-900 p-4 font-mono text-xs text-obsidian-300">
+                  <pre className="max-h-[520px] overflow-auto rounded-xl border border-white/[0.08] bg-base-surface p-4 font-mono text-xs text-obsidian-300">
                     {JSON.stringify(diffQuery.data, null, 2)}
                   </pre>
                 )}
@@ -186,7 +186,7 @@ export function VersionHistory({ workflow, open, onClose, onRestored }: VersionH
                     <div className="flex items-center gap-2 text-sm font-semibold text-white">
                       <Check size={16} /> Viewing v{selectedVersion.version_number}
                     </div>
-                    <div className="text-xs text-obsidian-500">{selectedVersion.changelog || 'Workflow snapshot'}</div>
+                    <div className="text-xs text-ink-faint">{selectedVersion.changelog || 'Workflow snapshot'}</div>
                   </div>
                 </div>
                 <div className="h-[680px] overflow-hidden rounded-xl border border-white/[0.08]">
@@ -203,7 +203,7 @@ export function VersionHistory({ workflow, open, onClose, onRestored }: VersionH
                 <div>
                   <GitCompareArrows size={42} className="mx-auto mb-3 text-obsidian-600" />
                   <div className="font-medium text-white">Select a version</div>
-                  <div className="mt-1 text-sm text-obsidian-500">View JSON snapshots, inspect diffs, or restore safely.</div>
+                  <div className="mt-1 text-sm text-ink-faint">View JSON snapshots, inspect diffs, or restore safely.</div>
                 </div>
               </div>
             )}

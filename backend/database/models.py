@@ -22,7 +22,7 @@ class Agent(Base):
     role = Column(String, nullable=False)
     description = Column(Text, default="")
     system_prompt = Column(Text, nullable=False)
-    model = Column(String, default="llama-3.3-70b-versatile")
+    model = Column(String, default="llama-3.1-8b-instant")
     model_config_id = Column(String, ForeignKey("model_configs.id", ondelete="SET NULL"), nullable=True)
     role_slug = Column(String(100), nullable=True)
     seniority_level = Column(Integer, default=1)
@@ -84,12 +84,42 @@ class ApprovalStatus(str, enum.Enum):
 class ExecutionStatus(str, enum.Enum):
     pending = "pending"
     running = "running"
+    pending_review = "pending_review"
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
     waiting_approval = "waiting_approval"
     rejected = "rejected"
     timed_out = "timed_out"
+
+
+class MissionStatus(str, enum.Enum):
+    planning = "planning"
+    active = "active"
+    paused = "paused"
+    completed = "completed"
+    failed = "failed"
+
+
+class MissionTaskStatus(str, enum.Enum):
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    skipped = "skipped"
+
+
+class A2ATaskStatus(str, enum.Enum):
+    submitted = "submitted"
+    working = "working"
+    input_required = "input-required"
+    completed = "completed"
+    failed = "failed"
+
+
+class A2ATaskDirection(str, enum.Enum):
+    incoming = "incoming"
+    outgoing = "outgoing"
 
 
 class IntegrationType(str, enum.Enum):
@@ -163,6 +193,7 @@ class AuditAction(str, enum.Enum):
     model_set_default = "model_set_default"
     agent_model_changed = "agent_model_changed"
     approval_requested = "approval_requested"
+    external_agent_call = "external_agent_call"
 
 
 class MarketplaceCategory(str, enum.Enum):
@@ -260,6 +291,7 @@ class Workflow(Base):
     schedule_enabled = Column(Boolean, default=False, nullable=False)
     schedule_timezone = Column(String(64), default="UTC", nullable=False)
     last_run_at = Column(DateTime, nullable=True)
+    requires_review = Column(Boolean, default=False, nullable=False)
     input_template = Column(Text, default="")
     input_variables = Column(JSON, default=list)
     configured_inputs = Column(JSON, default=dict)
@@ -317,6 +349,11 @@ class Execution(Base):
     org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     workflow_id = Column(String, ForeignKey("workflows.id"), nullable=False)
     client_id = Column(String, ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
+    parent_execution_id = Column(
+        String,
+        ForeignKey("executions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     trigger = Column(String, default="manual")
     status = Column(
         SAEnum(
@@ -328,13 +365,22 @@ class Execution(Base):
     )
     input_message = Column(Text, default="")
     output_message = Column(Text, default="")
+    revision_number = Column(Integer, default=1, nullable=False)
+    ceo_feedback = Column(Text, nullable=True)
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     token_count = Column(Integer, default=0)
     cost = Column(Float, default=0.0)
     error = Column(Text, nullable=True)
+    warning = Column(Text, nullable=True)
     max_runtime_seconds = Column(Integer, default=3600, nullable=False)
     is_demo = Column(Boolean, default=False, nullable=False)
+    approved_by = Column(String, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    approval_note = Column(Text, nullable=True)
+    delivered_at = Column(DateTime, nullable=True)
+    delivery_method = Column(String(50), nullable=True)
+    delivery_target = Column(String(500), nullable=True)
 
     workflow = relationship("Workflow", back_populates="executions")
     messages = relationship("Message", back_populates="execution", cascade="all, delete-orphan")
@@ -344,6 +390,73 @@ class Execution(Base):
         order_by="ExecutionStep.step_index",
         cascade="all, delete-orphan",
     )
+
+
+class Mission(Base):
+    __tablename__ = "missions"
+    __table_args__ = (
+        Index("ix_missions_org_id", "org_id"),
+        Index("ix_missions_client_id", "client_id"),
+        Index("ix_missions_status", "status"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    client_id = Column(String, ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
+    goal = Column(Text, nullable=False)
+    title = Column(String(255), nullable=True)
+    status = Column(
+        SAEnum(
+            MissionStatus,
+            values_callable=lambda values: [item.value for item in values],
+            name="missionstatus",
+        ),
+        default=MissionStatus.planning,
+        nullable=False,
+    )
+    report = Column(Text, nullable=True)
+    report_delivered = Column(Boolean, default=False, nullable=False)
+    created_by = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    tasks = relationship(
+        "MissionTask",
+        back_populates="mission",
+        order_by="MissionTask.sequence",
+        cascade="all, delete-orphan",
+    )
+
+
+class MissionTask(Base):
+    __tablename__ = "mission_tasks"
+    __table_args__ = (
+        Index("ix_mission_tasks_mission_id", "mission_id"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    mission_id = Column(String, ForeignKey("missions.id", ondelete="CASCADE"), nullable=False)
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    sequence = Column(Integer, nullable=False)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    agent_id = Column(String, ForeignKey("agents.id", ondelete="SET NULL"), nullable=True)
+    depends_on = Column(String, nullable=True)
+    status = Column(
+        SAEnum(
+            MissionTaskStatus,
+            values_callable=lambda values: [item.value for item in values],
+            name="missiontaskstatus",
+        ),
+        default=MissionTaskStatus.pending,
+        nullable=False,
+    )
+    output_summary = Column(Text, nullable=True)
+    execution_id = Column(String, ForeignKey("executions.id", ondelete="SET NULL"), nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    mission = relationship("Mission", back_populates="tasks")
 
 
 class ExecutionStep(Base):
@@ -1189,6 +1302,70 @@ class AgentApprovalRequest(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class ExternalAgent(Base):
+    __tablename__ = "external_agents"
+    __table_args__ = (
+        Index("ix_external_agents_org_id", "org_id"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    agent_card_url = Column(String(500), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    provider_name = Column(String(255), nullable=True)
+    provider_url = Column(String(500), nullable=True)
+    task_endpoint = Column(String(500), nullable=False)
+    skills = Column(JSON, default=list)
+    api_key_encrypted = Column(Text, nullable=True)
+    trust_status = Column(String(20), default="pending")
+    agent_did = Column(String(255), nullable=True)
+    total_calls = Column(Integer, default=0)
+    successful_calls = Column(Integer, default=0)
+    total_cost_usd = Column(Float, default=0.0)
+    added_at = Column(DateTime, default=datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=True)
+
+
+class A2ATask(Base):
+    __tablename__ = "a2a_tasks"
+    __table_args__ = (
+        Index("ix_a2a_tasks_org_created", "org_id", "created_at"),
+        Index("ix_a2a_tasks_agent_status", "agent_id", "status"),
+    )
+
+    id = Column(String, primary_key=True)
+    agent_id = Column(String, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    execution_id = Column(String, ForeignKey("executions.id", ondelete="SET NULL"), nullable=True)
+    external_agent_id = Column(String, ForeignKey("external_agents.id", ondelete="SET NULL"), nullable=True)
+    input_text = Column(Text, nullable=False)
+    output_text = Column(Text, nullable=True)
+    direction = Column(
+        SAEnum(
+            A2ATaskDirection,
+            values_callable=lambda values: [item.value for item in values],
+            name="a2ataskdirection",
+        ),
+        default=A2ATaskDirection.incoming,
+        nullable=False,
+    )
+    status = Column(
+        SAEnum(
+            A2ATaskStatus,
+            values_callable=lambda values: [item.value for item in values],
+            name="a2ataskstatus",
+        ),
+        default=A2ATaskStatus.submitted,
+        nullable=False,
+    )
+    caller_identity = Column(String(255), nullable=True)
+    payment_amount = Column(Float, nullable=True)
+    payment_currency = Column(String(10), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+
 class AgentMemoryEntry(Base):
     __tablename__ = "agent_memory_entries"
     __table_args__ = (
@@ -1204,4 +1381,6 @@ class AgentMemoryEntry(Base):
     memory_type = Column(String(50), default="general")
     tags = Column(JSON, default=list)
     importance_score = Column(Float, default=0.5)
+    always_inject = Column(Boolean, default=False, nullable=False)
+    source = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -19,6 +19,7 @@ from database import get_db
 from database.models import (
     Agent,
     ApprovalStatus,
+    Client,
     CompanyChatMessage,
     CompanyConversation,
     CompanyProfile,
@@ -29,6 +30,7 @@ from database.models import (
     InAppNotification,
     MarketplaceInstall,
     MarketplaceListing,
+    MissionTask,
     NotificationPriority,
     Organization,
     User,
@@ -79,6 +81,7 @@ SUPPORTED_ACTION_TYPES = {
     "analyze_file",
     "show_analytics",
     "install_marketplace",
+    "create_mission",
     "summarize_week",
     "set_agent_goal",
     "explain_execution",
@@ -471,6 +474,7 @@ IMPORTANT RULES:
 - When the CEO says "@Maya do X", treat it as a direct task for that agent and prefer run_agent.
 - When the CEO asks what everyone is doing, use show_status.
 - When the CEO asks for risks, priorities, bottlenecks, or opportunities, use company_insight.
+- When the CEO describes a multi-step outcome like "research and create", "analyze and write", "find and build", or "create a strategy", prefer create_mission.
 - Keep normal answers under 150 words unless a summary or analysis is requested.
 - Never claim an action is completed in prose without emitting an <action> tag to prove it.
 
@@ -488,6 +492,7 @@ Available actions. Only use these exact action types, and never invent new ones:
 <action>{{"type": "bulk_approve"}}</action>
 <action>{{"type": "show_status"}}</action>
 <action>{{"type": "show_analytics", "metric": "overview"}}</action>
+<action>{{"type": "create_mission", "goal": "Research Lindy's pricing and write a competitive brief for Acme", "client_name": "Acme"}}</action>
 <action>{{"type": "summarize_week"}}</action>
 <action>{{"type": "set_agent_goal", "agent_name": "Maya", "goal": "Focus on competitor research", "duration": "3 days"}}</action>
 <action>{{"type": "explain_execution", "execution_id": "optional"}}</action>
@@ -775,6 +780,61 @@ async def _execute_action(action: dict, user_id: str, org_id: str, db: AsyncSess
                 "success_rate": round(successful / executions_week * 100) if executions_week > 0 else 0,
                 "metric": metric,
             },
+        }
+
+    if action_type == "create_mission":
+        goal = str(action.get("goal") or action.get("task") or "").strip()
+        client_ref = str(action.get("client_name") or action.get("client_id") or "").strip()
+        if not goal:
+            return {
+                "type": "error",
+                "success": False,
+                "label": "Mission goal missing",
+                "message": "I need a goal to create a mission.",
+            }
+
+        client_id = None
+        if client_ref:
+            clients = (
+                await db.execute(
+                    select(Client).where(Client.org_id == org_id)
+                )
+            ).scalars().all()
+            for client in clients:
+                haystacks = [str(client.id), client.name or "", client.company_name or ""]
+                if any(client_ref.lower() in value.lower() for value in haystacks if value):
+                    client_id = str(client.id)
+                    break
+
+        from services.goal_decomposer import goal_decomposer
+        from tasks.mission_tasks import run_mission_task
+
+        mission = await goal_decomposer.create_mission(
+            goal=goal,
+            org_id=org_id,
+            client_id=client_id,
+            created_by=user_id,
+            db=db,
+        )
+        tasks = (
+            await db.execute(
+                select(MissionTask)
+                .where(MissionTask.mission_id == mission.id, MissionTask.org_id == org_id)
+            )
+        ).scalars().all()
+        run_mission_task.delay(str(mission.id))
+        return {
+            "type": "mission_created",
+            "success": True,
+            "mission_id": str(mission.id),
+            "mission_title": mission.title,
+            "task_count": len(tasks),
+            "label": f"Mission created: {mission.title}",
+            "message": (
+                f"Mission created: **{mission.title}**\n"
+                f"I've broken this into {len(tasks)} tasks. "
+                f"Your agents are starting now."
+            ),
         }
 
     if action_type == "install_marketplace":

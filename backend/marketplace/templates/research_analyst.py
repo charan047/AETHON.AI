@@ -38,7 +38,7 @@ TEMPLATE: MarketplaceTemplate = {
     },
     "agent": {
         "name": "Research Analyst",
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "temperature": 0.1,
         "max_iterations": 22,
         "tools": ["web_search", "news_search", "web_scrape", "google_docs_create", "google_sheets_create"],

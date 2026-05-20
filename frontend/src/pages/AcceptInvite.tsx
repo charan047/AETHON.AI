@@ -42,8 +42,8 @@ export function AcceptInvite() {
   return (
     <AuthShell
       mode="invite"
-      title="You've been invited"
-      subtitle="Accept to join the agency workspace."
+      title="You're invited"
+      subtitle="Join the agency workspace."
     >
       {isLoading || auth.isLoading ? (
         <div className="py-8 text-center">
@@ -55,13 +55,13 @@ export function AcceptInvite() {
           <div className="rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-200">
             This invite may have expired, been revoked, or already accepted.
           </div>
-          <Link className="btn-primary h-12 w-full justify-center" to="/login">
+          <Link className="btn-runner btn-primary btn-lg w-full justify-center" to="/login">
             Sign in
           </Link>
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-4">
+          <div className="glass-card rounded-2xl px-4 py-4">
             <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-300">
               Inviting agency
             </div>
@@ -91,7 +91,7 @@ export function AcceptInvite() {
 
           {auth.isAuthenticated ? (
             <button
-              className="btn-primary h-12 w-full justify-center"
+              className="btn-runner btn-primary btn-lg w-full justify-center"
               disabled={accept.isPending}
               onClick={() => accept.mutate()}
             >
@@ -105,14 +105,14 @@ export function AcceptInvite() {
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
               <Link
-                className="btn-primary h-12 justify-center"
+                className="btn-runner btn-primary btn-lg justify-center"
                 to="/login"
                 state={{ from: { pathname: invitePath } }}
               >
                 Sign in to accept
               </Link>
               <Link
-                className="btn-secondary h-12 justify-center"
+                className="btn-secondary btn-lg justify-center"
                 to="/register"
                 state={{ from: { pathname: invitePath } }}
               >

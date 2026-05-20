@@ -1,50 +1,17 @@
 import { type ReactNode, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import {
-  BarChart3,
-  Briefcase,
-  CheckCircle2,
-  Shield,
-} from 'lucide-react'
+import { BarChart3, CheckCircle2, Shield, Zap } from 'lucide-react'
 
-const PROOF_ITEMS = [
-  {
-    stat: '10x',
-    label: 'Client work shipped faster',
-    detail: 'AI agents running 24/7 across your client accounts',
-  },
-  {
-    stat: '100%',
-    label: 'Full oversight of every action',
-    detail: 'Every tool call logged, every risky action needs your OK',
-  },
-  {
-    stat: '5 min',
-    label: 'To deploy your first agent',
-    detail: 'Choose a template, set a goal, watch it work',
-  },
+const STATS = [
+  { value: '10x', label: 'Faster client delivery' },
+  { value: '100%', label: 'Action audit trail' },
+  { value: '5 min', label: 'To deploy first agent' },
 ]
 
-const DEMO_ACTIVITY = [
-  {
-    agent: 'Maya',
-    action: 'Finished: Competitor pricing report for Acme Corp',
-    time: '2m ago',
-    color: '#10B981',
-  },
-  {
-    agent: 'Alex',
-    action: 'Waiting for approval: send outreach@techcrunch.com',
-    time: '5m ago',
-    color: '#F59E0B',
-  },
-  {
-    agent: 'Jordan',
-    action: 'Running: Q2 market analysis for BuildFast',
-    time: 'Now',
-    color: '#3B82F6',
-    live: true,
-  },
+const ACTIVITY = [
+  { agent: 'Maya', action: 'Completed competitor research for Acme Corp', time: '2m ago', live: false },
+  { agent: 'Jordan', action: 'Waiting for approval: outreach@acme.com', time: '4m ago', live: false },
+  { agent: 'Alex', action: 'Running: Q2 market analysis for BuildFast', time: 'now', live: true },
 ]
 
 export function AuthShell({
@@ -58,46 +25,72 @@ export function AuthShell({
   children: ReactNode
   mode?: 'signin' | 'signup' | 'invite'
 }) {
-  const [proofIndex, setProofIndex] = useState(0)
-  const [activityItems, setActivityItems] = useState(DEMO_ACTIVITY.slice(0, 2))
+  const [statIdx, setStatIdx] = useState(0)
+  const [activity, setActivity] = useState(ACTIVITY.slice(0, 2))
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setProofIndex(index => (index + 1) % PROOF_ITEMS.length)
-    }, 3000)
+    const timer = window.setInterval(() => setStatIdx(index => (index + 1) % STATS.length), 3000)
     return () => window.clearInterval(timer)
   }, [])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setActivityItems(DEMO_ACTIVITY)
-    }, 1800)
+    const timer = window.setTimeout(() => setActivity(ACTIVITY), 2000)
     return () => window.clearTimeout(timer)
   }, [])
 
   return (
-    <div className="relative flex min-h-screen overflow-hidden bg-[#050914]">
-      <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+    <div className="relative flex min-h-screen overflow-hidden" style={{ background: '#050914' }}>
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.07) 1px, transparent 1px)',
+          backgroundSize: '28px 28px',
+        }}
+      />
+
+      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
         <motion.div
-          className="absolute -left-1/4 -top-1/4 h-[140%] w-[70%] rounded-full opacity-20"
+          className="absolute rounded-full"
           style={{
-            background: 'radial-gradient(circle, rgba(37,99,235,0.6) 0%, transparent 70%)',
-            filter: 'blur(80px)',
+            width: '55%',
+            height: '80%',
+            left: '-10%',
+            top: '-15%',
+            background: 'radial-gradient(circle, rgba(99,102,241,0.28) 0%, transparent 70%)',
+            filter: 'blur(70px)',
           }}
-          animate={{ x: [0, 40, 0], y: [0, -20, 0] }}
-          transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut' }}
+          animate={{ x: [0, 30, 0], y: [0, -20, 0] }}
+          transition={{ duration: 20, repeat: Infinity, ease: 'easeInOut' }}
         />
         <motion.div
-          className="absolute -bottom-1/4 -right-1/4 h-[120%] w-[60%] rounded-full opacity-15"
+          className="absolute rounded-full"
           style={{
-            background: 'radial-gradient(circle, rgba(16,185,129,0.5) 0%, transparent 70%)',
+            width: '45%',
+            height: '70%',
+            right: '-5%',
+            bottom: '-10%',
+            background: 'radial-gradient(circle, rgba(16,185,129,0.20) 0%, transparent 70%)',
             filter: 'blur(80px)',
           }}
-          animate={{ x: [0, -30, 0], y: [0, 20, 0] }}
-          transition={{ duration: 22, repeat: Infinity, ease: 'easeInOut', delay: 2 }}
+          animate={{ x: [0, -20, 0], y: [0, 15, 0] }}
+          transition={{ duration: 25, repeat: Infinity, ease: 'easeInOut', delay: 3 }}
+        />
+        <motion.div
+          className="absolute rounded-full"
+          style={{
+            width: '30%',
+            height: '40%',
+            left: '30%',
+            top: '40%',
+            background: 'radial-gradient(circle, rgba(139,92,246,0.15) 0%, transparent 70%)',
+            filter: 'blur(60px)',
+          }}
+          animate={{ x: [0, 15, 0] }}
+          transition={{ duration: 15, repeat: Infinity, ease: 'easeInOut', delay: 1 }}
         />
         <div
-          className="absolute inset-0 opacity-[0.025]"
+          className="absolute inset-0 opacity-[0.03]"
           style={{
             backgroundImage:
               "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")",
@@ -105,81 +98,95 @@ export function AuthShell({
         />
       </div>
 
-      <div className="relative hidden flex-col justify-between p-12 lg:flex lg:w-[55%] xl:p-16">
+      <div className="relative hidden flex-col justify-between p-16 lg:flex lg:w-[55%]">
         <motion.div
-          initial={{ opacity: 0, y: -12 }}
+          initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
           className="flex items-center gap-3"
         >
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-[0_0_20px_rgba(37,99,235,0.5)]">
-            <Briefcase size={18} className="text-white" />
+          <div
+            className="flex h-10 w-10 items-center justify-center rounded-xl"
+            style={{
+              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+              boxShadow: '0 0 20px rgba(99,102,241,0.5)',
+            }}
+          >
+            <Zap size={18} className="text-white" />
           </div>
-          <span className="text-base font-bold tracking-tight text-white">Aethon</span>
-          <span className="rounded-full bg-blue-600/15 px-2 py-0.5 text-[11px] font-semibold text-blue-400">
+          <span className="text-base font-bold text-white">Aethon</span>
+          <span
+            className="rounded-full px-2.5 py-0.5 text-[10px] font-semibold"
+            style={{
+              background: 'rgba(99,102,241,0.15)',
+              color: '#a5b4fc',
+              border: '1px solid rgba(99,102,241,0.25)',
+            }}
+          >
             Agency OS
           </span>
         </motion.div>
 
         <div>
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.15 }}
+            transition={{ duration: 0.7, delay: 0.1 }}
           >
-            <h1 className="text-5xl font-extrabold leading-[1.05] tracking-[-0.04em] text-white xl:text-6xl">
-              Run your AI agency
+            <h1
+              className="font-extrabold leading-[1.05] tracking-[-0.04em] text-white"
+              style={{ fontSize: 'clamp(42px, 5vw, 64px)' }}
+            >
+              Run your AI
               <br />
-              <span className="bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
-                without the chaos.
+              <span
+                style={{
+                  background: 'linear-gradient(135deg, #a5b4fc 0%, #6ee7b7 100%)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                }}
+              >
+                agency.
               </span>
             </h1>
-            <div className="mt-5 max-w-xl rounded-2xl border border-white/[0.06] bg-[rgba(8,13,26,0.46)] px-5 py-4 backdrop-blur-sm">
-              <p className="text-base leading-7 text-white [text-shadow:0_1px_18px_rgba(0,0,0,0.45)]">
-                Deploy AI agents for each client. Stay in control of everything they do.
-                Share a portal so clients see results in real time.
-              </p>
-            </div>
+            <p className="mt-5 max-w-sm text-base leading-7" style={{ color: 'rgba(255,255,255,0.50)' }}>
+              Deploy AI agents for clients. Stay in control of every action. Show clients exactly what was done.
+            </p>
           </motion.div>
 
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.3 }}
-            className="mt-8"
+            transition={{ delay: 0.35 }}
+            className="mt-10"
           >
             <AnimatePresence mode="wait">
               <motion.div
-                key={proofIndex}
-                initial={{ opacity: 0, y: 10 }}
+                key={statIdx}
+                initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.35 }}
-                className="inline-flex items-center gap-4 rounded-2xl border border-white/[0.08] bg-white/[0.03] px-5 py-4 backdrop-blur-sm"
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.3 }}
+                className="inline-flex items-center gap-5 rounded-2xl px-6 py-4"
+                style={{
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  backdropFilter: 'blur(12px)',
+                }}
               >
-                <span className="text-4xl font-extrabold text-white">
-                  {PROOF_ITEMS[proofIndex].stat}
+                <span className="text-4xl font-extrabold text-white">{STATS[statIdx].value}</span>
+                <span className="text-sm" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                  {STATS[statIdx].label}
                 </span>
-                <div>
-                  <p className="text-sm font-semibold text-white">
-                    {PROOF_ITEMS[proofIndex].label}
-                  </p>
-                  <p className="mt-0.5 text-xs text-[#8B9DBE]">
-                    {PROOF_ITEMS[proofIndex].detail}
-                  </p>
-                </div>
               </motion.div>
             </AnimatePresence>
-
             <div className="mt-3 flex gap-1.5 pl-1">
-              {PROOF_ITEMS.map((_, index) => (
-                <div
+              {STATS.map((_, index) => (
+                <motion.div
                   key={index}
-                  className="h-1 rounded-full transition-all duration-300"
-                  style={{
-                    width: index === proofIndex ? 20 : 6,
-                    background: index === proofIndex ? '#2563EB' : 'rgba(255,255,255,0.15)',
-                  }}
+                  animate={{ width: index === statIdx ? 20 : 6 }}
+                  className="h-1 rounded-full"
+                  style={{ background: index === statIdx ? '#6366f1' : 'rgba(255,255,255,0.15)' }}
                 />
               ))}
             </div>
@@ -188,82 +195,82 @@ export function AuthShell({
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.5 }}
-            className="mt-8 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#080D1A]/80 backdrop-blur-sm"
+            transition={{ delay: 0.55 }}
+            className="mt-8 overflow-hidden rounded-2xl"
+            style={{
+              background: 'rgba(8,13,26,0.70)',
+              border: '1px solid rgba(255,255,255,0.07)',
+              backdropFilter: 'blur(12px)',
+            }}
           >
-            <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
-              <div className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-              <span className="text-xs font-semibold text-[#8B9DBE]">Live agent activity</span>
+            <div className="flex items-center gap-2 border-b px-4 py-2.5" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+              <div className="h-2 w-2 rounded-full animate-pulse" style={{ background: '#10b981' }} />
+              <span className="text-xs font-medium" style={{ color: 'rgba(255,255,255,0.40)' }}>
+                Live agent activity
+              </span>
             </div>
-            <div className="divide-y divide-white/[0.04]">
-              <AnimatePresence>
-                {activityItems.map((item, index) => (
-                  <motion.div
-                    key={`${item.agent}${index}`}
-                    initial={{ opacity: 0, x: -12 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.4, delay: index * 0.1 }}
-                    className="flex items-start gap-3 px-4 py-3"
+            <AnimatePresence>
+              {activity.map((item, index) => (
+                <motion.div
+                  key={item.agent}
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: index * 0.12 }}
+                  className="flex items-start gap-3 px-4 py-3"
+                  style={{ borderBottom: index < activity.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}
+                >
+                  <div
+                    className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[10px] font-bold text-white"
+                    style={{
+                      background: item.live ? 'rgba(16,185,129,0.20)' : 'rgba(99,102,241,0.20)',
+                      border: `1px solid ${item.live ? 'rgba(16,185,129,0.30)' : 'rgba(99,102,241,0.30)'}`,
+                    }}
                   >
-                    <div
-                      className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold text-white"
-                      style={{
-                        background: `${item.color}30`,
-                        border: `1px solid ${item.color}40`,
-                      }}
-                    >
-                      {item.agent.charAt(0)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-medium text-[#F0F6FF]">
-                        <span className="text-[#8B9DBE]">{item.agent}:</span> {item.action}
-                      </p>
-                      <p className="mt-0.5 text-[11px] text-[#4B5A73]">
-                        {item.live ? (
-                          <span className="flex items-center gap-1">
-                            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-                            Working now
-                          </span>
-                        ) : (
-                          item.time
-                        )}
-                      </p>
-                    </div>
-                    {item.live && (
-                      <div className="shrink-0 rounded-full bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
-                        LIVE
-                      </div>
-                    )}
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </div>
+                    {item.agent.charAt(0)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium text-white">
+                      <span style={{ color: 'rgba(255,255,255,0.45)' }}>{item.agent}:</span> {item.action}
+                    </p>
+                    <p className="mt-0.5 text-[11px]" style={{ color: 'rgba(255,255,255,0.25)' }}>
+                      {item.live ? (
+                        <span className="flex items-center gap-1">
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          Working now
+                        </span>
+                      ) : item.time}
+                    </p>
+                  </div>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.75 }}
+            className="mt-7 flex items-center gap-5 text-xs"
+            style={{ color: 'rgba(255,255,255,0.25)' }}
+          >
+            {[
+              { icon: Shield, label: 'MIT licensed' },
+              { icon: CheckCircle2, label: 'Self-hostable' },
+              { icon: BarChart3, label: 'Full audit logs' },
+            ].map(({ icon: Icon, label }) => (
+              <div key={label} className="flex items-center gap-1.5">
+                <Icon size={12} style={{ color: 'rgba(99,102,241,0.70)' }} />
+                {label}
+              </div>
+            ))}
           </motion.div>
         </div>
-
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.7 }}
-          className="flex items-center gap-6 text-xs text-[#4B5A73]"
-        >
-          {[
-            { icon: Shield, label: 'Open source, MIT license' },
-            { icon: CheckCircle2, label: 'Self-hostable in minutes' },
-            { icon: BarChart3, label: 'Full audit logs' },
-          ].map(({ icon: Icon, label }) => (
-            <div key={label} className="flex items-center gap-1.5">
-              <Icon size={13} className="text-blue-500/70" />
-              {label}
-            </div>
-          ))}
-        </motion.div>
       </div>
 
-      <div className="relative flex w-full items-center justify-center p-6 lg:w-[45%] lg:p-12">
+      <div className="relative flex w-full items-center justify-center p-6 lg:w-[45%] lg:p-14">
         <div className="absolute left-6 top-6 flex items-center gap-2 lg:hidden">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
-            <Briefcase size={16} className="text-white" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg" style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
+            <Zap size={15} className="text-white" />
           </div>
           <span className="text-sm font-bold text-white">Aethon</span>
         </div>
@@ -276,21 +283,18 @@ export function AuthShell({
           data-auth-mode={mode}
         >
           <div className="mb-7">
-            <h2 className="text-2xl font-extrabold tracking-tight text-white">
-              {title}
-            </h2>
-            <p className="mt-1.5 text-sm text-[#8B9DBE]">{subtitle}</p>
+            <h2 className="text-2xl font-extrabold tracking-tight text-white">{title}</h2>
+            <p className="mt-1.5 text-sm" style={{ color: 'rgba(255,255,255,0.45)' }}>{subtitle}</p>
           </div>
 
           <div
-            className="rounded-2xl p-6"
+            className="glass-elevated rounded-2xl p-6"
             style={{
               background: 'rgba(255,255,255,0.04)',
-              backdropFilter: 'blur(20px)',
-              WebkitBackdropFilter: 'blur(20px)',
-              border: '1px solid rgba(255,255,255,0.09)',
-              boxShadow:
-                'inset 0 1px 0 rgba(255,255,255,0.08), 0 20px 48px rgba(0,0,0,0.30)',
+              backdropFilter: 'blur(24px)',
+              WebkitBackdropFilter: 'blur(24px)',
+              border: '1px solid rgba(255,255,255,0.10)',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), 0 20px 60px rgba(0,0,0,0.40)',
             }}
           >
             {children}
@@ -308,6 +312,7 @@ export function FloatingField({
   onChange,
   autoComplete,
   required,
+  disabled,
 }: {
   label: string
   type: string
@@ -315,39 +320,38 @@ export function FloatingField({
   onChange: (value: string) => void
   autoComplete?: string
   required?: boolean
+  disabled?: boolean
 }) {
   const [focused, setFocused] = useState(false)
-  const hasValue = value.length > 0
-  const isLifted = focused || hasValue
+  const lifted = focused || value.length > 0
 
   return (
     <label className="group relative block">
       <input
-        className="peer h-[52px] w-full rounded-xl border bg-white/[0.04] px-3.5 pb-1.5 pt-5 text-sm text-white transition-all duration-150 outline-none placeholder:text-transparent"
-        style={{
-          borderColor: focused ? 'rgba(37,99,235,0.70)' : 'rgba(255,255,255,0.09)',
-          boxShadow: focused
-            ? '0 0 0 3px rgba(37,99,235,0.13), 0 0 16px rgba(37,99,235,0.10)'
-            : 'none',
-        }}
         type={type}
-        placeholder={label}
         autoComplete={autoComplete}
         value={value}
         required={required}
+        disabled={disabled}
         onChange={event => onChange(event.target.value)}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
+        className="peer h-[52px] w-full rounded-xl px-3.5 pb-1.5 pt-5 text-sm text-white outline-none transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-60"
+        style={{
+          background: 'rgba(255,255,255,0.05)',
+          border: `1px solid ${focused ? 'rgba(99,102,241,0.70)' : 'rgba(255,255,255,0.09)'}`,
+          boxShadow: focused ? '0 0 0 3px rgba(99,102,241,0.13)' : 'none',
+        }}
       />
       <span
-        className="pointer-events-none absolute left-3.5 font-medium text-[#4B5A73] transition-all duration-200"
+        className="pointer-events-none absolute left-3.5 font-medium transition-all duration-200"
         style={{
-          top: isLifted ? '6px' : '50%',
-          transform: isLifted ? 'none' : 'translateY(-50%)',
-          fontSize: isLifted ? '10px' : '13px',
-          letterSpacing: isLifted ? '0.1em' : 'normal',
-          textTransform: isLifted ? 'uppercase' : 'none',
-          color: focused ? 'rgba(96,165,250,0.9)' : undefined,
+          top: lifted ? '7px' : '50%',
+          transform: lifted ? 'none' : 'translateY(-50%)',
+          fontSize: lifted ? '10px' : '13px',
+          letterSpacing: lifted ? '0.10em' : 'normal',
+          textTransform: lifted ? 'uppercase' : 'none',
+          color: focused ? 'rgba(165,180,252,0.90)' : 'rgba(255,255,255,0.30)',
         }}
       >
         {label}

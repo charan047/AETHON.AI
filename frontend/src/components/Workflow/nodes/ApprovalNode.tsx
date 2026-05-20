@@ -70,7 +70,7 @@ export function ApprovalNode({ id, data, selected }: NodeProps<ApprovalNodeData>
           <label className="nodrag flex cursor-pointer items-center gap-2 rounded-lg border border-amber-800/60 bg-slate-950/40 px-2 py-1.5 text-xs text-amber-200">
             <input
               type="checkbox"
-              className="accent-amber-400"
+              className="indigo-amber-400"
               checked={Boolean(data.auto_approve_on_timeout)}
               onChange={event => update({ auto_approve_on_timeout: event.target.checked })}
             />

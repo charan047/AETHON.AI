@@ -78,6 +78,7 @@ async def test_gmail_oauth_start_returns_url_and_stores_state(monkeypatch, authe
     payload = response.json()
     assert "accounts.google.com" in payload["oauth_url"]
     assert "gmail.send" in payload["oauth_url"]
+    assert "drive.file" in payload["oauth_url"]
     assert len(fake_redis.values) == 1
 
     stored_payload = json.loads(next(iter(fake_redis.values.values())))
@@ -105,7 +106,7 @@ async def test_gmail_oauth_callback_upserts_integration(monkeypatch, authed_clie
             {
                 "access_token": "gmail-access",
                 "refresh_token": "gmail-refresh",
-                "scope": "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly",
+                "scope": "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.file",
                 "expires_in": 3600,
                 "token_type": "Bearer",
             }
@@ -137,6 +138,11 @@ async def test_gmail_oauth_callback_upserts_integration(monkeypatch, authed_clie
     stored = decrypt_config(integration.config)
     assert stored["access_token"] == "gmail-access"
     assert stored["refresh_token"] == "gmail-refresh"
+    assert stored["granted_scopes"] == (
+        "https://www.googleapis.com/auth/gmail.send "
+        "https://www.googleapis.com/auth/gmail.readonly "
+        "https://www.googleapis.com/auth/drive.file"
+    )
     assert stored["email"] == "hello@example.com"
 
 
@@ -242,6 +248,73 @@ async def test_gmail_refresh_endpoint_updates_tokens(monkeypatch, authed_client,
     await db.refresh(integration)
     stored = decrypt_config(integration.config)
     assert stored["access_token"] == "new-token"
+
+
+@pytest.mark.asyncio
+async def test_list_integrations_marks_old_gmail_connection_for_reauth(authed_client, db, test_org, test_user):
+    integration = UserIntegration(
+        id=str(uuid4()),
+        org_id=test_org.id,
+        user_id=test_user.id,
+        integration_type=IntegrationType.gmail,
+        name="hello@example.com",
+        config=encrypt_config(
+            {
+                "access_token": "gmail-access",
+                "refresh_token": "gmail-refresh",
+                "email": "hello@example.com",
+                "scopes": [
+                    "https://www.googleapis.com/auth/gmail.send",
+                    "https://www.googleapis.com/auth/gmail.readonly",
+                ],
+            }
+        ),
+        is_active=True,
+    )
+    db.add(integration)
+    await db.commit()
+
+    response = await authed_client.get("/api/integrations")
+
+    assert response.status_code == 200
+    payload = response.json()
+    gmail = next(item for item in payload if item["integration_type"] == "gmail")
+    assert gmail["needs_reauth"] is True
+    assert "updated permissions" in gmail["reauth_reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_list_integrations_marks_updated_gmail_connection_as_ready(authed_client, db, test_org, test_user):
+    integration = UserIntegration(
+        id=str(uuid4()),
+        org_id=test_org.id,
+        user_id=test_user.id,
+        integration_type=IntegrationType.gmail,
+        name="hello@example.com",
+        config=encrypt_config(
+            {
+                "access_token": "gmail-access",
+                "refresh_token": "gmail-refresh",
+                "email": "hello@example.com",
+                "granted_scopes": (
+                    "https://www.googleapis.com/auth/gmail.send "
+                    "https://www.googleapis.com/auth/gmail.readonly "
+                    "https://www.googleapis.com/auth/drive.file"
+                ),
+            }
+        ),
+        is_active=True,
+    )
+    db.add(integration)
+    await db.commit()
+
+    response = await authed_client.get("/api/integrations")
+
+    assert response.status_code == 200
+    payload = response.json()
+    gmail = next(item for item in payload if item["integration_type"] == "gmail")
+    assert gmail["needs_reauth"] is False
+    assert gmail["reauth_reason"] is None
 
 
 @pytest.mark.asyncio

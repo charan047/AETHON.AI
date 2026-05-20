@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Github, Mail, Plus, RefreshCw, Search, Slack, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Github, Loader2, Mail, Plus, RefreshCw, Search, Slack, Trash2, X } from 'lucide-react'
 import { extractApiError, integrationsApi, toolsApi } from '../api/client'
 import type { UserIntegration } from '../types'
+import { FloatingField } from '../components/AuthShell'
 import { GlowCard } from '../components/ui/GlowCard'
 import { toast } from '../lib/toast'
 
@@ -39,7 +40,7 @@ function providerTextColor(status: ProviderStatus['status']) {
   if (status === 'healthy') return 'text-emerald-400'
   if (status === 'degraded') return 'text-amber-400'
   if (status === 'unavailable') return 'text-red-400'
-  return 'text-obsidian-500'
+  return 'text-[#8B9DBE]'
 }
 
 const PROVIDER_ICONS: Record<string, React.ReactNode> = {
@@ -68,6 +69,23 @@ function statusLabel(integration: UserIntegration) {
   if (!integration.last_tested_at) return 'Untested'
   if (integration.last_test_result === 'success') return 'Connected'
   return 'Error'
+}
+
+function providerStatusSummary(key: keyof ProviderHealth, status: ProviderStatus) {
+  const label = PROVIDER_LABELS[key] ?? key
+  if (key === 'search') {
+    return `${label}: ${status.provider || 'Not configured'}`
+  }
+  if (status.status === 'healthy') {
+    return `${label}: ${status.provider || 'Connected'}`
+  }
+  if (status.status === 'degraded') {
+    return `${label}: Needs reconnect`
+  }
+  if (status.status === 'unavailable') {
+    return `${label}: Unavailable`
+  }
+  return `${label}: Not configured`
 }
 
 export function Integrations() {
@@ -230,7 +248,7 @@ export function Integrations() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="font-semibold text-white">{integration.name}</div>
-          <div className="mt-1 font-mono text-xs text-obsidian-500">
+          <div className="mt-1 font-mono text-xs text-ink-faint">
             {integration.integration_type}
             {integration.default_repo ? ` · ${integration.default_repo}` : ''}
           </div>
@@ -238,7 +256,7 @@ export function Integrations() {
         <span className={statusBadge(integration)}>{statusLabel(integration)}</span>
       </div>
       <div className="mt-4 flex items-center justify-between gap-3">
-        <div className="text-xs text-obsidian-500">
+        <div className="text-xs text-ink-faint">
           Last tested: {integration.last_tested_at ? new Date(integration.last_tested_at).toLocaleString() : 'Never'}
         </div>
         <div className="flex gap-2">
@@ -272,43 +290,41 @@ export function Integrations() {
   }) => (
     <GlowCard glowColor="blue" className="p-5">
       <div className="flex items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5 rounded-xl border border-white/[0.08] bg-white/[0.03] p-2.5">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-2.5 text-blue-300">
             {icon}
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="font-semibold text-white">{title}</h2>
-              {integration && (
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                  Connected
-                </span>
-              )}
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-bold text-white">{title}</h2>
+              {integration && !integration.needs_reauth ? (
+                <span className="badge-emerald">Connected</span>
+              ) : null}
             </div>
-            <p className="mt-1 text-sm text-obsidian-400">{description}</p>
+            <p className="mt-1 text-sm text-[#8B9DBE]">{description}</p>
+            <p className="mt-3 text-xs text-[#4B5A73]">Required for: client delivery, outreach agents</p>
             {integration ? (
-              <p className="mt-2 text-xs font-medium text-white/80">
-                {integration.connected_account || integration.name}
-              </p>
+              <p className="mt-3 font-mono text-xs text-white/70">{integration.connected_account || integration.name}</p>
             ) : (
-              <p className="mt-2 text-xs text-obsidian-500">
-                {health?.note || 'Not connected yet.'}
-              </p>
+              <p className="mt-3 font-mono text-xs text-[#8B9DBE]">{health?.note || 'Not connected yet.'}</p>
             )}
           </div>
         </div>
 
         {!integration ? (
-          <button className="btn-primary text-xs" onClick={onConnect} disabled={connecting}>
-            {connecting ? 'Redirecting...' : `Connect ${title} →`}
+          <button className="btn-primary btn-runner btn-sm" onClick={onConnect} disabled={connecting}>
+            {connecting ? <><Loader2 size={14} className="animate-spin" /> Connecting…</> : 'Connect'}
+          </button>
+        ) : integration.needs_reauth ? (
+          <button className="btn-amber btn-sm" onClick={() => startGmailOAuth.mutate()} disabled={startGmailOAuth.isPending}>
+            {startGmailOAuth.isPending ? <><Loader2 size={14} className="animate-spin" /> Connecting…</> : 'Reconnect'}
           </button>
         ) : (
           <div className="flex gap-2">
-            <button className="btn-secondary px-3 text-xs" onClick={() => testIntegration.mutate(integration.id)}>
+            <button className="btn-secondary btn-sm" onClick={() => testIntegration.mutate(integration.id)}>
               Test
             </button>
-            <button className="btn-danger px-3 text-xs" onClick={() => deleteIntegration.mutate(integration.id)}>
+            <button className="btn-ghost btn-sm" onClick={() => deleteIntegration.mutate(integration.id)}>
               Disconnect
             </button>
           </div>
@@ -316,6 +332,63 @@ export function Integrations() {
       </div>
     </GlowCard>
   )
+
+  const ManualProviderCard = ({
+    title,
+    icon,
+    description,
+    integrationsList,
+    onAdd,
+  }: {
+    title: string
+    icon: ReactNode
+    description: string
+    integrationsList: UserIntegration[]
+    onAdd: () => void
+  }) => {
+    const primary = integrationsList[0] || null
+    const connected = integrationsList.length > 0
+
+    return (
+      <GlowCard glowColor="blue" className="p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-2.5 text-blue-300">
+              {icon}
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="font-bold text-white">{title}</h2>
+                {connected ? <span className="badge-emerald">Connected</span> : null}
+              </div>
+              <p className="mt-1 text-sm text-[#8B9DBE]">{description}</p>
+              <p className="mt-3 text-xs text-[#4B5A73]">
+                Required for: {title === 'GitHub' ? 'repo access, code agents' : 'email delivery, outreach agent'}
+              </p>
+              {primary ? (
+                <p className="mt-3 font-mono text-xs text-white/70">
+                  {primary.connected_account || primary.name}
+                  {primary.default_repo ? ` · ${primary.default_repo}` : ''}
+                </p>
+              ) : null}
+            </div>
+          </div>
+
+          <button className={connected ? 'btn-secondary btn-sm' : 'btn-primary btn-runner btn-sm'} onClick={onAdd}>
+            {connected ? <><Plus size={14} /> Add</> : 'Connect'}
+          </button>
+        </div>
+
+        {connected ? (
+          <div className="mt-4 space-y-3">
+            {integrationsList.map(item => (
+              <IntegrationCard key={item.id} integration={item} />
+            ))}
+          </div>
+        ) : null}
+      </GlowCard>
+    )
+  }
 
   if (isOAuthCallbackScreen) {
     return (
@@ -325,7 +398,7 @@ export function Integrations() {
             <RefreshCw size={20} className="animate-spin text-blue-400" />
           </div>
           <h1 className="text-xl font-semibold text-white">Completing connection</h1>
-          <p className="mt-2 text-sm text-obsidian-400">
+          <p className="mt-2 text-sm text-ink-muted">
             Aethon is securely finishing your OAuth setup.
           </p>
         </GlowCard>
@@ -335,58 +408,47 @@ export function Integrations() {
 
   return (
     <div className="space-y-6 p-6 animate-fade-in">
-      <div className="flex items-end justify-between gap-4">
+      <div className="space-y-2">
         <div>
-          <h1 className="text-4xl font-semibold tracking-[-0.05em] text-white">Integrations</h1>
-          <p className="mt-2 text-sm text-obsidian-400">Connect real-world tools so agents can create deployable artifacts.</p>
+          <h1 className="page-title">Integrations</h1>
+          <p className="page-subtitle">Connect your tools</p>
         </div>
       </div>
 
-      {/* Tool Health */}
-      <GlowCard glowColor="blue" className="p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h2 className="font-semibold text-white">Tool Health</h2>
-            <p className="text-xs text-obsidian-500">Live status of provider backends used by agents.</p>
-          </div>
-          <button
-            className="btn-ghost px-2 py-1 text-xs"
-            onClick={() => refetchHealth()}
-            disabled={healthLoading}
-          >
+      <GlowCard glowColor="blue" className="p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="section-title mb-0 border-0 pb-0">TOOL STATUS</div>
+          <button className="btn-ghost px-2 py-1 text-xs" onClick={() => refetchHealth()} disabled={healthLoading}>
             <RefreshCw size={13} className={healthLoading ? 'animate-spin' : ''} />
           </button>
         </div>
-
-        {healthLoading && !providerHealth ? (
-          <div className="text-sm text-obsidian-500">Checking providers…</div>
-        ) : providerHealth ? (
-          <div className="space-y-3">
-            {(Object.entries(providerHealth) as [keyof ProviderHealth, ProviderStatus][]).map(([key, ps]) => (
-              <div key={key} className="flex items-start gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] px-4 py-3">
-                <span className={`mt-0.5 flex-shrink-0 ${providerTextColor(ps.status)}`}>
-                  {PROVIDER_ICONS[key]}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-white">{PROVIDER_LABELS[key] ?? key}</span>
-                    <span className="font-mono text-xs text-obsidian-600">{ps.provider}</span>
-                    <span className="flex items-center gap-1.5 ml-auto">
-                      <span className={`h-2 w-2 rounded-full ${providerDot(ps.status)}`} />
-                      <span className={`text-xs font-medium ${providerTextColor(ps.status)}`}>
-                        {providerLabel(ps.status)}
-                      </span>
-                    </span>
-                  </div>
-                  {ps.note && (
-                    <p className="mt-0.5 text-xs text-obsidian-500 leading-snug">{ps.note}</p>
-                  )}
-                </div>
+        {providerHealth ? (
+          <div className="flex flex-wrap gap-3">
+            {(Object.entries(providerHealth) as [keyof ProviderHealth, ProviderStatus][]).map(([key, status]) => (
+              <div key={key} className="inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 font-mono text-xs text-white/80">
+                <span className={`h-2 w-2 rounded-full ${providerDot(status.status)}`} />
+                <span className={providerTextColor(status.status)}>{providerStatusSummary(key, status)}</span>
               </div>
             ))}
           </div>
-        ) : null}
+        ) : (
+          <div className="font-mono text-xs text-[#8B9DBE]">Checking providers…</div>
+        )}
       </GlowCard>
+
+      {gmailIntegration?.needs_reauth ? (
+        <GlowCard glowColor="amber" className="glass-card-amber flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <AlertTriangle size={18} className="text-amber-300" />
+            <div className="text-sm text-amber-100">
+              Gmail needs updated permissions for Google Docs
+            </div>
+          </div>
+          <button className="btn-amber btn-sm" onClick={() => startGmailOAuth.mutate()} disabled={startGmailOAuth.isPending}>
+            {startGmailOAuth.isPending ? <><Loader2 size={14} className="animate-spin" /> Reconnecting…</> : 'Reconnect Gmail →'}
+          </button>
+        </GlowCard>
+      ) : null}
 
       <div className="grid gap-5 xl:grid-cols-2">
         {providerCards.map(card => (
@@ -401,47 +463,25 @@ export function Integrations() {
             onConnect={card.onConnect}
           />
         ))}
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-2">
-        <GlowCard glowColor="indigo" className="p-5">
-          <div className="mb-5 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Github className="h-5 w-5 text-accent-300" />
-              <div>
-                <h2 className="font-semibold text-white">GitHub</h2>
-                <p className="text-xs text-obsidian-500">Read repos, commit files, and open PRs.</p>
-              </div>
-            </div>
-            <button className="btn-primary text-xs" onClick={() => setModal('github')}><Plus size={14} /> Add</button>
-          </div>
-          <div className="space-y-3">
-            {github.map(item => <IntegrationCard key={item.id} integration={item} />)}
-            {!github.length && !isLoading && <div className="rounded-xl border border-white/10 bg-white/[0.02] p-6 text-sm text-obsidian-500">No GitHub integration yet.</div>}
-          </div>
-        </GlowCard>
-
-        <GlowCard glowColor="cyan" className="p-5">
-          <div className="mb-5 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Mail className="h-5 w-5 text-cyan-300" />
-              <div>
-                <h2 className="font-semibold text-white">Email</h2>
-                <p className="text-xs text-obsidian-500">Send replies and inspect recent mailbox context.</p>
-              </div>
-            </div>
-            <button className="btn-primary text-xs" onClick={() => setModal('email')}><Plus size={14} /> Add</button>
-          </div>
-          <div className="space-y-3">
-            {email.map(item => <IntegrationCard key={item.id} integration={item} />)}
-            {!email.length && !isLoading && <div className="rounded-xl border border-white/10 bg-white/[0.02] p-6 text-sm text-obsidian-500">No email integration yet.</div>}
-          </div>
-        </GlowCard>
+        <ManualProviderCard
+          title="GitHub"
+          icon={<Github className="h-5 w-5" />}
+          description="Read repos, commit files, and open pull requests."
+          integrationsList={github}
+          onAdd={() => setModal('github')}
+        />
+        <ManualProviderCard
+          title="Email"
+          icon={<Mail className="h-5 w-5" />}
+          description="Send replies and inspect mailbox context from your agency inbox."
+          integrationsList={email}
+          onAdd={() => setModal('email')}
+        />
       </div>
 
       {modal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-obsidian-900 p-5 shadow-glow-md">
+          <div className="glass-elevated w-full max-w-xl p-5">
             <div className="mb-5 flex items-center justify-between">
               <h2 className="text-xl font-semibold text-white">Add {modal === 'github' ? 'GitHub' : 'Email'} Integration</h2>
               <button className="btn-ghost p-2" onClick={() => setModal(null)}><X size={16} /></button>
@@ -455,10 +495,12 @@ export function Integrations() {
                   createGitHub.mutate(githubForm)
                 }}
               >
-                <input className="input w-full" placeholder="Name" value={githubForm.name} onChange={e => setGithubForm({ ...githubForm, name: e.target.value })} />
-                <input className="input w-full" type="password" placeholder="GitHub personal access token" value={githubForm.access_token} onChange={e => setGithubForm({ ...githubForm, access_token: e.target.value })} />
-                <input className="input w-full" placeholder="Default repo, e.g. owner/repo" value={githubForm.default_repo} onChange={e => setGithubForm({ ...githubForm, default_repo: e.target.value })} />
-                <button className="btn-primary w-full" disabled={createGitHub.isPending}>{createGitHub.isPending ? 'Connecting...' : 'Connect GitHub'}</button>
+                <FloatingField label="Name" type="text" value={githubForm.name} onChange={value => setGithubForm({ ...githubForm, name: value })} required />
+                <FloatingField label="GitHub personal access token" type="password" value={githubForm.access_token} onChange={value => setGithubForm({ ...githubForm, access_token: value })} required />
+                <FloatingField label="Default repo (owner/repo)" type="text" value={githubForm.default_repo} onChange={value => setGithubForm({ ...githubForm, default_repo: value })} />
+                <button className="btn-primary btn-runner w-full" disabled={createGitHub.isPending}>
+                  {createGitHub.isPending ? <><Loader2 size={16} className="animate-spin" /> Connecting…</> : 'Connect GitHub'}
+                </button>
               </form>
             ) : (
               <form
@@ -468,15 +510,21 @@ export function Integrations() {
                   createEmail.mutate(emailForm)
                 }}
               >
-                <input className="input md:col-span-2" placeholder="Name" value={emailForm.name} onChange={e => setEmailForm({ ...emailForm, name: e.target.value })} />
-                <input className="input" placeholder="SMTP host" value={emailForm.smtp_host} onChange={e => setEmailForm({ ...emailForm, smtp_host: e.target.value })} />
-                <input className="input" type="number" placeholder="SMTP port" value={emailForm.smtp_port} onChange={e => setEmailForm({ ...emailForm, smtp_port: Number(e.target.value) })} />
-                <input className="input" placeholder="SMTP user / email" value={emailForm.smtp_user} onChange={e => setEmailForm({ ...emailForm, smtp_user: e.target.value })} />
-                <input className="input" type="password" placeholder="SMTP password" value={emailForm.smtp_password} onChange={e => setEmailForm({ ...emailForm, smtp_password: e.target.value })} />
-                <input className="input" placeholder="IMAP host" value={emailForm.imap_host} onChange={e => setEmailForm({ ...emailForm, imap_host: e.target.value })} />
-                <input className="input" type="number" placeholder="IMAP port" value={emailForm.imap_port} onChange={e => setEmailForm({ ...emailForm, imap_port: Number(e.target.value) })} />
-                <input className="input md:col-span-2" placeholder="From name" value={emailForm.from_name} onChange={e => setEmailForm({ ...emailForm, from_name: e.target.value })} />
-                <button className="btn-primary md:col-span-2" disabled={createEmail.isPending}>{createEmail.isPending ? 'Testing connection...' : 'Connect Email'}</button>
+                <div className="md:col-span-2">
+                  <FloatingField label="Name" type="text" value={emailForm.name} onChange={value => setEmailForm({ ...emailForm, name: value })} required />
+                </div>
+                <FloatingField label="SMTP host" type="text" value={emailForm.smtp_host} onChange={value => setEmailForm({ ...emailForm, smtp_host: value })} required />
+                <FloatingField label="SMTP port" type="number" value={String(emailForm.smtp_port)} onChange={value => setEmailForm({ ...emailForm, smtp_port: Number(value) || 0 })} required />
+                <FloatingField label="SMTP user / email" type="text" value={emailForm.smtp_user} onChange={value => setEmailForm({ ...emailForm, smtp_user: value })} required />
+                <FloatingField label="SMTP password" type="password" value={emailForm.smtp_password} onChange={value => setEmailForm({ ...emailForm, smtp_password: value })} required />
+                <FloatingField label="IMAP host" type="text" value={emailForm.imap_host} onChange={value => setEmailForm({ ...emailForm, imap_host: value })} required />
+                <FloatingField label="IMAP port" type="number" value={String(emailForm.imap_port)} onChange={value => setEmailForm({ ...emailForm, imap_port: Number(value) || 0 })} required />
+                <div className="md:col-span-2">
+                  <FloatingField label="From name" type="text" value={emailForm.from_name} onChange={value => setEmailForm({ ...emailForm, from_name: value })} />
+                </div>
+                <button className="btn-primary btn-runner md:col-span-2" disabled={createEmail.isPending}>
+                  {createEmail.isPending ? <><Loader2 size={16} className="animate-spin" /> Connecting…</> : 'Connect Email'}
+                </button>
               </form>
             )}
           </div>

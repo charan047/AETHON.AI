@@ -57,6 +57,7 @@ TOOL_TRUST_THRESHOLDS = {
     "news_search": 0,
     "firecrawl_scrape": 0,
     "firecrawl_crawl": 10,
+    "external_agent_call": 55,
     "gmail_read": 30,
     "code_executor": 50,
     "google_docs_create": 40,
@@ -70,6 +71,7 @@ BLAST_RADIUS_MAP = {
     "slack_post": "Low — message visible to channel members",
     "code_executor": "Low-Medium — sandboxed, but code runs on server",
     "google_docs_create": "Low — creates new document only",
+    "external_agent_call": "Medium — sends data to an external agent system",
     "database_migration": "High — affects all users",
     "production_deploy": "High — service disruption possible",
     "mass_data_deletion": "Critical — irreversible",
@@ -78,6 +80,12 @@ BLAST_RADIUS_MAP = {
 
 
 class PermissionEngine:
+    @staticmethod
+    def _canonical_tool_name(tool_name: str) -> str:
+        if tool_name.startswith("agent:"):
+            return "external_agent_call"
+        return tool_name
+
     async def check(
         self,
         agent_id: str,
@@ -137,14 +145,24 @@ class PermissionEngine:
             )
 
     def _check_tool(self, agent, contract, trust, tool_name) -> PermissionCheck:
-        if contract and tool_name in (contract.forbidden_tools or []):
+        canonical_tool_name = self._canonical_tool_name(tool_name)
+
+        if contract and (
+            tool_name in (contract.forbidden_tools or [])
+            or canonical_tool_name in (contract.forbidden_tools or [])
+        ):
             return PermissionCheck(
                 result=PermissionResult.FORBIDDEN,
                 reason=f"Tool '{tool_name}' is forbidden by this agent's contract.",
                 risk_level="high",
             )
 
-        if contract and contract.allowed_tools and tool_name not in contract.allowed_tools:
+        if (
+            contract
+            and contract.allowed_tools is not None
+            and not tool_name.startswith("agent:")
+            and tool_name not in contract.allowed_tools
+        ):
             return PermissionCheck(
                 result=PermissionResult.FORBIDDEN,
                 reason=f"Tool '{tool_name}' is not in this agent's allowed tools.",
@@ -152,15 +170,15 @@ class PermissionEngine:
                 recommendation=f"Add '{tool_name}' to allowed_tools in the agent's contract.",
             )
 
-        min_trust = TOOL_TRUST_THRESHOLDS.get(tool_name, 0)
+        min_trust = TOOL_TRUST_THRESHOLDS.get(canonical_tool_name, TOOL_TRUST_THRESHOLDS.get(tool_name, 0))
         current_trust = trust.overall_score if trust else getattr(agent, "trust_score", 50.0) or 50.0
         if current_trust < min_trust:
             return PermissionCheck(
                 result=PermissionResult.REQUIRES_APPROVAL,
-                reason=f"'{tool_name}' requires trust ≥ {min_trust}. This agent has {current_trust:.0f}.",
+                reason=f"'{canonical_tool_name}' requires trust ≥ {min_trust}. This agent has {current_trust:.0f}.",
                 risk_level="medium",
                 approval_type="tool_use_low_trust",
-                blast_radius=BLAST_RADIUS_MAP.get(tool_name),
+                blast_radius=BLAST_RADIUS_MAP.get(canonical_tool_name) or BLAST_RADIUS_MAP.get(tool_name),
                 recommendation=(
                     f"Agent needs {max(0, min_trust - current_trust):.0f} more trust points, "
                     "or approve this use manually."
@@ -174,7 +192,7 @@ class PermissionEngine:
         )
         if autonomy == "restricted":
             safe = {"web_search", "web_scrape", "news_search", "firecrawl_scrape"}
-            if tool_name not in safe:
+            if canonical_tool_name not in safe:
                 return PermissionCheck(
                     result=PermissionResult.REQUIRES_APPROVAL,
                     reason="Agent is restricted — approval required for most tools.",

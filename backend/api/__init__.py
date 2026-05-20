@@ -29,6 +29,9 @@ from .models import router as models_router, agent_model_router
 from .audit_logs import router as audit_logs_router
 from .roles import router as roles_router
 from .messages import router as messages_router
+from .missions import router as missions_router
+from .a2a import internal_router as a2a_internal_router
+from .system_settings import router as settings_router
 if settings.enable_testing_api or settings.environment == "test":
     from .testing import router as testing_router
 else:
@@ -66,6 +69,9 @@ api_router.include_router(models_router)
 api_router.include_router(agent_model_router)
 api_router.include_router(roles_router, prefix="/roles", tags=["roles"])
 api_router.include_router(messages_router, prefix="/messages", tags=["messages"])
+api_router.include_router(missions_router, tags=["missions"])
+api_router.include_router(a2a_internal_router, prefix="/a2a", tags=["a2a"])
+api_router.include_router(settings_router, prefix="/settings", tags=["settings"])
 api_router.include_router(audit_logs_router)
 if testing_router is not None:
     api_router.include_router(testing_router)

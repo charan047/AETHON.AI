@@ -6,7 +6,7 @@ import { GlowCard } from '../ui/GlowCard'
 import { toast } from '../../lib/toast'
 
 function runwayTone(months: number | null | undefined) {
-  if (months == null) return 'border-white/10 bg-white/[0.03] text-slate-400'
+  if (months == null) return 'border-white/[0.08] bg-white/[0.03] text-slate-400'
   if (months > 18) return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-200'
   if (months >= 6) return 'border-amber-400/20 bg-amber-400/10 text-amber-200'
   return 'border-red-400/20 bg-red-400/10 text-red-200'
@@ -102,9 +102,9 @@ export function BusinessContextWidget() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="font-semibold text-white">Business Context</h2>
-            <p className="text-xs text-obsidian-500">The business state injected into every agent run.</p>
+            <p className="text-xs text-ink-faint">The business state injected into every agent run.</p>
           </div>
-          <span className="rounded-full border border-accent-400/20 bg-accent-400/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-accent-200">
+          <span className="rounded-full border border-indigo-400/20 bg-indigo-400/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-indigo-200">
             {profile.stage || 'stage unset'}
           </span>
         </div>
@@ -118,9 +118,9 @@ export function BusinessContextWidget() {
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+          <label className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-4">
             <span className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
-              <DollarSign className="h-3.5 w-3.5 text-cyan-300" />
+              <DollarSign className="h-3.5 w-3.5 text-emerald-300" />
               MRR
             </span>
             <input
@@ -153,14 +153,14 @@ export function BusinessContextWidget() {
         <div>
           <div className="mb-3 flex items-center justify-between">
             <p className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
-              <Target className="h-3.5 w-3.5 text-accent-300" />
+              <Target className="h-3.5 w-3.5 text-indigo-300" />
               Goals / OKRs
             </p>
           </div>
 
           <div className="space-y-2">
             {goals.map((goal, index) => (
-              <div key={`${goal}-${index}`} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+              <div key={`${goal}-${index}`} className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2">
                 <input
                   value={editingGoal[index] ?? goal}
                   onChange={event => setEditingGoal(current => ({ ...current, [index]: event.target.value }))}
@@ -179,7 +179,7 @@ export function BusinessContextWidget() {
                 </button>
               </div>
             ))}
-            {!goals.length && <div className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-3 text-sm text-slate-600">No goals set yet.</div>}
+            {!goals.length && <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-3 text-sm text-slate-600">No goals set yet.</div>}
           </div>
 
           <form
@@ -201,7 +201,7 @@ export function BusinessContextWidget() {
           </form>
         </div>
 
-        <div className="rounded-xl border border-white/10 bg-obsidian-950">
+        <div className="rounded-xl border border-white/[0.08] bg-base-bg">
           <button
             className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-slate-200"
             onClick={() => setExpanded(value => !value)}
@@ -210,7 +210,7 @@ export function BusinessContextWidget() {
             {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           </button>
           {expanded && (
-            <pre className="max-h-72 overflow-auto border-t border-white/10 p-4 font-mono text-xs leading-6 text-slate-400">
+            <pre className="max-h-72 overflow-auto border-t border-white/[0.08] p-4 font-mono text-xs leading-6 text-slate-400">
               {contextData?.context || 'Loading business context...'}
             </pre>
           )}

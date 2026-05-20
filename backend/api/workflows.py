@@ -238,6 +238,8 @@ class WorkflowCreate(BaseModel):
     execution_mode: str = "sequential"
     orchestration_prompt: str = ""
     max_cycles: int = 10
+    requires_review: bool = False
+    input_variables: List[Any] = []
 
 
 class WorkflowUpdate(BaseModel):
@@ -251,6 +253,8 @@ class WorkflowUpdate(BaseModel):
     execution_mode: Optional[str] = None
     orchestration_prompt: Optional[str] = None
     max_cycles: Optional[int] = None
+    requires_review: Optional[bool] = None
+    input_variables: Optional[List[Any]] = None
     changelog: Optional[str] = None
 
 
@@ -266,6 +270,8 @@ class WorkflowResponse(BaseModel):
     schedule_enabled: bool = False
     schedule_timezone: str = "UTC"
     last_run_at: datetime | None = None
+    requires_review: bool = False
+    input_variables: List[Any] = []
     template_id: Optional[str]
     execution_mode: str = "sequential"
     orchestration_prompt: str = ""
@@ -446,6 +452,10 @@ async def patch_workflow_schedule(
     workflow.schedule_enabled = data.schedule_enabled
     workflow.schedule_timezone = data.schedule_timezone
     workflow.trigger = "schedule" if data.schedule_enabled else "manual"
+    if data.schedule_enabled:
+        workflow.status = "active"
+    elif workflow.status != "draft":
+        workflow.status = "paused"
     workflow.updated_at = datetime.utcnow()
     await db.commit()
 

@@ -36,20 +36,16 @@ export function Login() {
       subtitle="Sign in to your agency dashboard."
     >
       <form onSubmit={submit} className="space-y-4">
-        {error && (
-          <div className="rounded-xl border border-red-400/20 bg-red-400/10 px-3 py-2 text-sm text-red-200">
-            {error}
-          </div>
-        )}
         <FloatingField label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} required />
         <FloatingField label="Password" type="password" autoComplete="current-password" value={password} onChange={setPassword} required />
-        <button className="btn-primary h-12 w-full" type="submit" disabled={loading}>
+        {error ? <p className="-mt-1 text-xs text-[var(--red)]">{error}</p> : null}
+        <button className="btn-runner btn-primary btn-lg w-full justify-center text-sm font-semibold" type="submit" disabled={loading}>
           {loading ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />}
           {loading ? 'Signing in...' : 'Sign in'}
         </button>
-        <div className="pt-2 text-center text-sm text-obsidian-400">
+        <div className="pt-2 text-center text-sm text-[var(--text-3)]">
           Don&apos;t have an account?{' '}
-          <Link className="font-medium text-blue-300 hover:text-blue-200" to="/register">
+          <Link className="font-medium text-[var(--text-2)] transition-colors hover:text-indigo-300 hover:underline" to="/register">
             Start your agency <span aria-hidden="true">→</span>
           </Link>
         </div>

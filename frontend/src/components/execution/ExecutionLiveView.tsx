@@ -4,10 +4,12 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { executionsApi, workflowsApi } from '../../api/client'
 import { useWebSocket } from '../../contexts/WebSocketContext'
 import { EXECUTION_STATUS_CONFIG, STEP_CONFIG, type StepType } from '../../lib/design-tokens'
+import { MarkdownContent } from '../ui/MarkdownContent'
 
 type ExecutionStatus =
   | 'queued'
   | 'running'
+  | 'pending_review'
   | 'completed'
   | 'failed'
   | 'cancelled'
@@ -15,6 +17,7 @@ type ExecutionStatus =
   | 'rejected'
 
 const TERMINAL_EXECUTION_STATUSES: ExecutionStatus[] = [
+  'pending_review',
   'completed',
   'failed',
   'cancelled',
@@ -74,6 +77,7 @@ const EMPTY_STEPS: LiveExecutionStep[] = []
 
 function normalizeStatus(status: ExecutionLiveViewProps['initialStatus']): ExecutionStatus {
   if (
+    status === 'pending_review' ||
     status === 'completed' ||
     status === 'failed' ||
     status === 'cancelled' ||
@@ -101,22 +105,47 @@ function stepKey(step: LiveExecutionStep, index: number) {
 function StepCard({ step }: { step: LiveExecutionStep }) {
   const [expanded, setExpanded] = useState(step.step_type === 'final_answer' || step.step_type === 'error')
   const config = STEP_CONFIG[step.step_type] ?? STEP_CONFIG.observation
+  const renderAsMarkdown = step.step_type === 'final_answer' || (step.step_type === 'observation' && step.content.length > 200)
   const toolInput =
     step.tool_input && typeof step.tool_input === 'object'
       ? (step.tool_input as Record<string, unknown>)
       : null
   const hasToolDetail = Boolean(toolInput && Object.keys(toolInput).length > 0)
 
+  const leftBorderColor =
+    step.step_type === 'final_answer'
+      ? 'rgba(16,185,129,0.70)'
+      : step.step_type === 'error'
+        ? 'rgba(239,68,68,0.70)'
+        : step.step_type === 'action'
+          ? 'rgba(245,158,11,0.60)'
+          : step.step_type === 'thought'
+            ? 'rgba(255,255,255,0.15)'
+            : step.step_type === 'observation'
+              ? 'rgba(255,255,255,0.10)'
+              : step.step_type === 'tool_call'
+                ? 'rgba(99,102,241,0.60)'
+                : 'rgba(255,255,255,0.12)'
+
+  const cardBackground =
+    step.step_type === 'final_answer'
+      ? 'linear-gradient(180deg, rgba(16,185,129,0.08) 0%, rgba(12,17,33,0.96) 100%)'
+      : 'rgba(8,13,26,0.88)'
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 6, scale: 0.99 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
-      className="overflow-hidden rounded-lg"
+      className="overflow-hidden rounded-lg border-l-2"
       data-testid="execution-step"
       style={{
-        border: `1px solid ${config.borderColor}`,
-        background: config.bgColor,
+        background: cardBackground,
+        borderTop: `1px solid ${config.borderColor}`,
+        borderRight: `1px solid ${config.borderColor}`,
+        borderBottom: `1px solid ${config.borderColor}`,
+        borderLeftColor: leftBorderColor,
+        boxShadow: step.step_type === 'final_answer' ? '0 10px 24px rgba(0,0,0,0.20)' : 'none',
       }}
     >
       <div
@@ -182,16 +211,21 @@ function StepCard({ step }: { step: LiveExecutionStep }) {
       </AnimatePresence>
 
       <div className="px-3 pb-3">
-        <p
-          className={[
-            'whitespace-pre-wrap break-words text-sm leading-relaxed',
-            step.step_type === 'final_answer' ? 'text-white/90' : 'text-white/65',
-          ].join(' ')}
-        >
-          {step.step_type === 'observation' && step.content.length > 600
-            ? `${step.content.slice(0, 600)}\n…[truncated]`
-            : step.content}
-        </p>
+        {renderAsMarkdown ? (
+          <MarkdownContent
+            content={step.content}
+            className={step.step_type === 'final_answer' ? 'text-[15px] text-white/90' : 'text-white/75'}
+          />
+        ) : (
+          <p
+            className={[
+              'whitespace-pre-wrap break-words text-sm leading-relaxed',
+              step.step_type === 'final_answer' ? 'text-[15px] text-white/90' : 'text-white/65',
+            ].join(' ')}
+          >
+            {step.content}
+          </p>
+        )}
       </div>
     </motion.div>
   )
@@ -357,7 +391,7 @@ function StandupThread({
         {agentMessages.map((agent, index) => (
           <div key={`${agent.agentId}-${agent.agentName}`} className="flex gap-3">
             <div
-              className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 text-sm font-semibold text-white"
+              className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] text-sm font-semibold text-white"
               style={{
                 background: `linear-gradient(135deg, rgba(${80 + index * 24}, ${105 + index * 12}, 255, 0.20), rgba(14, 165, 233, 0.12))`,
               }}
@@ -379,10 +413,10 @@ function StandupThread({
                   </span>
                 )}
                 {agent.status === 'thinking' && (
-                  <span className="flex items-center gap-1 text-xs text-cyan-200/70">
-                    <span className="h-1 w-1 rounded-full bg-cyan-300 animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <span className="h-1 w-1 rounded-full bg-cyan-300 animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <span className="h-1 w-1 rounded-full bg-cyan-300 animate-bounce" style={{ animationDelay: '300ms' }} />
+                  <span className="flex items-center gap-1 text-xs text-emerald-200/70">
+                    <span className="h-1 w-1 rounded-full bg-emerald-300 animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <span className="h-1 w-1 rounded-full bg-emerald-300 animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <span className="h-1 w-1 rounded-full bg-emerald-300 animate-bounce" style={{ animationDelay: '300ms' }} />
                     Speaking...
                   </span>
                 )}
@@ -392,11 +426,11 @@ function StandupThread({
               </div>
 
               {agent.status === 'done' ? (
-                <div className="rounded-2xl rounded-tl-sm border border-white/[0.08] bg-obsidian-900 px-4 py-3 text-sm leading-relaxed text-white/85 whitespace-pre-wrap">
+                <div className="rounded-2xl rounded-tl-sm border border-white/[0.08] bg-base-surface px-4 py-3 text-sm leading-relaxed text-white/85 whitespace-pre-wrap">
                   {agent.content}
                 </div>
               ) : agent.status === 'thinking' ? (
-                <div className="rounded-2xl rounded-tl-sm border border-cyan-300/10 bg-cyan-300/[0.04] px-4 py-3 text-sm text-white/40 italic">
+                <div className="rounded-2xl rounded-tl-sm border border-emerald-300/10 bg-emerald-300/[0.04] px-4 py-3 text-sm text-white/40 italic">
                   {agent.thoughts[agent.thoughts.length - 1] || 'Thinking...'}
                 </div>
               ) : (
@@ -417,11 +451,11 @@ function StandupThread({
                 </span>
                 <span className="text-sm font-medium text-white">CEO</span>
               </div>
-              <div className="rounded-2xl rounded-tr-sm border border-accent-purple/20 bg-accent-purple/12 px-4 py-3 text-sm leading-relaxed text-white/90 whitespace-pre-wrap">
+              <div className="rounded-2xl rounded-tr-sm border border-indigo-purple/20 bg-indigo-purple/12 px-4 py-3 text-sm leading-relaxed text-white/90 whitespace-pre-wrap">
                 {message.content}
               </div>
             </div>
-            <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-accent-purple/20 bg-accent-purple/12 text-sm font-semibold text-white">
+            <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-indigo-purple/20 bg-indigo-purple/12 text-sm font-semibold text-white">
               C
             </div>
           </div>
@@ -460,13 +494,13 @@ function StandupThread({
                 }
               }}
               placeholder="Ask a question or redirect..."
-              className="flex-1 rounded-xl border border-white/[0.08] bg-obsidian-900 px-4 py-2.5 text-sm text-white placeholder:text-white/25 outline-none focus:border-accent-400/40"
+              className="flex-1 rounded-xl border border-white/[0.08] bg-base-surface px-4 py-2.5 text-sm text-white placeholder:text-white/25 outline-none focus:border-indigo-400/40"
             />
             <button
               type="button"
               onClick={sendCeoMessage}
               disabled={!ceoMessage.trim()}
-              className="rounded-xl border border-accent-purple/20 bg-accent-purple/12 px-4 py-2.5 text-sm text-accent-100 disabled:opacity-40"
+              className="rounded-xl border border-indigo-purple/20 bg-indigo-purple/12 px-4 py-2.5 text-sm text-indigo-100 disabled:opacity-40"
             >
               Send
             </button>
@@ -630,6 +664,12 @@ export function ExecutionLiveView({
         }
       }
 
+      if (message.event === 'execution_pending_review') {
+        setStatus('pending_review')
+        setCurrentToolName(null)
+        stopExecutionChannel()
+      }
+
       if (message.event === 'execution_failed') {
         const nextStatus = normalizeStatus(message.status ?? 'failed')
         setStatus(nextStatus)
@@ -695,6 +735,11 @@ export function ExecutionLiveView({
 
     if (TERMINAL_EXECUTION_STATUSES.includes(nextStatus)) {
       stopExecutionChannel()
+    }
+
+    if (nextStatus === 'pending_review') {
+      setCurrentToolName(null)
+      return
     }
 
     if (nextStatus === 'completed') {
@@ -765,10 +810,10 @@ export function ExecutionLiveView({
 
   return (
     <div
-      className="flex flex-col overflow-hidden rounded-xl border border-white/5 bg-[#080C14]"
+      className="flex flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-s)]"
       data-status={status}
     >
-      <div className="flex items-center justify-between border-b border-white/5 bg-[#0C1018] px-4 py-3">
+      <div className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--card)] px-4 py-3">
         <div className="flex items-center gap-2.5">
           <div className="relative flex-shrink-0">
             <div className="h-2 w-2 rounded-full" style={{ backgroundColor: statusConfig.color }} />
@@ -791,8 +836,8 @@ export function ExecutionLiveView({
 
         <div className="flex items-center gap-3">
           {currentToolName && isLive && !isStandupMode && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-1.5 text-xs text-cyan-400">
-              <div className="h-1 w-1 rounded-full bg-cyan-400 animate-pulse" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-1.5 text-xs text-emerald-400">
+              <div className="h-1 w-1 rounded-full bg-emerald-400 animate-pulse" />
               {currentToolName}
             </motion.div>
           )}
@@ -801,7 +846,7 @@ export function ExecutionLiveView({
       </div>
 
       {initialInput && (
-        <div className="border-b border-white/5 bg-white/[0.02] px-4 py-2.5">
+        <div className="border-b border-[var(--border)] bg-white/[0.02] px-4 py-2.5">
           <p className="truncate text-xs text-white/35">
             <span className="mr-1 text-white/20">Task:</span>
             {initialInput}
