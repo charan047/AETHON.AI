@@ -42,7 +42,8 @@ function statusBadgeClass(status: Execution['status']) {
 }
 
 function statusBadgeLabel(status: Execution['status']) {
-  if (status === 'pending_review' || status === 'waiting_approval') return 'review'
+  if (status === 'pending_review') return 'needs review'
+  if (status === 'waiting_approval') return 'waiting approval'
   if (status === 'completed') return 'done'
   if (status === 'cancelled') return 'stopped'
   return status
@@ -123,7 +124,9 @@ function ReviewPanel({ execution }: { execution: Execution }) {
   const [deliveryError, setDeliveryError] = useState<string | null>(null)
   const output = useMemo(() => extractReviewOutput(execution), [execution])
   const isPendingReview = execution.status === 'pending_review'
+  const isWaitingApproval = execution.status === 'waiting_approval'
   const isApproved = execution.status === 'completed' && Boolean(execution.approved_by)
+  const completedWithoutReview = execution.status === 'completed' && !execution.approved_by
   const isDelivered = isApproved && Boolean(execution.delivered_at && execution.delivery_method)
 
   const { data: integrations = [] } = useQuery({
@@ -234,7 +237,34 @@ function ReviewPanel({ execution }: { execution: Execution }) {
       <div className="mt-4 flex items-center justify-between gap-3">
         <div className="text-sm text-[var(--text-2)]">Review the final execution output.</div>
         {isApproved ? <div className="badge badge-emerald">approved</div> : null}
+        {isPendingReview ? <div className="badge badge-amber">review needed</div> : null}
+        {isWaitingApproval ? <div className="badge badge-amber">workflow paused</div> : null}
       </div>
+
+      {isWaitingApproval && (
+        <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/[0.08] px-4 py-3 text-sm text-amber-100">
+          <div className="font-medium">This execution is waiting on a workflow approval step.</div>
+          <div className="mt-1 text-amber-100/75">
+            This is different from final-output review. Approve the pending request in the approvals queue before the execution can continue.
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/approvals')}
+            className="btn-secondary btn-sm mt-3"
+          >
+            Open Approvals
+          </button>
+        </div>
+      )}
+
+      {completedWithoutReview && (
+        <div className="mt-4 rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 text-sm text-[var(--text-2)]">
+          <div className="font-medium text-white">This execution completed without requiring CEO review.</div>
+          <div className="mt-1 text-[var(--text-3)]">
+            Approve/reject controls are only available when a workflow is configured to require final review.
+          </div>
+        </div>
+      )}
 
       {isApproved && (
         <div className="glass-card glass-card-emerald mt-4 rounded-2xl px-4 py-3">
@@ -400,36 +430,38 @@ function ReviewPanel({ execution }: { execution: Execution }) {
           className="input mt-3 min-h-[120px] w-full resize-y px-3.5 py-3"
         />
 
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={handleReject}
-            disabled={!isPendingReview || regenerateMutation.isPending}
-            className="btn-danger"
-          >
-            <XCircle size={14} />
-            {regenerateMutation.isPending ? 'Sending back…' : 'Reject'}
-          </button>
-          <button
-            type="button"
-            onClick={() => approveMutation.mutate()}
-            disabled={!isPendingReview || approveMutation.isPending}
-            className="btn-emerald btn-runner"
-          >
-            {approveMutation.isPending ? 'Approving…' : '✓ Approve'}
-          </button>
-          {feedback.trim() ? (
+        {isPendingReview ? (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={() => regenerateMutation.mutate()}
+              onClick={handleReject}
               disabled={regenerateMutation.isPending}
-              className="btn-secondary"
+              className="btn-danger"
             >
-              <RotateCcw size={14} />
-              {regenerateMutation.isPending ? 'Regenerating…' : 'Regenerate with feedback'}
+              <XCircle size={14} />
+              {regenerateMutation.isPending ? 'Sending back…' : 'Reject'}
             </button>
-          ) : null}
-        </div>
+            <button
+              type="button"
+              onClick={() => approveMutation.mutate()}
+              disabled={approveMutation.isPending}
+              className="btn-emerald btn-runner"
+            >
+              {approveMutation.isPending ? 'Approving…' : '✓ Approve'}
+            </button>
+            {feedback.trim() ? (
+              <button
+                type="button"
+                onClick={() => regenerateMutation.mutate()}
+                disabled={regenerateMutation.isPending}
+                className="btn-secondary"
+              >
+                <RotateCcw size={14} />
+                {regenerateMutation.isPending ? 'Regenerating…' : 'Regenerate with feedback'}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </section>
   )
@@ -484,7 +516,7 @@ export function ExecutionPage() {
     )
   }
 
-  const showReviewPanel = execution.status === 'pending_review' || execution.status === 'completed'
+  const showReviewPanel = execution.status === 'pending_review' || execution.status === 'completed' || execution.status === 'waiting_approval'
 
   return (
     <div className="animate-in-up mx-auto max-w-5xl space-y-4 px-4 py-6">

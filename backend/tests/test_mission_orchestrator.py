@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy import select
 
-from database.models import Agent, Execution, ExecutionStatus, Mission, MissionStatus, MissionTask, MissionTaskStatus, Workflow
+from database.models import Agent, Client, Execution, ExecutionStatus, Mission, MissionStatus, MissionTask, MissionTaskStatus, Workflow
 from services.mission_orchestrator import MissionOrchestrator
 
 
@@ -422,3 +422,72 @@ async def test_orchestrator_marks_capability_mismatch_output_as_failed(monkeypat
         refreshed_task = await verify_db.scalar(select(MissionTask).where(MissionTask.mission_id == mission.id))
 
     assert refreshed_task.status == MissionTaskStatus.failed
+
+
+@pytest.mark.asyncio
+async def test_finalize_mission_does_not_auto_deliver_report_to_portal(monkeypatch, db, db_engine, test_org, test_user):
+    client = Client(
+        org_id=test_org.id,
+        name="Acme",
+        company_name="Acme Corp",
+        portal_enabled=True,
+        portal_token="portal-token",
+    )
+    db.add(client)
+    await db.commit()
+    await db.refresh(client)
+
+    mission = Mission(
+        org_id=test_org.id,
+        client_id=client.id,
+        goal="Prepare Acme weekly report",
+        title="Acme Weekly",
+        status=MissionStatus.active,
+        created_by=test_user.id,
+    )
+    db.add(mission)
+    await db.commit()
+    await db.refresh(mission)
+
+    task = MissionTask(
+        org_id=test_org.id,
+        mission_id=mission.id,
+        sequence=1,
+        title="Draft report",
+        status=MissionTaskStatus.completed,
+        output_summary="Weekly report draft",
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+
+    monkeypatch.setattr(
+        "services.mission_orchestrator.AsyncSessionLocal",
+        async_sessionmaker(db_engine, expire_on_commit=False),
+    )
+
+    class FakeResponse:
+        content = "## Weekly Report\n\nReady for approval."
+
+    class FakeLLM:
+        async def ainvoke(self, _prompt: str):
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "services.mission_orchestrator.model_service._build_from_settings",
+        lambda temperature=0.4, max_tokens=1500: FakeLLM(),
+    )
+    async def fake_broadcast(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("services.mission_orchestrator.ws_manager.broadcast_to_channel", fake_broadcast)
+
+    orchestrator = MissionOrchestrator()
+    await orchestrator._finalize_mission(mission.id, [task])
+
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as verify_db:
+        stored_mission = await verify_db.scalar(select(Mission).where(Mission.id == mission.id))
+
+    assert stored_mission is not None
+    assert stored_mission.status == MissionStatus.completed
+    assert stored_mission.report_delivered is False

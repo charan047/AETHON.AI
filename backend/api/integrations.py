@@ -689,7 +689,7 @@ async def test_integration(
     elif integration.integration_type == IntegrationType.email_smtp:
         ok, test_result = _test_email_config(config)
     else:
-        ok, test_result = False, "Testing not implemented"
+        ok, test_result = False, "Testing for this integration is coming soon"
 
     integration.last_tested_at = datetime.now(timezone.utc)
     integration.last_test_result = "success" if ok else test_result[:50]

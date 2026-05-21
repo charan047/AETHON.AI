@@ -120,6 +120,13 @@ function buildPersonaSuggestions(name: string, roleSlug?: string | null) {
   return Array.from(suggestions).slice(0, 4)
 }
 
+function presentStatus(status?: string | null) {
+  if (!status) return 'idle'
+  if (status === 'pending_review') return 'needs review'
+  if (status === 'waiting_approval') return 'waiting approval'
+  return status.replace(/_/g, ' ')
+}
+
 function costLabel(value?: number | null) {
   return value == null ? '—' : `$${value.toFixed(2)}`
 }
@@ -874,7 +881,7 @@ export function Agents() {
                       : '',
                   )}
                 >
-                  <span className={clsx('status-dot', agent.current_status === 'working' ? `${roleAccent(agent.role_slug).dot} dot-live` : 'dot-muted')} />
+                  <span className={clsx('status-dot', agent.current_status === 'working' ? `${roleAccent(agent.role_slug).dot} dot-live` : agent.current_status === 'waiting_approval' ? 'dot-amber' : 'dot-muted')} />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-semibold text-[var(--t1)]">
                       {agent.persona_name || agent.name}
@@ -906,7 +913,7 @@ export function Agents() {
                         <span className="badge badge-glass">{selectedAgent.role || selectedAgent.role_slug || 'Agent'}</span>
                         <span className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--t2)]">
                           <span className={clsx('status-dot', selectedAgent.current_status === 'working' ? 'dot-green dot-live' : selectedAgent.current_status === 'waiting_approval' ? 'dot-amber' : 'dot-muted')} />
-                          {selectedAgent.current_status || 'idle'}
+                          {presentStatus(selectedAgent.current_status)}
                         </span>
                         <div className="flex flex-col items-center gap-1">
                           <TrustRing score={trustScore} radius={20} />
@@ -961,13 +968,13 @@ export function Agents() {
                         {recentExecutions.map(execution => (
                           <Link key={execution.id} to={`/executions/${execution.id}`} className="data-row block">
                             <div className="flex items-center gap-3">
-                              <span className={clsx('status-dot', execution.status === 'completed' ? 'dot-green' : execution.status === 'running' ? 'dot-blue dot-live' : execution.status === 'pending_review' ? 'dot-amber' : 'dot-red')} />
+                              <span className={clsx('status-dot', execution.status === 'completed' ? 'dot-green' : execution.status === 'running' ? 'dot-blue dot-live' : execution.status === 'pending_review' || execution.status === 'waiting_approval' ? 'dot-amber' : 'dot-red')} />
                               <div className="min-w-0 flex-1">
                                 <div className="truncate text-sm text-[var(--t1)]">{execution.input_message || execution.workflow_name || 'Execution'}</div>
                                 <div className="truncate text-xs text-[var(--t2)]">{execution.started_at ? new Date(execution.started_at).toLocaleDateString() : 'Recently'}</div>
                               </div>
-                              <span className={clsx('badge font-mono uppercase', execution.status === 'completed' ? 'badge-green' : execution.status === 'running' ? 'badge-blue' : execution.status === 'pending_review' ? 'badge-amber' : 'badge-red')}>
-                                {execution.status === 'pending_review' ? 'review' : execution.status}
+                              <span className={clsx('badge font-mono uppercase', execution.status === 'completed' ? 'badge-green' : execution.status === 'running' ? 'badge-blue' : execution.status === 'pending_review' || execution.status === 'waiting_approval' ? 'badge-amber' : 'badge-red')}>
+                                {presentStatus(execution.status)}
                               </span>
                             </div>
                           </Link>

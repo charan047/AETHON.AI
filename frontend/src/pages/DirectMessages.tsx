@@ -145,6 +145,8 @@ export function DirectMessages() {
   const [newMsgBanner, setNewMsgBanner] = useState(false)
   const feedRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
+  const replyFallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const replyFallbackAttemptsRef = useRef(0)
 
   const appendThreadMessage = useCallback((agentId: string, message: DirectMessage) => {
     queryClient.setQueryData(['dm-thread', agentId], (current: any) => {
@@ -173,16 +175,35 @@ export function DirectMessages() {
     })
   }, [])
 
+  const stopReplyFallback = useCallback(() => {
+    if (replyFallbackTimerRef.current) {
+      clearInterval(replyFallbackTimerRef.current)
+      replyFallbackTimerRef.current = null
+    }
+    replyFallbackAttemptsRef.current = 0
+  }, [])
+
+  const startReplyFallback = useCallback((agentId: string) => {
+    stopReplyFallback()
+    replyFallbackTimerRef.current = setInterval(() => {
+      replyFallbackAttemptsRef.current += 1
+      void queryClient.invalidateQueries({ queryKey: ['dm-thread', agentId] })
+      void queryClient.invalidateQueries({ queryKey: ['dm-conversations'] })
+      if (replyFallbackAttemptsRef.current >= 8) {
+        stopReplyFallback()
+      }
+    }, 1500)
+  }, [queryClient, stopReplyFallback])
+
   const convsQuery = useQuery({
     queryKey: ['dm-conversations'],
     queryFn: messagesApi.conversations,
     refetchInterval: 30_000,
   })
 
-  const fallbackAgentsQuery = useQuery({
-    queryKey: ['dm-fallback-agents'],
+  const allAgentsQuery = useQuery({
+    queryKey: ['dm-all-agents'],
     queryFn: agentsApi.list,
-    enabled: convsQuery.isError || (convsQuery.data?.conversations?.length ?? 0) === 0,
     staleTime: 30_000,
   })
 
@@ -199,25 +220,39 @@ export function DirectMessages() {
     }
   }, [paramAgentId, activeAgentId])
 
-  const fallbackConversations: ConversationSummary[] = (fallbackAgentsQuery.data ?? [])
-    .filter(agent => agent.is_active)
-    .map(agent => ({
-      agent_id: agent.id,
-      agent_name: agent.name,
-      persona_name: agent.persona_name ?? null,
-      role_slug: agent.role_slug ?? null,
-      role_color: fallbackRoleColor(`${agent.role_slug ?? ''}:${agent.id}`),
-      last_message: null,
-      last_message_at: null,
-      last_sender_type: null,
-      unread_count: 0,
-      is_online: false,
-      current_status: 'idle',
-    }))
+  const conversations = useMemo(() => {
+    const existing = convsQuery.data?.conversations ?? []
+    const agents = (allAgentsQuery.data ?? []).filter(agent => agent.is_active)
+    const byAgentId = new Map(existing.map(conversation => [conversation.agent_id, conversation]))
 
-  const conversations = (convsQuery.data?.conversations?.length ?? 0) > 0
-    ? (convsQuery.data?.conversations ?? [])
-    : fallbackConversations
+    const merged: ConversationSummary[] = existing.map(conversation => ({ ...conversation }))
+
+    for (const agent of agents) {
+      if (byAgentId.has(agent.id)) continue
+      merged.push({
+        agent_id: agent.id,
+        agent_name: agent.name,
+        persona_name: agent.persona_name ?? null,
+        role_slug: agent.role_slug ?? null,
+        role_color: fallbackRoleColor(`${agent.role_slug ?? ''}:${agent.id}`),
+        last_message: null,
+        last_message_at: null,
+        last_sender_type: null,
+        unread_count: 0,
+        is_online: agent.current_status === 'working',
+        current_status: agent.current_status ?? 'idle',
+      })
+    }
+
+    const withMessages = merged
+      .filter(conversation => Boolean(conversation.last_message_at))
+      .sort((left, right) => (right.last_message_at || '').localeCompare(left.last_message_at || ''))
+    const withoutMessages = merged
+      .filter(conversation => !conversation.last_message_at)
+      .sort((left, right) => (left.persona_name || left.agent_name).localeCompare(right.persona_name || right.agent_name))
+
+    return [...withMessages, ...withoutMessages]
+  }, [convsQuery.data?.conversations, allAgentsQuery.data])
 
   useEffect(() => {
     if (!activeAgentId && conversations.length) {
@@ -233,7 +268,8 @@ export function DirectMessages() {
 
   useEffect(() => {
     setLiveAgentReply(null)
-  }, [activeAgentId])
+    stopReplyFallback()
+  }, [activeAgentId, stopReplyFallback])
 
   const handleFeedScroll = useCallback(() => {
     const el = feedRef.current
@@ -319,6 +355,9 @@ export function DirectMessages() {
     void queryClient.invalidateQueries({ queryKey: ['dm-conversations'] })
 
     if (ev.thread_agent_id === activeAgentId) {
+      if (ev.sender_type === 'agent') {
+        stopReplyFallback()
+      }
       setLiveAgentReply(null)
       if (ev.message_id && ev.content) {
         if (ev.sender_type === 'ceo') {
@@ -361,7 +400,7 @@ export function DirectMessages() {
         },
       })
     }
-  }, [lastEvent, activeAgentId, queryClient, navigate, appendThreadMessage, dropMatchingOptimisticMessage, threadQuery.data?.agent?.name, threadQuery.data?.agent?.persona_name])
+  }, [lastEvent, activeAgentId, queryClient, navigate, appendThreadMessage, dropMatchingOptimisticMessage, threadQuery.data?.agent?.name, threadQuery.data?.agent?.persona_name, stopReplyFallback])
 
   const sendMutation = useMutation({
     mutationFn: (content: string) =>
@@ -396,9 +435,13 @@ export function DirectMessages() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['dm-thread', activeAgentId] })
       void queryClient.invalidateQueries({ queryKey: ['dm-conversations'] })
+      if (activeAgentId) {
+        startReplyFallback(activeAgentId)
+      }
     },
     onError: () => {
       setOptimisticMessages([])
+      stopReplyFallback()
       toast.error('Failed to send message')
     },
   })
@@ -420,6 +463,24 @@ export function DirectMessages() {
   const threadAgent = threadQuery.data?.agent
   const rawMessages = threadQuery.data?.messages ?? []
   const allMessages = [...rawMessages, ...optimisticMessages, ...(liveAgentReply ? [liveAgentReply] : [])]
+
+  useEffect(() => {
+    if (!activeAgentId || optimisticMessages.length === 0) return
+    const newestPersistedAgentReply = [...rawMessages]
+      .reverse()
+      .find(message => message.sender_type === 'agent')
+    const newestOptimisticCeo = [...optimisticMessages]
+      .reverse()
+      .find(message => message.sender_type === 'ceo')
+    if (!newestPersistedAgentReply || !newestOptimisticCeo) return
+    if (new Date(newestPersistedAgentReply.created_at).getTime() >= new Date(newestOptimisticCeo.created_at).getTime()) {
+      stopReplyFallback()
+    }
+  }, [rawMessages, optimisticMessages, activeAgentId, stopReplyFallback])
+
+  useEffect(() => () => {
+    stopReplyFallback()
+  }, [stopReplyFallback])
 
   type DayGroup = { key: string; label: string; messages: DirectMessage[] }
   const dayGroups: DayGroup[] = []
@@ -466,7 +527,7 @@ export function DirectMessages() {
               Showing active agents while thread summaries reconnect.
             </div>
           ) : null}
-          {conversations.length === 0 && !convsQuery.isLoading ? (
+          {conversations.length === 0 && !convsQuery.isLoading && !allAgentsQuery.isLoading ? (
             <div className="px-4 py-8 text-center text-sm text-white/30">
               No agents yet. Hire your first teammate to start messaging.
             </div>

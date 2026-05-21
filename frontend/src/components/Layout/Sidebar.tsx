@@ -73,6 +73,7 @@ const NAV_GROUPS: NavGroup[] = [
     title: 'SETTINGS',
     items: [
       { to: '/settings/org', icon: Settings, label: 'Settings', activePrefixes: ['/settings/org', '/company'] },
+      { to: '/settings/cto', icon: Zap, label: 'CTO', activePrefixes: ['/settings/cto'] },
       { to: '/settings/notifications', icon: Bell, label: 'Notifications', activePrefixes: ['/settings/notifications'] },
       { to: '/settings/external-agents', icon: Link2, label: 'External Agents', activePrefixes: ['/settings/external-agents'] },
       { to: '/settings/models', icon: Bot, label: 'AI Models', activePrefixes: ['/settings/models'], badge: 'models' },

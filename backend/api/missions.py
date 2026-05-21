@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -246,6 +247,56 @@ async def get_mission_report(
         mission_id=mission.id,
         status=_status_value(mission.status),
         report=mission.report,
+    )
+
+
+@router.post("/missions/{mission_id}/approve-report", response_model=MissionResponse, status_code=200)
+async def approve_mission_report(
+    mission_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    mission = await _get_org_scoped_mission(mission_id, ctx.org.id, db)
+    if _status_value(mission.status) != MissionStatus.completed.value:
+        raise HTTPException(status_code=400, detail="Mission must be completed before approval")
+    if not mission.report:
+        raise HTTPException(status_code=400, detail="Mission report is not ready")
+    if not mission.client_id:
+        raise HTTPException(status_code=400, detail="Mission is not linked to a client")
+
+    client = await db.scalar(
+        select(Client).where(Client.id == mission.client_id, Client.org_id == ctx.org.id)
+    )
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    approved_at = datetime.utcnow()
+    if not client.portal_token:
+        client.portal_token = secrets.token_urlsafe(32)
+    if not client.portal_enabled:
+        client.portal_enabled = True
+    client.updated_at = approved_at
+
+    mission.report_delivered = True
+    await db.commit()
+
+    from services.cto_memory_service import cto_memory_service
+
+    client_label = client.company_name or client.name or "client"
+    await cto_memory_service.record_approval_pattern(
+        org_id=ctx.org.id,
+        action_type="deliver_portal",
+        context=f"{mission.title or mission.goal} for {client_label}",
+        was_approved=True,
+        db=db,
+    )
+
+    tasks = await _mission_tasks(mission.id, ctx.org.id, db)
+    return _serialize_mission(
+        mission,
+        tasks,
+        client_name=client.company_name or client.name,
     )
 
 

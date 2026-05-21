@@ -40,7 +40,7 @@ import {
   Workflow,
   Zap,
 } from 'lucide-react'
-import { agentsApi, approvalsApi, companyApi, companyChatApi, dashboardApi } from '../api/client'
+import { agentsApi, approvalsApi, companyApi, companyChatApi, ctoApi, dashboardApi } from '../api/client'
 import { MentionTextarea } from '../components/ui/MentionTextarea'
 import { GoalCard } from '../components/mission/GoalCard'
 import { ExecutionLiveView } from '../components/execution/ExecutionLiveView'
@@ -54,6 +54,7 @@ import type {
   CompanyChatStreamEvent,
   CompanyConversationMessage,
   CompanyConversationSummary,
+  CTOTaskSummary,
   DashboardSummary,
   ExecutionStep,
   WsEvent,
@@ -68,6 +69,7 @@ type ChatMessage = {
   actions?: ChatActionResult[]
   attachments?: Array<Record<string, unknown>>
   createdAt: string
+  isProactive?: boolean
   streaming?: boolean
   pending?: boolean
   failed?: boolean
@@ -148,6 +150,7 @@ function toChatMessages(items: CompanyConversationMessage[]): ChatMessage[] {
     createdAt: item.created_at || new Date().toISOString(),
     actions: item.actions,
     attachments: item.attachments,
+    isProactive: Boolean(item.is_proactive),
   }))
 }
 
@@ -168,6 +171,49 @@ function normalizeOutboundMessage(raw: string) {
 
 function MarkdownMessage({ content }: { content: string }) {
   return <MarkdownContent content={content} />
+}
+
+function ProactiveMessage({ message }: { message: ChatMessage }) {
+  return (
+    <div className="flex w-full justify-start">
+      <motion.div
+        initial={{ opacity: 0, y: 12, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        className="flex max-w-[85%] gap-3"
+      >
+        <div
+          className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-bold text-white"
+          style={{
+            background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+            boxShadow: '0 0 12px rgba(99,102,241,0.40)',
+          }}
+        >
+          CTO
+        </div>
+
+        <div
+          className="rounded-2xl rounded-bl-sm p-4"
+          style={{
+            background: 'rgba(99,102,241,0.07)',
+            border: '1px solid rgba(99,102,241,0.20)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+          }}
+        >
+          <div className="mb-2 flex items-center gap-1.5">
+            <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-indigo-400">
+              CTO Update
+            </span>
+            <span className="font-mono text-[10px] text-ink-muted">
+              · proactive
+            </span>
+          </div>
+
+          <MarkdownMessage content={message.content} />
+        </div>
+      </motion.div>
+    </div>
+  )
 }
 
 function roleColorTone(role?: string | null) {
@@ -441,6 +487,17 @@ function MessageBubble({
 }) {
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
+  const actionOnlyAssistant =
+    !isUser &&
+    !isSystem &&
+    !message.failed &&
+    !message.streaming &&
+    !message.content.trim() &&
+    Boolean(message.actions?.length)
+
+  if (message.isProactive) {
+    return <ProactiveMessage message={message} />
+  }
 
   if (isSystem) {
     return (
@@ -488,6 +545,20 @@ function MessageBubble({
                 <div className="text-red-200">
                   <MarkdownMessage content={message.content} />
                 </div>
+              </div>
+            ) : !isUser && message.streaming && !message.content.trim() ? (
+              <div className="flex items-center gap-2 text-sm text-[#8B9DBE]">
+                <div className="flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-300 [animation-delay:0ms]" />
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-300 [animation-delay:120ms]" />
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-300 [animation-delay:240ms]" />
+                </div>
+                <span>Thinking...</span>
+              </div>
+            ) : actionOnlyAssistant ? (
+              <div className="flex items-center gap-2 text-sm text-[#8B9DBE]">
+                <Sparkles size={14} className="text-indigo-300" />
+                <span>Handled below</span>
               </div>
             ) : isUser ? (
               <p className="whitespace-pre-wrap">{message.content}</p>
@@ -602,7 +673,9 @@ export function CompanyChat() {
   const queryClient = useQueryClient()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
   const seenEventRef = useRef<string | null>(null)
+  const streamingConversationRef = useRef<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [conversationId, setConversationId] = useState<string | null>(routeConversationId || null)
@@ -614,7 +687,7 @@ export function CompanyChat() {
   const [sidebarOpen, setSidebarOpen] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth >= 1024 : false,
   )
-  const [contextOpen, setContextOpen] = useState(true)
+  const [contextOpen, setContextOpen] = useState(false)
   const [showMenu, setShowMenu] = useState(false)
   const [showCommandMenu, setShowCommandMenu] = useState(false)
   const [commandIndex, setCommandIndex] = useState(0)
@@ -651,6 +724,11 @@ export function CompanyChat() {
     queryFn: approvalsApi.pending,
     refetchInterval: 30_000,
   })
+  const { data: ctoTasks = [] } = useQuery({
+    queryKey: ['cto-tasks'],
+    queryFn: ctoApi.getTasks,
+    refetchInterval: 15_000,
+  })
   const conversationsQuery = useQuery({
     queryKey: ['company-chat-conversations'],
     queryFn: companyChatApi.conversations,
@@ -677,9 +755,19 @@ export function CompanyChat() {
 
   useEffect(() => {
     if (historyQuery.data?.messages) {
+      const historyConversationId = historyQuery.data.conversation?.id || conversationId
+      const hasOptimisticStream = messages.some(message => message.streaming || message.pending)
+      if (
+        sending &&
+        streamingConversationRef.current &&
+        historyConversationId === streamingConversationRef.current &&
+        hasOptimisticStream
+      ) {
+        return
+      }
       setMessages(toChatMessages(historyQuery.data.messages))
     }
-  }, [historyQuery.data])
+  }, [conversationId, historyQuery.data, messages, sending])
 
   useEffect(() => {
     const handleResize = () => {
@@ -694,6 +782,29 @@ export function CompanyChat() {
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
+
+  useEffect(() => {
+    if (!showMenu) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setShowMenu(false)
+      }
+    }
+
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowMenu(false)
+      }
+    }
+
+    window.addEventListener('mousedown', handlePointerDown)
+    window.addEventListener('keydown', handleEscape)
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown)
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [showMenu])
 
   useEffect(() => {
     const handler = (e: globalThis.KeyboardEvent) => {
@@ -749,6 +860,23 @@ export function CompanyChat() {
           },
         }))
       }
+    }
+
+    if (eventType === 'cto_proactive_message') {
+      if (event.conversation_id && event.conversation_id === conversationId) {
+        void queryClient.invalidateQueries({ queryKey: ['company-chat-history', conversationId] })
+      } else if (typeof event.message === 'string' && event.message.trim()) {
+        toast.custom(
+          <div className="flex items-center gap-2">
+            <div className="flex h-5 w-5 items-center justify-center rounded bg-indigo-500 text-[9px] font-bold text-white">CTO</div>
+            <span className="text-sm">{event.message.slice(0, 60)}...</span>
+          </div>,
+          { duration: 6000, icon: null },
+        )
+      }
+      void queryClient.invalidateQueries({ queryKey: ['cto-tasks'] })
+      void queryClient.invalidateQueries({ queryKey: ['company-chat-conversations'] })
+      return
     }
 
     if (['new_approval_request', 'agent_autonomy_changed', 'workflow_completed', 'budget_warning'].includes(eventType)) {
@@ -908,6 +1036,7 @@ export function CompanyChat() {
     setMessages(prev => [...prev, optimisticUser, optimisticAssistant])
     setInput('')
     setSending(true)
+    streamingConversationRef.current = conversationId
 
     try {
       const response = await companyChatApi.send({
@@ -927,6 +1056,7 @@ export function CompanyChat() {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      let resolvedConversationId = conversationId
 
       while (true) {
         const { done, value } = await reader.read()
@@ -939,6 +1069,8 @@ export function CompanyChat() {
           if (!line.trim()) continue
           const event = JSON.parse(line) as CompanyChatStreamEvent
           if (event.type === 'meta' && event.conversation_id) {
+            resolvedConversationId = event.conversation_id
+            streamingConversationRef.current = event.conversation_id
             setConversationId(event.conversation_id)
             if (conversationStorageKey) {
               window.sessionStorage.setItem(conversationStorageKey, event.conversation_id)
@@ -966,9 +1098,10 @@ export function CompanyChat() {
       }
 
       await queryClient.invalidateQueries({ queryKey: ['company-chat-conversations'] })
-      if (conversationId) {
-        await queryClient.invalidateQueries({ queryKey: ['company-chat-history', conversationId] })
+      if (resolvedConversationId) {
+        await queryClient.invalidateQueries({ queryKey: ['company-chat-history', resolvedConversationId] })
       }
+      await queryClient.invalidateQueries({ queryKey: ['cto-tasks'] })
     } catch (error) {
       const messageText = error instanceof Error ? error.message : 'Unknown error'
       if (messageText.toLowerCase().includes('session expired') || messageText.toLowerCase().includes('authentication')) {
@@ -986,6 +1119,7 @@ export function CompanyChat() {
       ))
       toast.error(messageText)
     } finally {
+      streamingConversationRef.current = null
       setSending(false)
     }
   }
@@ -1045,13 +1179,13 @@ export function CompanyChat() {
   }, [sidebarConversations])
 
   const quickCards = useMemo(() => [
-    { icon: <Search size={18} />, title: 'Research', prompt: `Research this week's competitor moves for ${firstActiveAgent?.name || 'the team'}` },
-    { icon: <BarChart3 size={18} />, title: 'Analytics', prompt: 'Show me company analytics' },
-    { icon: <CheckCircle2 size={18} />, title: 'Approvals', prompt: pendingApprovals.length > 0 ? `Review ${pendingApprovals.length} pending approvals` : 'Do I have anything waiting for approval?' },
-    { icon: <FileText size={18} />, title: 'Summary', prompt: 'Generate a weekly company summary' },
-    { icon: <Workflow size={18} />, title: 'Workflows', prompt: 'Run the weekly research workflow' },
-    { icon: <Users size={18} />, title: 'Team status', prompt: 'What is everyone working on right now?' },
-  ], [firstActiveAgent?.name, pendingApprovals.length])
+    { icon: <Clock3 size={18} />, title: 'Handle this week', prompt: "Brief the whole agency on this week's priorities" },
+    { icon: <Search size={18} />, title: 'Run client research', prompt: 'Research [client] and prepare a briefing' },
+    { icon: <FileText size={18} />, title: 'Weekly deliverables', prompt: 'Handle all client weekly deliverables' },
+    { icon: <Workflow size={18} />, title: 'Mission mode', prompt: 'Take on a multi-step goal as a mission' },
+    { icon: <Users size={18} />, title: 'Team status', prompt: 'How is the team doing? Any blockers?' },
+    { icon: <BarChart3 size={18} />, title: 'Agency health', prompt: 'Give me a full picture of the agency' },
+  ], [])
 
   const conversationSidebar = (
     <aside
@@ -1189,7 +1323,7 @@ export function CompanyChat() {
             </button>
           </div>
         )}
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/[0.08] bg-[rgba(8,13,26,0.82)] px-5 backdrop-blur-xl">
+        <header className="relative z-20 flex h-16 shrink-0 items-center justify-between overflow-visible border-b border-white/[0.08] bg-[rgba(8,13,26,0.82)] px-5 backdrop-blur-xl">
           <div className="flex items-center gap-3">
             <div className="grid h-10 w-10 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500/20 to-violet-500/12 text-indigo-100 shadow-glow-sm ring-1 ring-white/10">
               <Building2 size={20} />
@@ -1212,30 +1346,47 @@ export function CompanyChat() {
 
           <div className="flex items-center gap-2">
             {conversationId && (
-              <div className="relative">
+              <div ref={menuRef} className="relative z-30">
                 <button
                   type="button"
                   onClick={() => setShowMenu(value => !value)}
                   className="rounded-xl border border-white/[0.08] p-2 text-white/55 transition hover:bg-white/5 hover:text-white"
+                  aria-label="Conversation actions"
+                  aria-expanded={showMenu}
                 >
                   <MoreHorizontal size={16} />
                 </button>
                 {showMenu && currentConversation && (
-                  <div className="absolute right-0 top-11 z-30 w-48 rounded-2xl border border-white/[0.08] bg-[#0f1520]/95 p-2 shadow-2xl backdrop-blur-xl">
-                    <button type="button" onClick={() => pinMutation.mutate(currentConversation.id)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-white/70 transition hover:bg-white/5 hover:text-white">
+                  <div className="absolute right-0 top-[calc(100%+8px)] z-50 w-56 rounded-2xl border border-white/[0.08] bg-[#0f1520]/95 p-2 shadow-2xl backdrop-blur-xl">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false)
+                        pinMutation.mutate(currentConversation.id)
+                      }}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-white/70 transition hover:bg-white/5 hover:text-white"
+                    >
                       <Pin size={14} /> {currentConversation.pinned ? 'Unpin conversation' : 'Pin conversation'}
                     </button>
                     <button
                       type="button"
                       onClick={() => {
+                        setShowMenu(false)
                         const next = window.prompt('Rename conversation', currentConversation.title)
                         if (next?.trim()) renameMutation.mutate({ id: currentConversation.id, title: next.trim() })
                       }}
-                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-white/70 transition hover:bg-white/5 hover:text-white"
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-white/70 transition hover:bg-white/5 hover:text-white"
                     >
                       <FileText size={14} /> Rename conversation
                     </button>
-                    <button type="button" onClick={() => conversationId && deleteMutation.mutate(conversationId)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-red-200 transition hover:bg-red-500/10">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false)
+                        if (conversationId) deleteMutation.mutate(conversationId)
+                      }}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-red-200 transition hover:bg-red-500/10"
+                    >
                       <Trash2 size={14} /> Delete conversation
                     </button>
                   </div>
@@ -1417,6 +1568,63 @@ export function CompanyChat() {
           {contextOpen && (
             <aside className="hidden w-[320px] shrink-0 border-l border-white/[0.06] bg-[rgba(8,13,26,0.78)] p-4 backdrop-blur-xl lg:block">
               <div className="space-y-3">
+                <div className="glass-card p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="section-title mb-0 border-0 pb-0">CTO Tasks</p>
+                    {ctoTasks.length > 0 && (
+                      <span className="badge badge-indigo">{ctoTasks.length}</span>
+                    )}
+                  </div>
+
+                  {ctoTasks.length === 0 ? (
+                    <p className="text-xs text-ink-muted">
+                      No active tasks. Ask the CTO to handle something.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {ctoTasks.map((task: CTOTaskSummary) => (
+                        <div
+                          key={task.id}
+                          className="flex items-start gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2"
+                        >
+                          <div className="mt-0.5 shrink-0">
+                            {task.status === 'monitoring' && (
+                              <div className="status-dot dot-blue dot-live" />
+                            )}
+                            {task.status === 'waiting_ceo' && (
+                              <div className="status-dot dot-amber dot-live" />
+                            )}
+                            {task.status === 'complete' && (
+                              <div className="status-dot dot-emerald" />
+                            )}
+                            {task.status === 'active' && (
+                              <div className="status-dot dot-blue" />
+                            )}
+                            {task.status === 'failed' && (
+                              <div className="status-dot dot-red" />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xs font-medium text-white">
+                              {task.original_request?.slice(0, 55)}
+                            </p>
+                            {task.ceo_action_needed && (
+                              <p className="mt-0.5 text-[11px] text-amber-400">
+                                Needs you: {task.ceo_action_needed.slice(0, 40)}
+                              </p>
+                            )}
+                            {task.status === 'complete' && (
+                              <p className="mt-0.5 text-[11px] text-emerald-400">
+                                Complete
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <div className="glass-card rounded-2xl p-3">
                   <div className="section-title mb-3 border-0 pb-0">Team Status</div>
                   <div className="space-y-2.5">

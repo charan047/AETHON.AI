@@ -17,7 +17,7 @@ class GoogleSheetsTool(BaseTool):
     async def execute(self, input_data: dict, org_id: str, user_id: str) -> ToolOutput:
         return ToolOutput(
             success=False,
-            error="Google Sheets integration is not implemented yet in this phase",
+            error="Google Sheets is coming soon. It is not available in this release yet.",
         )
 
     def get_schema(self) -> dict:
@@ -33,4 +33,3 @@ class GoogleSheetsTool(BaseTool):
 
 def register_tool(registry) -> None:
     registry.register(GoogleSheetsTool())
-

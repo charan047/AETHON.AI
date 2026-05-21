@@ -127,6 +127,22 @@ async def _process_decision(
     finally:
         await redis_client.aclose()
 
+    if decision == ApprovalStatus.approved:
+        from services.cto_memory_service import cto_memory_service
+
+        context = " ".join(
+            part.strip()
+            for part in [approval.title or "", approval.description or ""]
+            if part and part.strip()
+        )
+        await cto_memory_service.record_approval_pattern(
+            org_id=org_id,
+            action_type="workflow_approval",
+            context=context,
+            was_approved=True,
+            db=db,
+        )
+
     decision_name = decision.value if hasattr(decision, "value") else str(decision)
     await _publish_decision(approval, decision_name, comment)
     await ws_manager.broadcast({"type": f"hitl_{decision_name}", "approval_id": approval.id})
@@ -235,6 +251,21 @@ async def approve_agent_request(
     approval.decision_note = payload.note
     await db.commit()
     await db.refresh(approval)
+
+    from services.cto_memory_service import cto_memory_service
+
+    context = " ".join(
+        part.strip()
+        for part in [approval.title or "", approval.description or ""]
+        if part and part.strip()
+    )
+    await cto_memory_service.record_approval_pattern(
+        org_id=ctx.org.id,
+        action_type=approval.approval_type,
+        context=context,
+        was_approved=True,
+        db=db,
+    )
 
     agent = await db.scalar(select(Agent).where(Agent.id == approval.requesting_agent_id))
     trust = await db.scalar(select(AgentTrustScore).where(AgentTrustScore.agent_id == approval.requesting_agent_id))

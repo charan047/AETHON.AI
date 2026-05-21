@@ -109,6 +109,23 @@ class MissionTaskStatus(str, enum.Enum):
     skipped = "skipped"
 
 
+class CTOTaskStatus(str, enum.Enum):
+    active = "active"
+    monitoring = "monitoring"
+    waiting_ceo = "waiting_ceo"
+    complete = "complete"
+    failed = "failed"
+
+
+class CTOMemoryType(str, enum.Enum):
+    client_preference = "client_preference"
+    agent_capability = "agent_capability"
+    approval_pattern = "approval_pattern"
+    delivery_preference = "delivery_preference"
+    workflow_learning = "workflow_learning"
+    general = "general"
+
+
 class A2ATaskStatus(str, enum.Enum):
     submitted = "submitted"
     working = "working"
@@ -457,6 +474,76 @@ class MissionTask(Base):
     completed_at = Column(DateTime, nullable=True)
 
     mission = relationship("Mission", back_populates="tasks")
+
+
+class CTOTask(Base):
+    __tablename__ = "cto_tasks"
+    __table_args__ = (
+        Index("ix_cto_tasks_org_status", "org_id", "status"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    original_request = Column(Text, nullable=False)
+    plan = Column(Text, nullable=True)
+    status = Column(
+        SAEnum(
+            CTOTaskStatus,
+            values_callable=lambda values: [item.value for item in values],
+            name="ctotaskstatus",
+        ),
+        default=CTOTaskStatus.active,
+        nullable=False,
+    )
+    mission_id = Column(String, ForeignKey("missions.id", ondelete="SET NULL"), nullable=True)
+    execution_ids = Column(JSON, default=list)
+    conversation_id = Column(String, nullable=True)
+    outcome_summary = Column(Text, nullable=True)
+    ceo_action_needed = Column(Text, nullable=True)
+    completion_notified = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class CTOMemory(Base):
+    __tablename__ = "cto_memories"
+    __table_args__ = (
+        Index("ix_cto_memories_org_type", "org_id", "memory_type"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    memory_type = Column(
+        SAEnum(
+            CTOMemoryType,
+            values_callable=lambda values: [item.value for item in values],
+            name="ctomemorytype",
+        ),
+        nullable=False,
+    )
+    content = Column(Text, nullable=False)
+    entity_name = Column(String(255), nullable=True)
+    entity_type = Column(String(50), nullable=True)
+    confidence = Column(Float, default=0.5, nullable=False)
+    observation_count = Column(Integer, default=1, nullable=False)
+    source = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class CTOAuthority(Base):
+    __tablename__ = "cto_authority"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), unique=True, nullable=False)
+    auto_approve_portal = Column(Boolean, default=True, nullable=False)
+    auto_approve_patterns = Column(Boolean, default=False, nullable=False)
+    auto_run_workflows = Column(Boolean, default=True, nullable=False)
+    auto_create_missions = Column(Boolean, default=True, nullable=False)
+    max_auto_spend_usd = Column(Float, default=0.0, nullable=False)
+    auto_approve_action_types = Column(JSON, default=list)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
 class ExecutionStep(Base):
@@ -1059,6 +1146,7 @@ class CompanyChatMessage(Base):
     content = Column(Text, nullable=False)
     actions_json = Column(JSON, default=list)
     attachments_json = Column(JSON, default=list)
+    is_proactive = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

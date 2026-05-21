@@ -1661,6 +1661,18 @@ async def approve_execution(
             source="ceo_feedback",
         )
 
+    from services.cto_memory_service import cto_memory_service
+
+    workflow_name = execution.workflow.name if execution.workflow else "workflow"
+    approval_context = f"{workflow_name}: {(execution.input_message or '')[:120]}"
+    await cto_memory_service.record_approval_pattern(
+        org_id=ctx.org.id,
+        action_type="execution_review",
+        context=approval_context,
+        was_approved=True,
+        db=db,
+    )
+
     await ws_manager.broadcast_to_channel(
         f"org:{ctx.org.id}",
         {

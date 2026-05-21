@@ -119,3 +119,63 @@ async def test_agent_reply_service_streams_typing_chunks_and_final_message(
     ).scalars().all()
     assert len(reply_messages) == 1
     assert reply_messages[0].message == "OpenAI shipped new enterprise controls."
+
+
+@pytest.mark.asyncio
+async def test_agent_reply_service_honors_exact_reply_instructions(
+    monkeypatch,
+    db,
+    test_org,
+    test_agent,
+):
+    import services.agent_reply_service as reply_service_module
+    from services.websocket_manager import ws_manager
+
+    original_message = AgentMessage(
+        org_id=test_org.id,
+        from_agent_id=None,
+        to_agent_id=test_agent.id,
+        sender_type="ceo",
+        message="Reply with exactly: DM_OK",
+        message_type="general",
+        thread_id=f"dm-{test_org.id[:8]}-{test_agent.id[:8]}",
+        priority="normal",
+    )
+    db.add(original_message)
+    await db.commit()
+    await db.refresh(original_message)
+
+    session_factory = async_sessionmaker(db.bind, expire_on_commit=False)
+    monkeypatch.setattr(reply_service_module, "AsyncSessionLocal", session_factory)
+
+    captured: list[dict] = []
+
+    async def fake_broadcast(channel: str, message: dict) -> None:
+        captured.append({"channel": channel, "message": message})
+
+    monkeypatch.setattr(ws_manager, "broadcast_to_channel", fake_broadcast)
+    monkeypatch.setattr(
+        reply_service_module.model_service,
+        "build_legacy_llm",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("LLM should not be called for exact reply instructions")),
+    )
+
+    await reply_service_module.process_ceo_message(
+        message_id=original_message.id,
+        agent_id=test_agent.id,
+        org_id=test_org.id,
+        scheduled=False,
+    )
+
+    reply_messages = (
+        await db.execute(
+            select(AgentMessage).where(
+                AgentMessage.org_id == test_org.id,
+                AgentMessage.parent_message_id == original_message.id,
+                AgentMessage.from_agent_id == test_agent.id,
+            )
+        )
+    ).scalars().all()
+    assert len(reply_messages) == 1
+    assert reply_messages[0].message == "DM_OK"
+    assert captured[-1]["message"]["content"] == "DM_OK"

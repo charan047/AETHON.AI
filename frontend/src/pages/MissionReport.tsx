@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { ChevronDown, ChevronRight, ExternalLink, FileText, FileUp, Link2 } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, ExternalLink, FileText, FileUp, Loader2 } from 'lucide-react'
 
 import { missionsApi } from '../api/client'
-import { ReportMarkdown } from '../components/mission/ReportMarkdown'
 import { GlassCard } from '../components/ui/GlassCard'
 import { MarkdownContent } from '../components/ui/MarkdownContent'
 import { Skeleton } from '../components/ui/Skeleton'
 import { extractApiError } from '../api/client'
+import { toast } from '../lib/toast'
 
 function formatDateTime(value?: string | null) {
   if (!value) return 'Unknown'
@@ -30,6 +30,7 @@ function formatDuration(startedAt?: string | null, completedAt?: string | null) 
 export function MissionReport() {
   const { id } = useParams<{ id: string }>()
   const [timelineOpen, setTimelineOpen] = useState(true)
+  const queryClient = useQueryClient()
 
   const missionQuery = useQuery({
     queryKey: ['mission', id],
@@ -47,6 +48,19 @@ export function MissionReport() {
   })
 
   const reportContent = reportQuery.data?.report || missionQuery.data?.report || ''
+  const approveReportMutation = useMutation({
+    mutationFn: () => missionsApi.approveReport(id as string),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['mission', id] }),
+        queryClient.invalidateQueries({ queryKey: ['mission-report', id] }),
+      ])
+      toast.success('Mission report approved for the client portal')
+    },
+    onError: error => {
+      toast.error(extractApiError(error))
+    },
+  })
   const sectionCount = useMemo(
     () => reportContent.split('\n').filter(line => line.trim().startsWith('## ')).length,
     [reportContent],
@@ -77,6 +91,12 @@ export function MissionReport() {
   }
 
   const mission = missionQuery.data
+  const canApproveForPortal = Boolean(
+    mission.client_id &&
+      reportContent &&
+      mission.status === 'completed' &&
+      !mission.report_delivered,
+  )
 
   const exportWord = () => {
     const blob = new Blob(
@@ -138,10 +158,39 @@ export function MissionReport() {
         </div>
 
         {!mission.report_delivered ? (
-          <div className="mt-5 rounded-2xl border border-amber-400/20 bg-amber-400/[0.08] px-4 py-3 text-sm text-amber-100">
-            Delivery pending. Share this report with the client portal once reviewed.
+          <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/[0.08] px-4 py-3 text-sm text-amber-100 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="font-medium">Approval required before this report appears in the client portal.</div>
+              <div className="mt-1 text-amber-100/75">
+                {mission.client_id
+                  ? 'Review the report, then approve it for portal delivery.'
+                  : 'Attach this mission to a client before it can be approved for portal delivery.'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => approveReportMutation.mutate()}
+              disabled={!canApproveForPortal || approveReportMutation.isPending}
+              className="btn-amber btn-sm shrink-0 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {approveReportMutation.isPending ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" />
+                  Approving...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 size={13} />
+                  Approve for Client Portal
+                </>
+              )}
+            </button>
           </div>
-        ) : null}
+        ) : (
+          <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-emerald-500/[0.08] px-4 py-3 text-sm text-emerald-100">
+            Approved for the client portal. The client can now see this mission report.
+          </div>
+        )}
       </GlassCard>
 
       <GlassCard padding="lg" className="rounded-[28px] border-white/[0.08] bg-white/[0.03]">

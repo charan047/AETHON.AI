@@ -509,13 +509,6 @@ class MissionOrchestrator:
             mission.completed_at = datetime.utcnow()
             mission.status = MissionStatus.failed if failed_tasks else MissionStatus.completed
 
-            if mission.client_id and report:
-                client = await db.scalar(
-                    select(Client).where(Client.id == mission.client_id, Client.org_id == mission.org_id)
-                )
-                if client and client.portal_enabled:
-                    mission.report_delivered = True
-
             await db.commit()
 
         await ws_manager.broadcast_to_channel(

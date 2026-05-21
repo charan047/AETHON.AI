@@ -146,6 +146,36 @@ async def test_portal_includes_recent_missions(authed_client, db, test_org):
 
 
 @pytest.mark.asyncio
+async def test_portal_excludes_unapproved_mission_reports(authed_client, db, test_org):
+    create_response = await authed_client.post("/api/clients", json={"name": "Portal Drafts", "company_name": "Nova Corp"})
+    client_id = create_response.json()["id"]
+
+    portal_response = await authed_client.post(f"/api/clients/{client_id}/portal/enable")
+    portal_token = portal_response.json()["portal_token"]
+
+    db.add(
+        Mission(
+            org_id=test_org.id,
+            client_id=client_id,
+            goal="Prepare internal weekly report",
+            title="Nova Weekly Draft",
+            status=MissionStatus.completed,
+            report="## Draft\n\nNeeds approval.",
+            report_delivered=False,
+            created_at=datetime.utcnow(),
+            completed_at=datetime.utcnow(),
+        )
+    )
+    await db.commit()
+
+    response = await authed_client.get(f"/api/portal/{portal_token}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["recent_missions"] == []
+
+
+@pytest.mark.asyncio
 async def test_assign_agent_to_invalid_or_other_org_client_returns_400(authed_client, db, test_agent):
     missing_response = await authed_client.post(
         f"/api/agents/{test_agent.id}/assign-client",

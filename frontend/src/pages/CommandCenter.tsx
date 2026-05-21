@@ -70,7 +70,8 @@ function statusBadge(status: string) {
   if (status === 'completed') return { className: 'badge-emerald', label: 'done' }
   if (status === 'running') return { className: 'badge-indigo', label: 'running' }
   if (status === 'failed') return { className: 'badge-red', label: 'failed' }
-  if (status === 'pending_review') return { className: 'badge-amber', label: 'review' }
+  if (status === 'pending_review') return { className: 'badge-amber', label: 'needs review' }
+  if (status === 'waiting_approval') return { className: 'badge-amber', label: 'waiting approval' }
   if (status === 'cancelled') return { className: 'badge-glass', label: 'stopped' }
   return { className: 'badge-glass', label: status }
 }
@@ -414,7 +415,7 @@ export function CommandCenter() {
                         onClick={() => navigate(`/executions/${item.id}`)}
                         className="data-row w-full text-left"
                       >
-                        <span className={clsx('status-dot', item.status === 'completed' ? 'dot-green' : item.status === 'running' ? 'dot-blue dot-live' : item.status === 'pending_review' ? 'dot-amber' : 'dot-red')} />
+                        <span className={clsx('status-dot', item.status === 'completed' ? 'dot-green' : item.status === 'running' ? 'dot-blue dot-live' : item.status === 'pending_review' || item.status === 'waiting_approval' ? 'dot-amber' : 'dot-red')} />
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm font-semibold text-white">{label}</div>
                           <div className="truncate text-xs text-[#8B9DBE]">

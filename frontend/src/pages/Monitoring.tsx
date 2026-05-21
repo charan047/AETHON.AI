@@ -97,7 +97,7 @@ function eventContent(event: MonitoringEvent): string {
     case 'hitl_timed_out':
       return `Approval ${event.approval_id || ''} timed out`
     case 'execution_pending_review':
-      return `Waiting for review: ${event.workflow_name || event.execution_id || 'execution'}`
+      return `Needs review: ${event.workflow_name || event.execution_id || 'execution'}`
     case 'agent_retry':
       return `${event.agent_name || event.agent || 'Agent'} retrying attempt ${event.attempt}/${event.max_retries}`
     case 'agent_retry_succeeded':
@@ -213,8 +213,8 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: 'stopped',
   running: 'running',
   pending: 'running',
-  pending_review: 'review',
-  waiting_approval: 'review',
+  pending_review: 'needs review',
+  waiting_approval: 'waiting approval',
   rejected: 'failed',
   timed_out: 'failed',
 }
@@ -347,7 +347,7 @@ export function Monitoring() {
   const filterTabs = [
     { key: 'all', label: 'All' },
     { key: 'running', label: 'Running' },
-    { key: 'review', label: 'Review' },
+    { key: 'review', label: 'Needs Review' },
     { key: 'done', label: 'Done' },
     { key: 'failed', label: 'Failed' },
   ] as const

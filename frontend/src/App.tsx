@@ -30,13 +30,13 @@ import { MarketplaceDetail } from './pages/MarketplaceDetail'
 import { PublishListing } from './pages/PublishListing'
 import { TeamManagement } from './pages/TeamManagement'
 import { OrgSettings } from './pages/OrgSettings'
+import { CTOSettings } from './pages/CTOSettings'
 import { NotificationsSettings } from './pages/NotificationsSettings'
 import { AcceptInvite } from './pages/AcceptInvite'
 import { OnboardingWizard } from './pages/OnboardingWizard'
 import { Integrations } from './pages/Integrations'
 import { CompanyChat } from './pages/CompanyChat'
 import { DirectMessages } from './pages/DirectMessages'
-import { MessagesInbox } from './pages/MessagesInbox'
 import { ModelsPage } from './pages/ModelsPage'
 import { Clients } from './pages/Clients'
 import { ClientPortal } from './pages/ClientPortal'
@@ -220,6 +220,7 @@ function DocumentTitleManager() {
     : location.pathname.startsWith('/analytics') ? 'Analytics'
     : location.pathname.startsWith('/evals') ? 'Evals'
     : location.pathname.startsWith('/settings/models') ? 'AI Models'
+    : location.pathname.startsWith('/settings/cto') ? 'CTO Settings'
     : location.pathname.startsWith('/settings/notifications') ? 'Notifications'
     : location.pathname.startsWith('/settings/team') ? 'Team Structure'
     : location.pathname.startsWith('/settings/org') || location.pathname.startsWith('/company') ? 'Settings'
@@ -319,7 +320,7 @@ function AppFrame() {
           <Route path="company-chat/:conversationId" element={<CompanyChat />} />
           <Route path="clients" element={<Clients />} />
           <Route path="clients/:clientId" element={<Clients />} />
-          <Route path="messages" element={<MessagesInbox />} />
+          <Route path="messages" element={<DirectMessages />} />
           <Route path="messages/:agentId" element={<DirectMessages />} />
           <Route path="agents" element={<Agents />} />
           <Route path="org-chart" element={<Navigate to="/settings/team" replace />} />
@@ -341,6 +342,7 @@ function AppFrame() {
           <Route path="integrations/oauth/callback" element={<Integrations />} />
           <Route path="company" element={<Navigate to="/settings/org" replace />} />
           <Route path="settings/models" element={<ModelsPage />} />
+          <Route path="settings/cto" element={<CTOSettings />} />
           <Route path="settings/notifications" element={<NotificationsSettings />} />
           <Route path="settings/external-agents" element={<ExternalAgents />} />
           <Route path="settings/team" element={<TeamManagement />} />

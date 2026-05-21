@@ -75,6 +75,8 @@ test.describe('Missions and Reports', () => {
   test('mission report renders markdown and task breakdown', async ({ page, request }) => {
     await loginHelper(page, request, uniqueEmail('mission-report'))
 
+    let approved = false
+
     await page.route('**/api/missions/mission-report-1', async route => {
       await route.fulfill({
         status: 200,
@@ -83,11 +85,42 @@ test.describe('Missions and Reports', () => {
           id: 'mission-report-1',
           title: 'Acme Launch Sprint',
           goal: 'Acme Launch Sprint',
+          client_id: 'client-1',
           client_name: 'Acme Corp',
           status: 'completed',
           created_at: '2026-05-20T10:00:00Z',
           completed_at: '2026-05-20T10:41:00Z',
-          report_delivered: false,
+          report_delivered: approved,
+          report: '# Acme Launch Sprint\n\n## Executive Summary\nLaunch ready.\n\n## Next Steps\nShip the brief.',
+          tasks: [
+            {
+              id: 'task-r1',
+              title: 'Research market',
+              status: 'completed',
+              started_at: '2026-05-20T10:00:00Z',
+              completed_at: '2026-05-20T10:15:00Z',
+              output_summary: '## Findings\nCompetition is moderate.',
+              execution_id: 'exec-1',
+            },
+          ],
+        }),
+      })
+    })
+    await page.route('**/api/missions/mission-report-1/approve-report', async route => {
+      approved = true
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'mission-report-1',
+          title: 'Acme Launch Sprint',
+          goal: 'Acme Launch Sprint',
+          client_id: 'client-1',
+          client_name: 'Acme Corp',
+          status: 'completed',
+          created_at: '2026-05-20T10:00:00Z',
+          completed_at: '2026-05-20T10:41:00Z',
+          report_delivered: true,
           report: '# Acme Launch Sprint\n\n## Executive Summary\nLaunch ready.\n\n## Next Steps\nShip the brief.',
           tasks: [
             {
@@ -124,5 +157,9 @@ test.describe('Missions and Reports', () => {
     await expect(page.getByText('TASK BREAKDOWN')).toBeVisible()
     await expect(page.getByText('Research market')).toBeVisible()
     await expect(page.getByRole('link', { name: /View execution/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: /Approve for Client Portal/i })).toBeVisible()
+
+    await page.getByRole('button', { name: /Approve for Client Portal/i }).click()
+    await expect(page.getByText(/Approved for the client portal/i)).toBeVisible()
   })
 })

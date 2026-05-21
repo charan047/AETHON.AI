@@ -1,0 +1,614 @@
+from types import SimpleNamespace
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from database.models import (
+    ApprovalStatus,
+    CTOMemory,
+    CTOMemoryType,
+    CTOTask,
+    CTOTaskStatus,
+    CTOAuthority,
+    Client,
+    CompanyChatMessage,
+    HumanApprovalRequest,
+    Mission,
+    MissionTask,
+    MissionTaskStatus,
+    Workflow,
+)
+
+
+@pytest.mark.asyncio
+async def test_persist_message_marks_proactive(db):
+    from api import company_chat as company_chat_module
+
+    await company_chat_module._persist_message(
+        conversation_id="conv-proactive",
+        org_id="org-1",
+        user_id="user-1",
+        role="system",
+        content="CTO proactive update",
+        is_proactive=True,
+        db=db,
+    )
+
+    message = await db.scalar(
+        select(CompanyChatMessage).where(CompanyChatMessage.conversation_id == "conv-proactive")
+    )
+
+    assert message is not None
+    assert message.is_proactive is True
+
+
+def test_system_prompt_includes_cto_sections():
+    from api import company_chat as company_chat_module
+
+    context = {
+        "org": SimpleNamespace(name="Aethon Labs"),
+        "profile": None,
+        "agents": [],
+        "workflows": [],
+        "executions": [],
+        "approvals": [],
+        "listings": [],
+        "eval_suites": [],
+    }
+    cto_tasks = [
+        SimpleNamespace(
+            status=SimpleNamespace(value="monitoring"),
+            original_request="Handle Acme weekly deliverables",
+            ceo_action_needed=None,
+        )
+    ]
+    cto_memories = [
+        SimpleNamespace(content="Acme always wants bullet points"),
+    ]
+    cto_authority = SimpleNamespace(
+        auto_approve_portal=True,
+        auto_run_workflows=True,
+        auto_create_missions=True,
+        auto_approve_patterns=False,
+    )
+
+    prompt = company_chat_module._system_prompt(context, cto_tasks, cto_memories, cto_authority)
+
+    assert "You are the CTO of Aethon Labs." in prompt
+    assert "TASKS I OWN:" in prompt
+    assert "[MONITORING] Handle Acme weekly deliverables" in prompt
+    assert "WHAT I REMEMBER ABOUT THIS ORG:" in prompt
+    assert "Acme always wants bullet points" in prompt
+    assert "MY AUTHORITY (do these without asking CEO):" in prompt
+    assert "portal deliveries" in prompt
+    assert "create_cto_task" in prompt
+    assert "cto_memory_add" in prompt
+    assert "cto_status" in prompt
+
+
+@pytest.mark.asyncio
+async def test_execute_action_handles_cto_actions(db, test_org, test_user):
+    from api import company_chat as company_chat_module
+
+    create_result = await company_chat_module._execute_action(
+        {
+            "type": "create_cto_task",
+            "request": "Handle Acme weekly deliverables",
+            "plan": "1. Research 2. Write 3. Deliver",
+            "conversation_id": "conv-cto",
+        },
+        test_user.id,
+        test_org.id,
+        db,
+    )
+
+    assert create_result["type"] == "create_cto_task"
+    assert create_result["success"] is True
+
+    task = await db.scalar(
+        select(CTOTask).where(CTOTask.org_id == test_org.id, CTOTask.conversation_id == "conv-cto")
+    )
+    assert task is not None
+    assert task.original_request == "Handle Acme weekly deliverables"
+
+    memory_result = await company_chat_module._execute_action(
+        {
+            "type": "cto_memory_add",
+            "memory_type": "client_preference",
+            "content": "Acme always wants bullet points",
+            "entity_name": "Acme",
+            "entity_type": "client",
+        },
+        test_user.id,
+        test_org.id,
+        db,
+    )
+
+    assert memory_result["type"] == "cto_memory_add"
+    memory = await db.scalar(select(CTOMemory).where(CTOMemory.org_id == test_org.id))
+    assert memory is not None
+    assert memory.memory_type == CTOMemoryType.client_preference
+    assert memory.entity_name == "Acme"
+
+    status_result = await company_chat_module._execute_action(
+        {"type": "cto_status"},
+        test_user.id,
+        test_org.id,
+        db,
+    )
+
+    assert status_result["type"] == "cto_status"
+    assert status_result["success"] is True
+    assert len(status_result["tasks"]) == 1
+    assert status_result["tasks"][0]["request"] == "Handle Acme weekly deliverables"
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_requires_cto_workflow_authority(db, test_org, test_user):
+    from api import company_chat as company_chat_module
+
+    workflow = Workflow(
+        org_id=test_org.id,
+        name="Weekly Brief",
+        description="Prepare the weekly brief",
+        nodes=[],
+        edges=[],
+        trigger="manual",
+        status="active",
+    )
+    authority = CTOAuthority(
+        org_id=test_org.id,
+        auto_run_workflows=False,
+    )
+    task = CTOTask(
+        org_id=test_org.id,
+        original_request="Handle Acme weekly deliverables",
+        status=CTOTaskStatus.monitoring,
+        conversation_id="conv-auth-workflow",
+    )
+    db.add_all([workflow, authority, task])
+    await db.commit()
+
+    result = await company_chat_module._execute_action(
+        {
+            "type": "run_workflow",
+            "workflow_id": workflow.id,
+            "input": "Run the weekly brief",
+            "conversation_id": "conv-auth-workflow",
+        },
+        test_user.id,
+        test_org.id,
+        db,
+    )
+
+    assert result["type"] == "error"
+    assert result["success"] is False
+    assert "not authorized" in result["label"].lower()
+
+    await db.refresh(task)
+    assert task.status == CTOTaskStatus.waiting_ceo
+    assert "workflow" in (task.ceo_action_needed or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_create_mission_requires_cto_mission_authority(db, test_org, test_user):
+    from api import company_chat as company_chat_module
+
+    authority = CTOAuthority(
+        org_id=test_org.id,
+        auto_create_missions=False,
+    )
+    task = CTOTask(
+        org_id=test_org.id,
+        original_request="Handle Acme weekly deliverables",
+        status=CTOTaskStatus.monitoring,
+        conversation_id="conv-auth-mission",
+    )
+    db.add_all([authority, task])
+    await db.commit()
+
+    result = await company_chat_module._execute_action(
+        {
+            "type": "create_mission",
+            "goal": "Handle Acme weekly deliverables",
+            "conversation_id": "conv-auth-mission",
+        },
+        test_user.id,
+        test_org.id,
+        db,
+    )
+
+    assert result["type"] == "error"
+    assert result["success"] is False
+    assert "not authorized" in result["label"].lower()
+
+    await db.refresh(task)
+    assert task.status == CTOTaskStatus.waiting_ceo
+    assert "mission" in (task.ceo_action_needed or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_respects_cto_spend_cap_with_unknown_cost(db, test_org, test_user):
+    from api import company_chat as company_chat_module
+
+    workflow = Workflow(
+        org_id=test_org.id,
+        name="Weekly Brief",
+        description="Prepare the weekly brief",
+        nodes=[],
+        edges=[],
+        trigger="manual",
+        status="active",
+    )
+    authority = CTOAuthority(
+        org_id=test_org.id,
+        auto_run_workflows=True,
+        max_auto_spend_usd=5.0,
+    )
+    task = CTOTask(
+        org_id=test_org.id,
+        original_request="Handle Acme weekly deliverables",
+        status=CTOTaskStatus.monitoring,
+        conversation_id="conv-auth-budget",
+    )
+    db.add_all([workflow, authority, task])
+    await db.commit()
+
+    result = await company_chat_module._execute_action(
+        {
+            "type": "run_workflow",
+            "workflow_id": workflow.id,
+            "input": "Run the weekly brief",
+            "conversation_id": "conv-auth-budget",
+        },
+        test_user.id,
+        test_org.id,
+        db,
+    )
+
+    assert result["type"] == "error"
+    assert result["success"] is False
+    assert "cost estimate" in result["message"].lower()
+
+    await db.refresh(task)
+    assert task.status == CTOTaskStatus.waiting_ceo
+    assert "cost" in (task.ceo_action_needed or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_bulk_approve_requires_explicit_or_learned_authority(db, test_org, test_user):
+    from api import company_chat as company_chat_module
+
+    workflow = Workflow(
+        id="wf-bulk-approve-1",
+        org_id=test_org.id,
+        name="Approve Me",
+        description="Workflow needing approval",
+        nodes=[],
+        edges=[],
+        trigger="manual",
+        status="active",
+    )
+    pending = HumanApprovalRequest(
+        workflow_id="wf-bulk-approve-1",
+        execution_id="exec-1",
+        node_id="node-1",
+        title="Review this",
+        description="Needs review",
+        status=ApprovalStatus.pending,
+        resume_token="resume-1",
+    )
+    authority = CTOAuthority(
+        org_id=test_org.id,
+        auto_approve_patterns=False,
+        auto_approve_action_types=[],
+    )
+    task = CTOTask(
+        org_id=test_org.id,
+        original_request="Clear routine approvals",
+        status=CTOTaskStatus.monitoring,
+        conversation_id="conv-auth-approve",
+    )
+    db.add_all([workflow, pending, authority, task])
+    await db.commit()
+
+    blocked = await company_chat_module._execute_action(
+        {
+            "type": "bulk_approve",
+            "conversation_id": "conv-auth-approve",
+        },
+        test_user.id,
+        test_org.id,
+        db,
+    )
+
+    assert blocked["type"] == "error"
+    assert blocked["success"] is False
+    assert "not authorized" in blocked["label"].lower()
+
+    await db.refresh(task)
+    assert task.status == CTOTaskStatus.waiting_ceo
+
+    authority.auto_approve_action_types = ["bulk_approve"]
+    task.status = CTOTaskStatus.monitoring
+    task.ceo_action_needed = None
+    pending.status = ApprovalStatus.pending
+    await db.commit()
+
+    allowed = await company_chat_module._execute_action(
+        {
+            "type": "bulk_approve",
+            "conversation_id": "conv-auth-approve",
+        },
+        test_user.id,
+        test_org.id,
+        db,
+    )
+
+    assert allowed["type"] == "bulk_approve"
+    assert allowed["success"] is True
+
+    await db.refresh(pending)
+    assert pending.status == ApprovalStatus.approved
+
+
+@pytest.mark.asyncio
+async def test_bulk_approve_allows_repeated_workflow_approval_pattern(db, test_org, test_user):
+    from api import company_chat as company_chat_module
+
+    workflow = Workflow(
+        id="wf-bulk-approve-2",
+        org_id=test_org.id,
+        name="Approve Me",
+        description="Workflow needing approval",
+        nodes=[],
+        edges=[],
+        trigger="manual",
+        status="active",
+    )
+    pending = HumanApprovalRequest(
+        workflow_id="wf-bulk-approve-2",
+        execution_id="exec-2",
+        node_id="node-2",
+        title="Review this too",
+        description="Needs review",
+        status=ApprovalStatus.pending,
+        resume_token="resume-2",
+    )
+    authority = CTOAuthority(
+        org_id=test_org.id,
+        auto_approve_patterns=True,
+        auto_approve_action_types=[],
+    )
+    learned_pattern = CTOMemory(
+        org_id=test_org.id,
+        memory_type=CTOMemoryType.approval_pattern,
+        content="CEO approved workflow approvals repeatedly",
+        entity_name="workflow_approval",
+        entity_type="action_type",
+        observation_count=3,
+        confidence=0.8,
+        source="approval",
+    )
+    db.add_all([workflow, pending, authority, learned_pattern])
+    await db.commit()
+
+    result = await company_chat_module._execute_action(
+        {"type": "bulk_approve", "conversation_id": "conv-pattern-approve"},
+        test_user.id,
+        test_org.id,
+        db,
+    )
+
+    assert result["type"] == "bulk_approve"
+    assert result["success"] is True
+
+    await db.refresh(pending)
+    assert pending.status == ApprovalStatus.approved
+
+
+@pytest.mark.asyncio
+async def test_company_chat_stream_injects_cto_context_and_links_mission(
+    monkeypatch,
+    db_engine,
+    authed_client,
+    db,
+    test_org,
+    test_user,
+):
+    from api import company_chat as company_chat_module
+    from services import cto_memory_service as cto_memory_service_module
+    from services import cto_task_service as cto_task_service_module
+    from services.goal_decomposer import goal_decomposer
+    from tasks.mission_tasks import run_mission_task
+
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(cto_task_service_module, "AsyncSessionLocal", session_factory)
+    monkeypatch.setattr(cto_memory_service_module, "AsyncSessionLocal", session_factory)
+
+    captured = {"system_prompt": None, "watch_started": False}
+
+    client = Client(org_id=test_org.id, name="Acme", company_name="Acme Corp")
+    db.add(client)
+    await db.commit()
+
+    class FakeChunk:
+        def __init__(self, content: str):
+            self.content = content
+
+    class FakeLLM:
+        async def astream(self, messages):
+            captured["system_prompt"] = messages[0].content
+            text = (
+                "On it."
+                '<action>{"type":"create_cto_task","request":"Handle Acme weekly deliverables",'
+                '"plan":"1. Maya research 2. Jordan write 3. Deliver portal"}</action>'
+                '<action>{"type":"create_mission","goal":"Handle Acme weekly deliverables","client_name":"Acme"}</action>'
+            )
+            yield FakeChunk(text)
+
+    mission = Mission(
+        org_id=test_org.id,
+        client_id=client.id,
+        goal="Handle Acme weekly deliverables",
+        title="Acme weekly deliverables",
+        created_by=test_user.id,
+    )
+    task_one = MissionTask(
+        org_id=test_org.id,
+        mission_id="pending",
+        sequence=1,
+        title="Research",
+        status=MissionTaskStatus.pending,
+    )
+
+    async def fake_create_mission(goal, org_id, client_id, created_by, db):
+        db.add(mission)
+        await db.flush()
+        task_one.mission_id = mission.id
+        db.add(task_one)
+        await db.commit()
+        await db.refresh(mission)
+        return mission
+
+    class FakeDelay:
+        def __call__(self, mission_id):
+            return mission_id
+
+    def fake_create_task(coro):
+        captured["watch_started"] = True
+        coro.close()
+        return None
+
+    monkeypatch.setattr(company_chat_module, "build_llm", lambda *args, **kwargs: FakeLLM())
+    monkeypatch.setattr(goal_decomposer, "create_mission", fake_create_mission)
+    monkeypatch.setattr(run_mission_task, "delay", FakeDelay())
+    monkeypatch.setattr(company_chat_module, "_spawn_background_task", fake_create_task)
+
+    response = await authed_client.post(
+        "/api/company/chat",
+        json={"message": "Handle Acme weekly deliverables"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-accel-buffering"] == "no"
+    assert "no-cache" in response.headers["cache-control"]
+
+    stored_task = await db.scalar(
+        select(CTOTask).where(CTOTask.org_id == test_org.id).order_by(CTOTask.created_at.desc())
+    )
+    assert stored_task is not None
+    assert stored_task.conversation_id
+    assert stored_task.mission_id == mission.id
+    assert captured["watch_started"] is True
+    assert "TASKS I OWN:" in (captured["system_prompt"] or "")
+    assert "WHAT I REMEMBER ABOUT THIS ORG:" in (captured["system_prompt"] or "")
+    assert "MY AUTHORITY (do these without asking CEO):" in (captured["system_prompt"] or "")
+
+
+@pytest.mark.asyncio
+async def test_cto_endpoints_return_tasks_memories_and_authority(
+    monkeypatch,
+    db_engine,
+    authed_client,
+    db,
+    test_org,
+):
+    from services import cto_memory_service as cto_memory_service_module
+    from services import cto_task_service as cto_task_service_module
+
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(cto_task_service_module, "AsyncSessionLocal", session_factory)
+    monkeypatch.setattr(cto_memory_service_module, "AsyncSessionLocal", session_factory)
+
+    authority = CTOAuthority(org_id=test_org.id)
+    task = CTOTask(
+        org_id=test_org.id,
+        original_request="Handle Acme weekly deliverables",
+        status=CTOTaskStatus.monitoring,
+        conversation_id="conv-1",
+    )
+    memory = CTOMemory(
+        org_id=test_org.id,
+        memory_type=CTOMemoryType.client_preference,
+        content="Acme always wants bullet points",
+        entity_name="Acme",
+        entity_type="client",
+        source="explicit",
+    )
+    db.add_all([authority, task, memory])
+    await db.commit()
+    await db.refresh(memory)
+
+    tasks_response = await authed_client.get("/api/company/company-chat/cto/tasks")
+    assert tasks_response.status_code == 200
+    assert tasks_response.json()["tasks"][0]["request"] == "Handle Acme weekly deliverables"
+
+    memories_response = await authed_client.get("/api/company/company-chat/cto/memories")
+    assert memories_response.status_code == 200
+    assert memories_response.json()["memories"][0]["content"] == "Acme always wants bullet points"
+
+    authority_response = await authed_client.get("/api/company/company-chat/cto/authority")
+    assert authority_response.status_code == 200
+    assert authority_response.json()["auto_approve_portal"] is True
+
+    patch_response = await authed_client.patch(
+        "/api/company/company-chat/cto/authority",
+        json={"auto_approve_patterns": True, "max_auto_spend_usd": 25.0},
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["auto_approve_patterns"] is True
+    assert patch_response.json()["max_auto_spend_usd"] == 25.0
+
+    delete_response = await authed_client.delete(f"/api/company/company-chat/cto/memories/{memory.id}")
+    assert delete_response.status_code == 200
+    assert delete_response.json()["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_cto_memory_create_and_task_patch_endpoints(
+    monkeypatch,
+    db_engine,
+    authed_client,
+    db,
+    test_org,
+):
+    from services import cto_memory_service as cto_memory_service_module
+    from services import cto_task_service as cto_task_service_module
+
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(cto_task_service_module, "AsyncSessionLocal", session_factory)
+    monkeypatch.setattr(cto_memory_service_module, "AsyncSessionLocal", session_factory)
+
+    task = CTOTask(
+        org_id=test_org.id,
+        original_request="Handle Acme weekly deliverables",
+        status=CTOTaskStatus.monitoring,
+        conversation_id="conv-1",
+        plan="1. Research 2. Deliver",
+    )
+    db.add(task)
+    await db.commit()
+
+    create_response = await authed_client.post(
+        "/api/company/company-chat/cto/memories",
+        json={
+            "memory_type": "client_preference",
+            "content": "Acme prefers bullet points in weekly updates",
+            "entity_name": "Acme",
+            "entity_type": "client",
+        },
+    )
+    assert create_response.status_code == 200
+    created_memory = create_response.json()["memory"]
+    assert created_memory["memory_type"] == "client_preference"
+    assert created_memory["content"] == "Acme prefers bullet points in weekly updates"
+
+    patch_response = await authed_client.patch(
+        f"/api/company/company-chat/cto/tasks/{task.id}",
+        json={"status": "complete", "outcome_summary": "Closed manually from settings"},
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["task"]["status"] == "complete"
+    assert patch_response.json()["task"]["outcome_summary"] == "Closed manually from settings"

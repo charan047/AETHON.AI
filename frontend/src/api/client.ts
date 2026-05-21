@@ -79,6 +79,9 @@ import type {
   ClientCreateInput,
   ClientDetail,
   ClientListResponse,
+  CTOAuthoritySettings,
+  CTOMemoryRecord,
+  CTOTaskSummary,
   Mission,
   MissionReportResponse,
   NotificationPreference,
@@ -261,6 +264,7 @@ export const missionsApi = {
     api.post<Mission>('/missions', data).then(r => r.data),
   retry: (id: string) => api.post<Mission>(`/missions/${id}/retry`).then(r => r.data),
   getReport: (id: string) => api.get<MissionReportResponse>(`/missions/${id}/report`).then(r => r.data),
+  approveReport: (id: string) => api.post<Mission>(`/missions/${id}/approve-report`).then(r => r.data),
   remove: (id: string) => api.delete(`/missions/${id}`).then(r => r.data),
 }
 
@@ -498,6 +502,32 @@ export const companyChatApi = {
     api.post<{ id: string; title: string }>(`/company/conversations/${id}/rename`, { title }).then(r => r.data),
   deleteConversation: (id: string) =>
     api.delete<{ deleted: boolean }>(`/company/conversations/${id}`).then(r => r.data),
+}
+
+export const ctoApi = {
+  getTasks: () =>
+    api.get<{ tasks: CTOTaskSummary[] }>('/company/company-chat/cto/tasks').then(r => r.data.tasks),
+  getMemories: () =>
+    api.get<{ memories: CTOMemoryRecord[] }>('/company/company-chat/cto/memories').then(r => r.data.memories),
+  getAuthority: () =>
+    api.get<CTOAuthoritySettings>('/company/company-chat/cto/authority').then(r => r.data),
+  updateAuthority: (data: Partial<CTOAuthoritySettings>) =>
+    api.patch<CTOAuthoritySettings>('/company/company-chat/cto/authority', data).then(r => r.data),
+  addMemory: (data: {
+    memory_type?: string
+    content: string
+    entity_name?: string | null
+    entity_type?: string | null
+  }) =>
+    api.post<{ memory: CTOMemoryRecord }>('/company/company-chat/cto/memories', data).then(r => r.data.memory),
+  deleteMemory: (id: string) =>
+    api.delete(`/company/company-chat/cto/memories/${id}`).then(r => r.data),
+  updateTask: (id: string, data: {
+    status?: string
+    outcome_summary?: string | null
+    ceo_action_needed?: string | null
+  }) =>
+    api.patch<{ task: CTOTaskSummary }>(`/company/company-chat/cto/tasks/${id}`, data).then(r => r.data.task),
 }
 
 // Business context engine

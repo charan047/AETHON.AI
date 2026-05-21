@@ -62,15 +62,9 @@ type StandupEntry = {
   agentId: string
   agentName: string
   content: string
-  status: 'waiting' | 'thinking' | 'done'
+  status: 'waiting' | 'thinking' | 'done' | 'unused'
   thoughts: string[]
   timestamp: string
-}
-
-type CeoThreadMessage = {
-  id: string
-  content: string
-  createdAt: string
 }
 
 const EMPTY_STEPS: LiveExecutionStep[] = []
@@ -262,8 +256,6 @@ function StandupThread({
   steps: LiveExecutionStep[]
   isLive: boolean
 }) {
-  const [ceoMessage, setCeoMessage] = useState('')
-  const [ceoMessages, setCeoMessages] = useState<CeoThreadMessage[]>([])
   const executionQuery = useQuery({
     queryKey: ['execution-live-meta', executionId],
     queryFn: () => executionsApi.get(executionId),
@@ -347,8 +339,16 @@ function StandupThread({
       }
     }
 
+    if (!isLive) {
+      for (const entry of byAgent.values()) {
+        if (entry.status === 'waiting') {
+          entry.status = 'unused'
+        }
+      }
+    }
+
     return Array.from(byAgent.values())
-  }, [participants, steps])
+  }, [isLive, participants, steps])
 
   const standupSummary = useMemo(() => {
     const summaries = steps
@@ -357,26 +357,21 @@ function StandupThread({
     return summaries.length ? summaries[summaries.length - 1] : null
   }, [steps])
 
-  const completedCount = agentMessages.filter(agent => agent.status === 'done').length
-
-  const sendCeoMessage = () => {
-    if (!ceoMessage.trim()) return
-    setCeoMessages(prev => [
-      ...prev,
-      {
-        id: `ceo-${Date.now()}`,
-        content: ceoMessage.trim(),
-        createdAt: new Date().toISOString(),
-      },
-    ])
-    setCeoMessage('')
-  }
+  const visibleAgentMessages = useMemo(
+    () => (isLive ? agentMessages : agentMessages.filter(agent => agent.status !== 'unused')),
+    [agentMessages, isLive],
+  )
+  const completedCount = visibleAgentMessages.filter(agent => agent.status === 'done').length
+  const configuredCount = participants.length
+  const participantSummary = isLive
+    ? `${visibleAgentMessages.length}/${configuredCount} agents active`
+    : `${visibleAgentMessages.length} of ${configuredCount} agents contributed`
 
   return (
     <div className="flex flex-col gap-0">
       <div className="mb-4 flex items-center gap-3 border-b border-white/[0.06] pb-4">
         <div className="text-sm font-medium text-white/70">
-          Standup Call · {agentMessages.length} agents
+          Standup Call · {participantSummary}
         </div>
         <div className="text-xs text-white/30">{completedCount} completed</div>
         {isLive && (
@@ -388,7 +383,7 @@ function StandupThread({
       </div>
 
       <div className="flex flex-col gap-4">
-        {agentMessages.map((agent, index) => (
+        {visibleAgentMessages.map((agent, index) => (
           <div key={`${agent.agentId}-${agent.agentName}`} className="flex gap-3">
             <div
               className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] text-sm font-semibold text-white"
@@ -423,6 +418,9 @@ function StandupThread({
                 {agent.status === 'waiting' && (
                   <span className="text-xs text-white/20">Waiting...</span>
                 )}
+                {agent.status === 'unused' && (
+                  <span className="text-xs text-white/20">Not used</span>
+                )}
               </div>
 
               {agent.status === 'done' ? (
@@ -433,30 +431,15 @@ function StandupThread({
                 <div className="rounded-2xl rounded-tl-sm border border-emerald-300/10 bg-emerald-300/[0.04] px-4 py-3 text-sm text-white/40 italic">
                   {agent.thoughts[agent.thoughts.length - 1] || 'Thinking...'}
                 </div>
+              ) : agent.status === 'unused' ? (
+                <div className="rounded-2xl rounded-tl-sm border border-white/[0.03] bg-white/[0.02] px-4 py-3 text-sm text-white/25 italic">
+                  This agent was configured in the workflow, but did not contribute output in this run.
+                </div>
               ) : (
                 <div className="rounded-2xl rounded-tl-sm border border-white/[0.03] bg-obsidian-900/30 px-4 py-3 text-sm text-white/15 italic">
                   Waiting for their turn...
                 </div>
               )}
-            </div>
-          </div>
-        ))}
-
-        {ceoMessages.map(message => (
-          <div key={message.id} className="flex justify-end gap-3">
-            <div className="min-w-0 max-w-[78%]">
-              <div className="mb-1.5 flex items-center justify-end gap-2">
-                <span className="text-xs text-white/30">
-                  {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-                <span className="text-sm font-medium text-white">CEO</span>
-              </div>
-              <div className="rounded-2xl rounded-tr-sm border border-indigo-purple/20 bg-indigo-purple/12 px-4 py-3 text-sm leading-relaxed text-white/90 whitespace-pre-wrap">
-                {message.content}
-              </div>
-            </div>
-            <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-indigo-purple/20 bg-indigo-purple/12 text-sm font-semibold text-white">
-              C
             </div>
           </div>
         ))}
@@ -478,33 +461,8 @@ function StandupThread({
       </div>
 
       {isLive && (
-        <div className="mt-5 border-t border-white/[0.06] pt-4">
-          <div className="mb-2 flex items-center gap-2 text-xs text-white/30">
-            <span>You can send a message to redirect the standup</span>
-          </div>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={ceoMessage}
-              onChange={event => setCeoMessage(event.target.value)}
-              onKeyDown={event => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  sendCeoMessage()
-                }
-              }}
-              placeholder="Ask a question or redirect..."
-              className="flex-1 rounded-xl border border-white/[0.08] bg-base-surface px-4 py-2.5 text-sm text-white placeholder:text-white/25 outline-none focus:border-indigo-400/40"
-            />
-            <button
-              type="button"
-              onClick={sendCeoMessage}
-              disabled={!ceoMessage.trim()}
-              className="rounded-xl border border-indigo-purple/20 bg-indigo-purple/12 px-4 py-2.5 text-sm text-indigo-100 disabled:opacity-40"
-            >
-              Send
-            </button>
-          </div>
+        <div className="mt-5 rounded-2xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-sm text-white/55">
+          Live standup controls are read-only right now. Use Agency Chat or the workflow controls to redirect work.
         </div>
       )}
     </div>

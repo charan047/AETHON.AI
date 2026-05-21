@@ -551,12 +551,18 @@ export function Tools() {
 
   const builtIns = catalog.filter((tool: any) => tool.category !== 'custom')
 
+  const isComingSoonTool = (name: string) => {
+    const value = name.toLowerCase()
+    return value.includes('google_sheets') || value.includes('sheet')
+  }
+
   const iconForTool = (name: string) => {
     const value = name.toLowerCase()
     if (value.includes('search') || value.includes('brave') || value.includes('serper')) return Search
     if (value.includes('gmail') || value.includes('email')) return Mail
     if (value.includes('slack')) return Slack
     if (value.includes('github')) return Github
+    if (isComingSoonTool(value)) return Table2
     if (value.includes('google') || value.includes('docs')) return FileText
     return Table2
   }
@@ -577,23 +583,26 @@ export function Tools() {
     const githubProvider = healthMap.github
 
     if (value.includes('search') || value.includes('brave') || value.includes('serper')) return searchProvider
+    if (isComingSoonTool(value)) return null
     if (value.includes('gmail') || value.includes('email') || value.includes('google')) return gmailProvider
     if (value.includes('slack')) return slackProvider
     if (value.includes('github')) return githubProvider
     return null
   }
 
-  const destinationForTool = (name: string) => {
-    const value = name.toLowerCase()
-    if (value.includes('model') || value.includes('openai') || value.includes('anthropic') || value.includes('groq')) {
-      return '/settings/models'
-    }
-    return '/integrations'
-  }
-
   const builtInDetails = (tool: any) => {
     const name = String(tool.name || tool.display_name || 'tool').toLowerCase()
     const provider = healthForTool(tool.name || tool.display_name || 'tool')
+
+    if (isComingSoonTool(name)) {
+      return {
+        title: 'Coming soon',
+        detail:
+          'Google Sheets is not available in this release yet. It stays visible here for roadmap continuity, but agents cannot use it until the backend implementation ships.',
+        actionLabel: null,
+        action: null,
+      }
+    }
 
     if (name.includes('search') || name.includes('brave') || name.includes('serper') || name.includes('news')) {
       return {
@@ -641,6 +650,27 @@ export function Tools() {
     }
   }
 
+  const builtInAvailability = (tool: any) => {
+    const toolName = String(tool.name || tool.display_name || 'tool')
+    if (isComingSoonTool(toolName)) {
+      return {
+        configured: false,
+        dotClass: 'dot-muted',
+        textClass: 'text-white/45',
+        label: 'coming soon',
+      }
+    }
+
+    const provider = healthForTool(toolName)
+    const configured = provider ? provider.status !== 'not_configured' : !tool.requires_auth
+    return {
+      configured,
+      dotClass: configured ? 'dot-green' : 'dot-amber',
+      textClass: configured ? 'text-[#8B9DBE]' : 'text-amber-300',
+      label: configured ? 'configured' : 'needs config',
+    }
+  }
+
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
@@ -668,7 +698,7 @@ export function Tools() {
           {builtIns.map((tool: any) => {
             const Icon = iconForTool(tool.name || tool.display_name || 'tool')
             const provider = healthForTool(tool.name || tool.display_name || 'tool')
-            const configured = provider ? provider.status !== 'not_configured' : !tool.requires_auth
+            const availability = builtInAvailability(tool)
             const isSelected = selectedBuiltIn?.name === tool.name
             return (
               <div
@@ -688,9 +718,9 @@ export function Tools() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2 text-xs font-mono text-[#8B9DBE]">
-                    <span className={clsx('status-dot', configured ? 'dot-green' : 'dot-amber')} />
-                    {configured ? 'configured' : 'needs config'}
+                  <div className={clsx('flex items-center gap-2 text-xs font-mono', availability.textClass)}>
+                    <span className={clsx('status-dot', availability.dotClass)} />
+                    {availability.label}
                   </div>
                   <button
                     type="button"
@@ -699,7 +729,7 @@ export function Tools() {
                     }
                     className={clsx(
                       'btn-ghost btn-sm',
-                      configured ? 'text-indigo-300 hover:text-indigo-200' : 'text-amber-300 hover:text-amber-200',
+                      availability.configured ? 'text-indigo-300 hover:text-indigo-200' : 'text-amber-300 hover:text-amber-200',
                     )}
                   >
                     {isSelected ? 'hide' : 'details'}
@@ -714,8 +744,7 @@ export function Tools() {
           <div ref={builtInDetailsRef} className="glass-card mt-4 rounded-[24px] p-5">
             {(() => {
               const Icon = iconForTool(selectedBuiltIn.name || selectedBuiltIn.display_name || 'tool')
-              const provider = healthForTool(selectedBuiltIn.name || selectedBuiltIn.display_name || 'tool')
-              const configured = provider ? provider.status !== 'not_configured' : !selectedBuiltIn.requires_auth
+              const availability = builtInAvailability(selectedBuiltIn)
               const details = builtInDetails(selectedBuiltIn)
               return (
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -733,8 +762,8 @@ export function Tools() {
                     </div>
                     <p className="mt-4 text-sm text-[#8B9DBE]">{details.detail}</p>
                     <div className="mt-4 flex flex-wrap items-center gap-2">
-                      <span className={clsx('badge', configured ? 'badge-emerald' : 'badge-amber')}>
-                        {configured ? 'configured' : 'needs config'}
+                      <span className={clsx('badge', availability.label === 'coming soon' ? 'badge-glass' : availability.configured ? 'badge-emerald' : 'badge-amber')}>
+                        {availability.label}
                       </span>
                       <span className="badge-glass">{selectedBuiltIn.category}</span>
                       {selectedBuiltIn.auth_type ? <span className="badge-glass">{selectedBuiltIn.auth_type}</span> : null}

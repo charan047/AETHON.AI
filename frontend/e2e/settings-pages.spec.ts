@@ -3,6 +3,126 @@ import { expect, test } from '@playwright/test'
 import { loginHelper, uniqueEmail } from './helpers'
 
 test.describe('Settings pages', () => {
+  test('cto settings saves authority, adds memory, and marks a task complete', async ({ page, request }) => {
+    await loginHelper(page, request, uniqueEmail('settings-cto'))
+
+    let authority = {
+      auto_approve_portal: true,
+      auto_approve_patterns: false,
+      auto_run_workflows: true,
+      auto_create_missions: true,
+      max_auto_spend_usd: 0,
+      auto_approve_action_types: [],
+    }
+    let memories = [
+      {
+        id: 'memory-1',
+        memory_type: 'client_preference',
+        content: 'Acme always wants bullet points',
+        entity_name: 'Acme',
+        entity_type: 'client',
+      },
+    ]
+    let tasks = [
+      {
+        id: 'task-1',
+        request: 'Handle Acme weekly deliverables',
+        plan: '1. Maya research 2. Jordan write 3. Portal delivery',
+        status: 'monitoring',
+        conversation_id: 'conv-1',
+        ceo_action_needed: null,
+        outcome_summary: null,
+      },
+    ]
+
+    await page.route('**/api/company/company-chat/cto/authority', async route => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(authority) })
+        return
+      }
+      if (route.request().method() === 'PATCH') {
+        authority = { ...authority, ...(route.request().postDataJSON() as Record<string, unknown>) } as typeof authority
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(authority) })
+        return
+      }
+      await route.continue()
+    })
+
+    await page.route('**/api/company/company-chat/cto/memories', async route => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ memories }) })
+        return
+      }
+      if (route.request().method() === 'POST') {
+        const body = route.request().postDataJSON() as Record<string, string>
+        const memory = {
+          id: `memory-${memories.length + 1}`,
+          memory_type: body.memory_type || 'general',
+          content: body.content,
+          entity_name: body.entity_name || null,
+          entity_type: body.entity_type || null,
+        }
+        memories = [...memories, memory]
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ memory }) })
+        return
+      }
+      await route.continue()
+    })
+
+    await page.route('**/api/company/company-chat/cto/memories/*', async route => {
+      if (route.request().method() === 'DELETE') {
+        const id = route.request().url().split('/').pop()
+        memories = memories.filter(memory => memory.id !== id)
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ deleted: true }) })
+        return
+      }
+      await route.continue()
+    })
+
+    await page.route('**/api/company/company-chat/cto/tasks', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ tasks }) })
+    })
+
+    await page.route('**/api/company/company-chat/cto/tasks/*', async route => {
+      if (route.request().method() === 'PATCH') {
+        const id = route.request().url().split('/').pop()
+        const body = route.request().postDataJSON() as Record<string, string>
+        tasks = tasks.map(task =>
+          task.id === id
+            ? {
+                ...task,
+                status: body.status || task.status,
+                outcome_summary: body.outcome_summary || task.outcome_summary,
+              }
+            : task,
+        )
+        const task = tasks.find(item => item.id === id)
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ task }) })
+        return
+      }
+      await route.continue()
+    })
+
+    await page.goto('/settings/cto')
+
+    await expect(page.getByRole('heading', { name: 'CTO Settings' })).toBeVisible()
+    await expect(page.getByText('Acme always wants bullet points')).toBeVisible()
+    await expect(page.getByText('Handle Acme weekly deliverables')).toBeVisible()
+
+    await page.getByRole('switch', { name: /Learn from approval patterns/i }).click()
+    await page.getByRole('button', { name: /Save Authority/i }).click()
+    await expect(page.getByText('CTO authority saved')).toBeVisible()
+
+    await page.getByLabel('The CTO should know that...').fill('Beta Corp prefers portal delivery')
+    await page.getByRole('button', { name: /^Save$/ }).click()
+    await expect(page.getByText('CTO memory saved')).toBeVisible()
+    await expect(page.getByText('Beta Corp prefers portal delivery')).toBeVisible()
+
+    await page.getByRole('button', { name: /Mark Complete/i }).click()
+    await expect(page.getByText('CTO task updated')).toBeVisible()
+    await expect(page.getByText('complete', { exact: true })).toBeVisible()
+  })
+
   test('organization settings can save updated org details', async ({ page, request }) => {
     const auth = await loginHelper(page, request, uniqueEmail('settings-org'))
     let orgName = 'Updated QA Org'

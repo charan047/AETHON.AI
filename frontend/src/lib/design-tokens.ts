@@ -56,7 +56,7 @@ export const STEP_CONFIG = {
     textColor: '#ef4444',
   },
   human_input_required: {
-    label: 'Waiting for approval',
+    label: 'Needs approval',
     icon: '…',
     borderColor: '#f59e0b',
     bgColor: 'rgba(245,158,11,0.10)',
@@ -76,7 +76,7 @@ export type StepType = keyof typeof STEP_CONFIG
 export const EXECUTION_STATUS_CONFIG = {
   queued: { label: 'Queued', color: 'rgba(255,255,255,0.35)', pulse: false },
   running: { label: 'Running', color: '#6366f1', pulse: true },
-  pending_review: { label: 'Pending Review', color: '#f59e0b', pulse: true },
+  pending_review: { label: 'Needs Review', color: '#f59e0b', pulse: true },
   completed: { label: 'Completed', color: '#10b981', pulse: false },
   cancelled: { label: 'Cancelled', color: 'rgba(255,255,255,0.35)', pulse: false },
   timed_out: { label: 'Timed Out', color: '#ef4444', pulse: false },

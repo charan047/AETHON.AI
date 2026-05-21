@@ -412,6 +412,7 @@ async def get_client_portal(
                 Mission.org_id == client.org_id,
                 Mission.client_id == client.id,
                 Mission.status == MissionStatus.completed,
+                Mission.report_delivered.is_(True),
             )
             .order_by(Mission.completed_at.desc().nullslast(), Mission.created_at.desc())
             .limit(5)

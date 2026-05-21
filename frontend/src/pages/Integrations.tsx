@@ -88,6 +88,10 @@ function providerStatusSummary(key: keyof ProviderHealth, status: ProviderStatus
   return `${label}: Not configured`
 }
 
+function canTestIntegration(type: string) {
+  return ['github', 'gmail', 'slack', 'email_smtp'].includes(type)
+}
+
 export function Integrations() {
   const qc = useQueryClient()
   const location = useLocation()
@@ -260,9 +264,13 @@ export function Integrations() {
           Last tested: {integration.last_tested_at ? new Date(integration.last_tested_at).toLocaleString() : 'Never'}
         </div>
         <div className="flex gap-2">
-          <button className="btn-secondary px-3 text-xs" onClick={() => testIntegration.mutate(integration.id)}>
-            <RefreshCw size={13} /> Test
-          </button>
+          {canTestIntegration(integration.integration_type) ? (
+            <button className="btn-secondary px-3 text-xs" onClick={() => testIntegration.mutate(integration.id)}>
+              <RefreshCw size={13} /> Test
+            </button>
+          ) : (
+            <span className="badge-glass px-3 text-xs">testing soon</span>
+          )}
           <button className="btn-danger px-3 text-xs" onClick={() => deleteIntegration.mutate(integration.id)}>
             <Trash2 size={13} />
           </button>
@@ -321,9 +329,13 @@ export function Integrations() {
           </button>
         ) : (
           <div className="flex gap-2">
-            <button className="btn-secondary btn-sm" onClick={() => testIntegration.mutate(integration.id)}>
-              Test
-            </button>
+            {canTestIntegration(integration.integration_type) ? (
+              <button className="btn-secondary btn-sm" onClick={() => testIntegration.mutate(integration.id)}>
+                Test
+              </button>
+            ) : (
+              <span className="badge-glass btn-sm px-3">testing soon</span>
+            )}
             <button className="btn-ghost btn-sm" onClick={() => deleteIntegration.mutate(integration.id)}>
               Disconnect
             </button>

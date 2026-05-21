@@ -1277,6 +1277,46 @@ export interface WsEvent {
   [key: string]: unknown
 }
 
+export interface CTOTaskSummary {
+  id: string
+  org_id?: string
+  request?: string
+  original_request: string
+  plan?: string | null
+  status: 'active' | 'monitoring' | 'waiting_ceo' | 'complete' | 'failed'
+  mission_id?: string | null
+  execution_ids?: string[]
+  conversation_id?: string | null
+  outcome_summary?: string | null
+  ceo_action_needed?: string | null
+  completion_notified?: boolean
+  created_at?: string | null
+  updated_at?: string | null
+  completed_at?: string | null
+}
+
+export interface CTOMemoryRecord {
+  id: string
+  memory_type: string
+  content: string
+  entity_name?: string | null
+  entity_type?: string | null
+  confidence?: number
+  observation_count?: number
+  source?: string | null
+  created_at?: string | null
+  last_seen_at?: string | null
+}
+
+export interface CTOAuthoritySettings {
+  auto_approve_portal: boolean
+  auto_approve_patterns: boolean
+  auto_run_workflows: boolean
+  auto_create_missions: boolean
+  max_auto_spend_usd: number
+  auto_approve_action_types: string[]
+}
+
 export interface InboxMessage {
   id: string
   org_id?: string | null
@@ -1416,6 +1456,7 @@ export interface CompanyConversationMessage {
   actions?: ChatActionResult[]
   attachments?: Array<Record<string, unknown>>
   created_at?: string | null
+  is_proactive?: boolean
 }
 
 export interface CompanyConversationDetailResponse {

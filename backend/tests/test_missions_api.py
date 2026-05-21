@@ -1,7 +1,9 @@
+from datetime import datetime
+
 import pytest
 from sqlalchemy import select
 
-from database.models import Mission, MissionTask
+from database.models import Client, Mission, MissionStatus, MissionTask
 
 
 @pytest.mark.asyncio
@@ -378,3 +380,44 @@ async def test_retry_mission_creates_new_mission(authed_client, db, test_agent, 
     assert retry_payload["goal"] == first_payload["goal"]
     assert retry_payload["client_id"] == first_payload["client_id"]
     assert retry_payload["tasks"][0]["agent_id"] == test_agent.id
+
+
+@pytest.mark.asyncio
+async def test_approve_mission_report_marks_it_delivered_and_enables_portal(authed_client, db, test_org):
+    client = Client(
+        org_id=test_org.id,
+        name="Acme",
+        company_name="Acme Corp",
+        portal_enabled=False,
+        portal_token=None,
+    )
+    db.add(client)
+    await db.commit()
+    await db.refresh(client)
+
+    mission = Mission(
+        org_id=test_org.id,
+        client_id=client.id,
+        goal="Create client-ready launch brief",
+        title="Acme Launch Brief",
+        status=MissionStatus.completed,
+        report="## Launch Brief\n\nReady for review.",
+        report_delivered=False,
+        created_at=datetime.utcnow(),
+        completed_at=datetime.utcnow(),
+    )
+    db.add(mission)
+    await db.commit()
+    await db.refresh(mission)
+
+    response = await authed_client.post(f"/api/missions/{mission.id}/approve-report")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["report_delivered"] is True
+
+    await db.refresh(mission)
+    await db.refresh(client)
+    assert mission.report_delivered is True
+    assert client.portal_enabled is True
+    assert client.portal_token is not None

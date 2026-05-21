@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -20,6 +21,11 @@ from database.models import (
     Agent,
     ApprovalStatus,
     Client,
+    CTOAuthority,
+    CTOMemory,
+    CTOMemoryType,
+    CTOTask,
+    CTOTaskStatus,
     CompanyChatMessage,
     CompanyConversation,
     CompanyProfile,
@@ -37,6 +43,7 @@ from database.models import (
     Workflow,
 )
 from runtime.agent_runner import _extract_text, build_llm
+from services.cto_service import evaluate_action_authority, get_or_create_authority
 from services.session_store import SessionStore
 from services.versioning_service import VersioningService
 from services.websocket_manager import ws_manager
@@ -86,6 +93,9 @@ SUPPORTED_ACTION_TYPES = {
     "set_agent_goal",
     "explain_execution",
     "company_insight",
+    "create_cto_task",
+    "cto_memory_add",
+    "cto_status",
 }
 versioning_service = VersioningService()
 
@@ -100,8 +110,34 @@ class ConversationRenameRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
 
 
+class CTOAuthorityUpdateRequest(BaseModel):
+    auto_approve_portal: bool | None = None
+    auto_approve_patterns: bool | None = None
+    auto_run_workflows: bool | None = None
+    auto_create_missions: bool | None = None
+    max_auto_spend_usd: float | None = None
+    auto_approve_action_types: list[str] | None = None
+
+
+class CTOMemoryCreateRequest(BaseModel):
+    memory_type: CTOMemoryType = CTOMemoryType.general
+    content: str = Field(..., min_length=1, max_length=1000)
+    entity_name: str | None = Field(default=None, max_length=255)
+    entity_type: str | None = Field(default=None, max_length=50)
+
+
+class CTOTaskUpdateRequest(BaseModel):
+    status: CTOTaskStatus | None = None
+    outcome_summary: str | None = None
+    ceo_action_needed: str | None = None
+
+
 def _json_line(payload: dict) -> str:
     return json.dumps(payload, default=str) + "\n"
+
+
+def _spawn_background_task(coro):
+    return asyncio.create_task(coro)
 
 
 def _conversation_session_id(user_id: str, conversation_id: str) -> str:
@@ -185,6 +221,7 @@ async def _persist_message(
     content: str,
     actions: list[dict] | None = None,
     attachments: list[dict] | None = None,
+    is_proactive: bool = False,
     db: AsyncSession | None = None,
 ) -> None:
     if db is None:
@@ -221,6 +258,7 @@ async def _persist_message(
                 content=content,
                 actions_json=actions or [],
                 attachments_json=attachments or [],
+                is_proactive=is_proactive,
                 created_at=now,
             )
         )
@@ -260,6 +298,7 @@ async def _conversation_history(
                 "content": msg.content,
                 "actions": msg.actions_json or [],
                 "attachments": msg.attachments_json or [],
+                "is_proactive": bool(getattr(msg, "is_proactive", False)),
                 "created_at": msg.created_at.isoformat() if msg.created_at else None,
             }
             for msg in result.scalars().all()
@@ -339,6 +378,7 @@ def _attachment_context(attachments: list[dict[str, Any]]) -> str:
 
 
 async def _load_company_context(user_id: str, db: AsyncSession, org_id: str) -> dict:
+    authority = await get_or_create_authority(db, org_id)
     profile = (
         await db.execute(
             select(CompanyProfile).where(
@@ -389,6 +429,7 @@ async def _load_company_context(user_id: str, db: AsyncSession, org_id: str) -> 
     return {
         "org": org,
         "profile": profile,
+        "authority": authority,
         "agents": agents,
         "workflows": workflows,
         "executions": executions,
@@ -398,7 +439,12 @@ async def _load_company_context(user_id: str, db: AsyncSession, org_id: str) -> 
     }
 
 
-def _system_prompt(context: dict) -> str:
+def _system_prompt(
+    context: dict,
+    cto_tasks: list | None = None,
+    cto_memories: list | None = None,
+    cto_authority: object | None = None,
+) -> str:
     org = context["org"]
     profile = context["profile"]
     company_name = (profile.company_name if profile else None) or (org.name if org else None) or "Aethon Company"
@@ -446,10 +492,64 @@ def _system_prompt(context: dict) -> str:
             company_facts.append(f"Goals: {profile.goals}")
     company_context = "\n".join(company_facts) or "No structured company profile yet."
 
-    return f"""You are the Chief of Staff for {company_name}. You are the command layer for this AI company.
+    if cto_authority is None:
+        cto_authority = context.get("authority")
+
+    if cto_tasks:
+        task_lines = []
+        for task in cto_tasks:
+            task_lines.append(
+                f"- [{task.status.value.upper()}] {task.original_request[:80]}"
+                + (f" (needs CEO: {task.ceo_action_needed})" if getattr(task, "ceo_action_needed", None) else "")
+            )
+        cto_task_lines = "\n".join(task_lines)
+    else:
+        cto_task_lines = "No active tasks."
+
+    if cto_memories:
+        memory_lines = "\n".join(f"- {memory.content}" for memory in cto_memories[:8])
+    else:
+        memory_lines = "No org-specific learnings yet."
+
+    if cto_authority:
+        perms = []
+        if getattr(cto_authority, "auto_approve_portal", False):
+            perms.append("portal deliveries")
+        if getattr(cto_authority, "auto_run_workflows", False):
+            perms.append("running workflows")
+        if getattr(cto_authority, "auto_create_missions", False):
+            perms.append("creating missions")
+        if getattr(cto_authority, "auto_approve_patterns", False):
+            perms.append("repeated approval patterns")
+        authority_lines = ", ".join(perms) if perms else "standard actions only"
+    else:
+        authority_lines = "portal deliveries, running workflows, creating missions"
+
+    return f"""You are the CTO of {company_name}. You are a full executive operator
+with delegated authority to run this agency.
+
+Your operating style:
+- Take ownership of goals, not just tasks. When CEO says "handle X",
+  you own it until it is done — not just until you dispatch it.
+- You coordinate agents, run workflows, and manage missions on behalf
+  of the CEO. You act, then report. You don't ask permission for things
+  you're authorized to do (see AUTHORITY below).
+- When you dispatch work, track it. Follow up proactively.
+- You message the CEO when something completes or needs their attention.
+  Don't wait to be asked.
+- Be direct and executive-level. No filler. No "I'd be happy to..."
 
 COMPANY CONTEXT:
 {company_context}
+
+TASKS I OWN:
+{cto_task_lines}
+
+WHAT I REMEMBER ABOUT THIS ORG:
+{memory_lines}
+
+MY AUTHORITY (do these without asking CEO):
+{authority_lines}
 
 AGENT TEAM (use persona_name when talking about agents):
 {agent_lines}
@@ -499,6 +599,9 @@ Available actions. Only use these exact action types, and never invent new ones:
 <action>{{"type": "company_insight", "insight_type": "priorities|risks|opportunities|bottlenecks"}}</action>
 <action>{{"type": "install_marketplace", "slug": "market-researcher"}}</action>
 <action>{{"type": "analyze_file", "filename": "q1.csv", "content": "..."}}</action>
+<action>{{"type": "create_cto_task", "request": "Handle Acme weekly deliverables", "plan": "1. Maya research 2. Jordan write 3. Deliver portal"}}</action>
+<action>{{"type": "cto_memory_add", "memory_type": "client_preference", "content": "Acme always wants bullet points", "entity_name": "Acme"}}</action>
+<action>{{"type": "cto_status"}}</action>
 
 For status updates, analysis, summaries, or questions, answer in normal text without an action tag.
 """
@@ -521,6 +624,34 @@ def _normalize_action(action: dict) -> dict:
     return normalized
 
 
+async def _deny_cto_action(
+    action_type: str,
+    *,
+    reason: str,
+    action: dict,
+    org_id: str,
+    db: AsyncSession,
+) -> dict:
+    from services.cto_task_service import cto_task_service
+
+    conversation_id = str(action.get("conversation_id") or "").strip()
+    if conversation_id:
+        await cto_task_service.mark_conversation_task_waiting_ceo(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            reason=reason,
+            db=db,
+        )
+    return {
+        "type": "error",
+        "success": False,
+        "label": f"CTO not authorized for {action_type.replace('_', ' ')}",
+        "message": reason,
+        "blocked_action": action_type,
+        "needs_ceo": True,
+    }
+
+
 async def _execute_action(action: dict, user_id: str, org_id: str, db: AsyncSession) -> dict:
     action = _normalize_action(action)
     action_type = action.get("type")
@@ -538,6 +669,22 @@ async def _execute_action(action: dict, user_id: str, org_id: str, db: AsyncSess
         workflow = await db.scalar(select(Workflow).where(Workflow.id == workflow_id, Workflow.org_id == org_id))
         if not workflow:
             return {"type": "error", "success": False, "label": "Workflow not found", "message": "Workflow not found"}
+
+        allowed, denial_reason = await evaluate_action_authority(
+            db,
+            org_id,
+            action_type,
+            workflow_id=str(workflow.id),
+            estimated_cost_usd=action.get("estimated_cost_usd"),
+        )
+        if not allowed:
+            return await _deny_cto_action(
+                action_type,
+                reason=denial_reason or "CEO approval required.",
+                action=action,
+                org_id=org_id,
+                db=db,
+            )
 
         execution = Execution(
             id=str(uuid4()),
@@ -603,6 +750,22 @@ async def _execute_action(action: dict, user_id: str, org_id: str, db: AsyncSess
                     f"Go to /workflows to create one, or install from the marketplace."
                 ),
             }
+
+        allowed, denial_reason = await evaluate_action_authority(
+            db,
+            org_id,
+            "run_workflow",
+            workflow_id=str(workflow.id),
+            estimated_cost_usd=action.get("estimated_cost_usd"),
+        )
+        if not allowed:
+            return await _deny_cto_action(
+                "run_workflow",
+                reason=denial_reason or "CEO approval required.",
+                action=action,
+                org_id=org_id,
+                db=db,
+            )
 
         execution = Execution(
             id=str(uuid4()),
@@ -670,6 +833,21 @@ async def _execute_action(action: dict, user_id: str, org_id: str, db: AsyncSess
         return {"type": "resume_all_agents", "success": True, "label": f"Resumed all {count} agents"}
 
     if action_type == "bulk_approve":
+        allowed, denial_reason = await evaluate_action_authority(
+            db,
+            org_id,
+            action_type,
+            estimated_cost_usd=0.0,
+        )
+        if not allowed:
+            return await _deny_cto_action(
+                action_type,
+                reason=denial_reason or "CEO approval required.",
+                action=action,
+                org_id=org_id,
+                db=db,
+            )
+
         pending = (
             await db.execute(
                 select(HumanApprovalRequest)
@@ -792,6 +970,21 @@ async def _execute_action(action: dict, user_id: str, org_id: str, db: AsyncSess
                 "label": "Mission goal missing",
                 "message": "I need a goal to create a mission.",
             }
+
+        allowed, denial_reason = await evaluate_action_authority(
+            db,
+            org_id,
+            action_type,
+            estimated_cost_usd=action.get("estimated_cost_usd"),
+        )
+        if not allowed:
+            return await _deny_cto_action(
+                action_type,
+                reason=denial_reason or "CEO approval required.",
+                action=action,
+                org_id=org_id,
+                db=db,
+            )
 
         client_id = None
         if client_ref:
@@ -1177,7 +1370,114 @@ Write 2-3 plain English sentences:
         page = action.get("page", "")
         return {"type": "navigate", "success": True, "label": f"Navigating to {str(page).title()}", "page": page}
 
+    if action_type == "create_cto_task":
+        from services.cto_task_service import cto_task_service
+
+        request_text = action.get("request") or ""
+        plan = action.get("plan")
+        task = await cto_task_service.create_task(
+            org_id=org_id,
+            request=request_text,
+            plan=plan,
+            conversation_id=action.get("conversation_id", ""),
+            db=db,
+        )
+        return {
+            "type": "create_cto_task",
+            "success": True,
+            "task_id": str(task.id),
+            "label": f"CTO task created: {request_text[:60]}",
+            "message": f"I've taken ownership of this. Tracking as task {task.id[:8]}.",
+        }
+
+    if action_type == "cto_memory_add":
+        from services.cto_memory_service import cto_memory_service, CTOMemoryType
+
+        mem_type_str = action.get("memory_type", "general")
+        try:
+            mem_type = CTOMemoryType(mem_type_str)
+        except ValueError:
+            mem_type = CTOMemoryType.general
+        await cto_memory_service.add(
+            org_id=org_id,
+            memory_type=mem_type,
+            content=action.get("content", ""),
+            entity_name=action.get("entity_name"),
+            entity_type=action.get("entity_type"),
+            source="cto_explicit",
+            db=db,
+        )
+        return {
+            "type": "cto_memory_add",
+            "success": True,
+            "label": "Learned: " + action.get("content", "")[:60],
+        }
+
+    if action_type == "cto_status":
+        from services.cto_task_service import cto_task_service
+
+        tasks = await cto_task_service.get_active_tasks(org_id, db=db)
+        if not tasks:
+            lines = ["No active tasks right now."]
+        else:
+            lines = [f"[{task.status.value.upper()}] {task.original_request[:80]}" for task in tasks]
+        return {
+            "type": "cto_status",
+            "success": True,
+            "tasks": [{"id": str(task.id), "request": task.original_request, "status": task.status.value} for task in tasks],
+            "label": f"CTO has {len(tasks)} active task(s)",
+            "message": "\n".join(lines),
+        }
+
     return {"type": "error", "success": False, "label": "Action failed", "message": f"Unsupported action: {action_type}"}
+
+
+def _serialize_cto_task(task: CTOTask) -> dict:
+    return {
+        "id": task.id,
+        "original_request": task.original_request,
+        "request": task.original_request,
+        "plan": task.plan,
+        "status": task.status.value if hasattr(task.status, "value") else task.status,
+        "mission_id": task.mission_id,
+        "execution_ids": task.execution_ids or [],
+        "conversation_id": task.conversation_id,
+        "outcome_summary": task.outcome_summary,
+        "ceo_action_needed": task.ceo_action_needed,
+        "completion_notified": bool(task.completion_notified),
+        "created_at": task.created_at,
+        "updated_at": task.updated_at,
+        "completed_at": task.completed_at,
+    }
+
+
+def _serialize_cto_memory(memory: CTOMemory) -> dict:
+    return {
+        "id": memory.id,
+        "memory_type": memory.memory_type.value if hasattr(memory.memory_type, "value") else memory.memory_type,
+        "content": memory.content,
+        "entity_name": memory.entity_name,
+        "entity_type": memory.entity_type,
+        "confidence": memory.confidence,
+        "observation_count": memory.observation_count,
+        "source": memory.source,
+        "created_at": memory.created_at,
+        "last_seen_at": memory.last_seen_at,
+    }
+
+
+def _serialize_cto_authority(authority: CTOAuthority) -> dict:
+    return {
+        "id": authority.id,
+        "org_id": authority.org_id,
+        "auto_approve_portal": authority.auto_approve_portal,
+        "auto_approve_patterns": authority.auto_approve_patterns,
+        "auto_run_workflows": authority.auto_run_workflows,
+        "auto_create_missions": authority.auto_create_missions,
+        "max_auto_spend_usd": authority.max_auto_spend_usd,
+        "auto_approve_action_types": authority.auto_approve_action_types or [],
+        "updated_at": authority.updated_at,
+    }
 
 
 @router.get("/conversations")
@@ -1351,6 +1651,128 @@ async def get_company_chat_history(
     return {"conversation_id": conversation_id, "messages": messages}
 
 
+@router.get("/company-chat/cto/tasks")
+async def get_cto_tasks(
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    from services.cto_task_service import cto_task_service
+
+    tasks = await cto_task_service.get_active_tasks(ctx.org.id, db=db)
+    return {"tasks": [_serialize_cto_task(task) for task in tasks]}
+
+
+@router.get("/company-chat/cto/memories")
+async def get_cto_memories(
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    from services.cto_memory_service import cto_memory_service
+
+    memories = await cto_memory_service.get_all(ctx.org.id)
+    return {"memories": [_serialize_cto_memory(memory) for memory in memories]}
+
+
+@router.post("/company-chat/cto/memories")
+async def create_cto_memory(
+    payload: CTOMemoryCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    from services.cto_memory_service import cto_memory_service
+
+    memory = await cto_memory_service.add(
+        org_id=ctx.org.id,
+        memory_type=payload.memory_type,
+        content=payload.content.strip(),
+        entity_name=payload.entity_name.strip() if payload.entity_name else None,
+        entity_type=payload.entity_type.strip() if payload.entity_type else None,
+        source="manual",
+        db=db,
+    )
+    return {"memory": _serialize_cto_memory(memory)}
+
+
+@router.delete("/company-chat/cto/memories/{memory_id}")
+async def delete_cto_memory(
+    memory_id: str,
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    from services.cto_memory_service import cto_memory_service
+
+    await cto_memory_service.delete(memory_id, ctx.org.id)
+    return {"deleted": True}
+
+
+@router.get("/company-chat/cto/authority")
+async def get_cto_authority(
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    from services.cto_service import get_or_create_authority
+
+    authority = await get_or_create_authority(db, ctx.org.id)
+    return _serialize_cto_authority(authority)
+
+
+@router.patch("/company-chat/cto/authority")
+async def patch_cto_authority(
+    payload: CTOAuthorityUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    from services.cto_service import get_or_create_authority
+
+    authority = await get_or_create_authority(db, ctx.org.id)
+    for field in (
+        "auto_approve_portal",
+        "auto_approve_patterns",
+        "auto_run_workflows",
+        "auto_create_missions",
+        "max_auto_spend_usd",
+        "auto_approve_action_types",
+    ):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(authority, field, value)
+    await db.commit()
+    await db.refresh(authority)
+    return _serialize_cto_authority(authority)
+
+
+@router.patch("/company-chat/cto/tasks/{task_id}")
+async def patch_cto_task(
+    task_id: str,
+    payload: CTOTaskUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    task = await db.scalar(
+        select(CTOTask).where(
+            CTOTask.id == task_id,
+            CTOTask.org_id == ctx.org.id,
+        )
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="CTO task not found")
+
+    if payload.status is not None:
+        task.status = payload.status
+        if payload.status == CTOTaskStatus.complete and not task.completed_at:
+            task.completed_at = datetime.utcnow()
+    if payload.outcome_summary is not None:
+        task.outcome_summary = payload.outcome_summary.strip() or None
+    if payload.ceo_action_needed is not None:
+        task.ceo_action_needed = payload.ceo_action_needed.strip() or None
+        if task.ceo_action_needed:
+            task.status = CTOTaskStatus.waiting_ceo
+
+    await db.commit()
+    await db.refresh(task)
+    return {"task": _serialize_cto_task(task)}
+
+
 @router.post("/chat")
 async def company_chat(
     payload: CompanyChatRequest,
@@ -1365,6 +1787,9 @@ async def company_chat(
     user_message = payload.message + attachment_context
 
     async def stream():
+        from services.cto_memory_service import cto_memory_service
+        from services.cto_task_service import cto_task_service
+
         yield _json_line({"type": "meta", "conversation_id": conversation_id})
         await _store_conversation(
             current_user.id,
@@ -1383,7 +1808,14 @@ async def company_chat(
             db=db,
         )
 
-        messages = [SystemMessage(content=_system_prompt(context))]
+        cto_tasks = await cto_task_service.get_active_tasks(ctx.org.id, db=db)
+        cto_memories = await cto_memory_service.get_relevant(ctx.org.id, payload.message, db)
+        cto_authority = await db.scalar(
+            select(CTOAuthority).where(CTOAuthority.org_id == ctx.org.id)
+        )
+        await cto_memory_service.extract_from_message(ctx.org.id, payload.message, db)
+
+        messages = [SystemMessage(content=_system_prompt(context, cto_tasks, cto_memories, cto_authority))]
         for item in history:
             role = item.get("role")
             content = item.get("content", "")
@@ -1426,10 +1858,52 @@ async def company_chat(
         )
 
         action_summaries = []
+        action_results = []
         for action in actions:
+            action.setdefault("conversation_id", conversation_id)
             result = await _execute_action(action, current_user.id, ctx.org.id, db)
+            action_results.append(result)
             action_summaries.append(result.get("label") or result.get("message") or str(result))
             yield _json_line({"type": "action", "action": result})
+        mission_id = next((result.get("mission_id") for result in action_results if result.get("type") == "mission_created"), None)
+        execution_ids = [
+            result.get("execution_id")
+            for result in action_results
+            if result.get("type") == "run_workflow" and result.get("execution_id")
+        ]
+        if mission_id or execution_ids:
+            active_task = await db.scalar(
+                select(CTOTask)
+                .where(
+                    CTOTask.org_id == ctx.org.id,
+                    CTOTask.conversation_id == conversation_id,
+                    CTOTask.status.in_(
+                        [
+                            CTOTaskStatus.active,
+                            CTOTaskStatus.monitoring,
+                            CTOTaskStatus.waiting_ceo,
+                        ]
+                    ),
+                )
+                .order_by(CTOTask.created_at.desc())
+                .limit(1)
+            )
+            if active_task:
+                updated = False
+                if mission_id and not active_task.mission_id:
+                    active_task.mission_id = mission_id
+                    updated = True
+                if execution_ids:
+                    existing_execution_ids = list(active_task.execution_ids or [])
+                    for execution_id in execution_ids:
+                        if execution_id not in existing_execution_ids:
+                            existing_execution_ids.append(execution_id)
+                    if existing_execution_ids != list(active_task.execution_ids or []):
+                        active_task.execution_ids = existing_execution_ids
+                        updated = True
+                if updated:
+                    await db.commit()
+                    _spawn_background_task(cto_task_service.watch_task(str(active_task.id)))
         if action_summaries:
             summary_text = "Action results:\n" + "\n".join(f"- {summary}" for summary in action_summaries)
             await _store_conversation(current_user.id, conversation_id, "system", summary_text)
@@ -1443,4 +1917,11 @@ async def company_chat(
             )
         yield _json_line({"type": "done", "conversation_id": conversation_id})
 
-    return StreamingResponse(stream(), media_type="application/x-ndjson")
+    return StreamingResponse(
+        stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

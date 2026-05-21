@@ -220,4 +220,159 @@ test.describe('Direct Messages live replies', () => {
     await expect(page.getByText(/Maya is thinking/i)).toBeVisible()
     await expect(page.getByText('OpenAI just launched new enterprise tooling this week.')).toBeVisible()
   })
+
+  test('falls back to thread refresh when websocket reply events are missed', async ({ page, request }) => {
+    await page.addInitScript(() => {
+      class SilentWebSocket {
+        static OPEN = 1
+        static CLOSED = 3
+        readyState = SilentWebSocket.OPEN
+        onopen: ((event: Event) => void) | null = null
+        onmessage: ((event: MessageEvent<string>) => void) | null = null
+        onclose: ((event: CloseEvent) => void) | null = null
+        onerror: ((event: Event) => void) | null = null
+
+        constructor() {
+          setTimeout(() => this.onopen?.(new Event('open')), 0)
+        }
+
+        send() {}
+
+        close() {
+          this.readyState = SilentWebSocket.CLOSED
+          this.onclose?.(new CloseEvent('close'))
+        }
+      }
+
+      window.WebSocket = SilentWebSocket as unknown as typeof window.WebSocket
+    })
+
+    await loginHelper(page, request)
+
+    const agentId = 'agent-dm-refresh'
+    const agentName = 'Jasmine'
+    let threadFetchCount = 0
+    let replyVisibleInThread = false
+
+    await page.route('**/api/messages/conversations', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          conversations: [
+            {
+              agent_id: agentId,
+              agent_name: agentName,
+              persona_name: agentName,
+              role_slug: 'sales-agent',
+              role_color: '#A78BFA',
+              last_message: replyVisibleInThread ? 'DM fallback works even without websocket events.' : null,
+              last_message_at: new Date().toISOString(),
+              last_sender_type: replyVisibleInThread ? 'agent' : null,
+              unread_count: 0,
+              is_online: true,
+              current_status: 'idle',
+            },
+          ],
+          total_unread: 0,
+        }),
+      })
+    })
+
+    await page.route(`**/api/messages/thread/${agentId}*`, async route => {
+      threadFetchCount += 1
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          agent: {
+            id: agentId,
+            name: agentName,
+            persona_name: agentName,
+            role_color: '#A78BFA',
+            current_task_summary: null,
+          },
+          messages: [
+            {
+              id: 'msg-ceo-fallback',
+              content: 'Can you confirm the DM fallback path?',
+              sender_type: 'ceo',
+              sender_name: 'You',
+              message_type: 'general',
+              priority: 'normal',
+              is_resolved: false,
+              read_at: null,
+              created_at: new Date().toISOString(),
+              scheduled_reply_at: null,
+              scheduled_reply_job_id: null,
+              thread_id: `dm-thread-${agentId}`,
+              parent_message_id: null,
+              execution_id: null,
+              from_agent_id: null,
+              to_agent_id: agentId,
+            },
+            ...(replyVisibleInThread || threadFetchCount >= 3
+              ? [{
+                  id: 'msg-agent-fallback',
+                  content: 'DM fallback works even without websocket events.',
+                  sender_type: 'agent',
+                  sender_name: agentName,
+                  message_type: 'general',
+                  priority: 'normal',
+                  is_resolved: false,
+                  read_at: null,
+                  created_at: new Date().toISOString(),
+                  scheduled_reply_at: null,
+                  scheduled_reply_job_id: null,
+                  thread_id: `dm-thread-${agentId}`,
+                  parent_message_id: 'msg-ceo-fallback',
+                  execution_id: null,
+                  from_agent_id: agentId,
+                  to_agent_id: null,
+                }]
+              : []),
+          ],
+        }),
+      })
+    })
+
+    await page.route('**/api/messages/send', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'msg-ceo-fallback',
+          content: 'Can you confirm the DM fallback path?',
+          sender_type: 'ceo',
+          sender_name: 'You',
+          message_type: 'general',
+          priority: 'normal',
+          is_resolved: false,
+          read_at: null,
+          created_at: new Date().toISOString(),
+          scheduled_reply_at: null,
+          scheduled_reply_job_id: null,
+          thread_id: `dm-thread-${agentId}`,
+          parent_message_id: null,
+          execution_id: null,
+          from_agent_id: null,
+          to_agent_id: agentId,
+        }),
+      })
+
+      setTimeout(() => {
+        replyVisibleInThread = true
+      }, 1200)
+    })
+
+    await page.goto(`/messages/${agentId}`)
+    await expect(page.getByRole('heading', { name: agentName })).toBeVisible()
+
+    const composer = page.getByPlaceholder(/Message Jasmine/i)
+    await composer.fill('Can you confirm the DM fallback path?')
+    await composer.press('Enter')
+
+    await expect(page.getByText('Can you confirm the DM fallback path?')).toBeVisible()
+    await expect(page.getByText('DM fallback works even without websocket events.')).toBeVisible({ timeout: 8000 })
+  })
 })

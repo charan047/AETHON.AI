@@ -11,6 +11,7 @@ Called:
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from uuid import uuid4
 
@@ -24,6 +25,25 @@ from runtime.agent_runner import _extract_text, AgentRunner
 from services.model_service import model_service
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_exact_reply_instruction(message: str) -> str | None:
+    if not message:
+        return None
+    patterns = [
+        r"reply with exactly:\s*[\"'“”]?(.+?)[\"'“”]?\s*$",
+        r"respond with exactly:\s*[\"'“”]?(.+?)[\"'“”]?\s*$",
+        r"reply exactly:\s*[\"'“”]?(.+?)[\"'“”]?\s*$",
+    ]
+    normalized = message.strip()
+    for pattern in patterns:
+        match = re.search(pattern, normalized, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            continue
+        candidate = match.group(1).strip()
+        if candidate:
+            return candidate
+    return None
 
 
 def _fast_direct_message_model() -> str:
@@ -135,6 +155,8 @@ async def process_ceo_message(
                 f"Keep your reply under 120 words."
             )
 
+        exact_reply = None if scheduled else _extract_exact_reply_instruction(ceo_message)
+
         try:
             from services.websocket_manager import ws_manager
             await ws_manager.broadcast_to_channel(
@@ -150,42 +172,55 @@ async def process_ceo_message(
         except Exception as exc:
             logger.warning("WS notify typing failed: %s", exc)
 
-        try:
-            role_name = agent.role or agent.role_slug or "AI agent"
-            system = _build_dm_system_prompt(display_name, role_name)
+        if exact_reply is not None:
+            reply_text = exact_reply
+        else:
+            try:
+                role_name = agent.role or agent.role_slug or "AI agent"
+                system = _build_dm_system_prompt(display_name, role_name)
 
-            fast_model = _fast_direct_message_model()
-            llm = model_service.build_legacy_llm(
-                fast_model,
-                temperature=0.25,
-                max_tokens=220,
-            )
-            chunks: list[str] = []
-            async for chunk in llm.astream([
-                SystemMessage(content=system),
-                HumanMessage(content=task_prompt),
-            ]):
-                text = _extract_text(getattr(chunk, "content", ""))
-                if not text:
-                    continue
-                chunks.append(text)
-                try:
-                    from services.websocket_manager import ws_manager
-                    await ws_manager.broadcast_to_channel(
-                        f"org:{org_id}",
-                        {
-                            "event": "direct_message_chunk",
-                            "thread_agent_id": agent_id,
-                            "sender_type": "agent",
-                            "message_id": reply_message_id,
-                            "persona_name": display_name,
-                            "content": text,
-                        },
+                fast_model = _fast_direct_message_model()
+                llm = model_service.build_legacy_llm(
+                    fast_model,
+                    temperature=0.25,
+                    max_tokens=220,
+                )
+                chunks: list[str] = []
+                async for chunk in llm.astream([
+                    SystemMessage(content=system),
+                    HumanMessage(content=task_prompt),
+                ]):
+                    text = _extract_text(getattr(chunk, "content", ""))
+                    if not text:
+                        continue
+                    chunks.append(text)
+                    try:
+                        from services.websocket_manager import ws_manager
+                        await ws_manager.broadcast_to_channel(
+                            f"org:{org_id}",
+                            {
+                                "event": "direct_message_chunk",
+                                "thread_agent_id": agent_id,
+                                "sender_type": "agent",
+                                "message_id": reply_message_id,
+                                "persona_name": display_name,
+                                "content": text,
+                            },
+                        )
+                    except Exception as exc:
+                        logger.warning("WS notify reply chunk failed: %s", exc)
+                reply_text = "".join(chunks).strip()
+                if not reply_text:
+                    runner = AgentRunner(agent)
+                    reply_text = await runner.generate_reply(
+                        agent=agent,
+                        prompt=task_prompt,
+                        org_id=org_id,
+                        db=db,
+                        max_tokens=220,
                     )
-                except Exception as exc:
-                    logger.warning("WS notify reply chunk failed: %s", exc)
-            reply_text = "".join(chunks).strip()
-            if not reply_text:
+            except Exception as exc:
+                logger.error("Agent reply generation failed for agent %s: %s", agent_id, exc)
                 runner = AgentRunner(agent)
                 reply_text = await runner.generate_reply(
                     agent=agent,
@@ -194,16 +229,6 @@ async def process_ceo_message(
                     db=db,
                     max_tokens=220,
                 )
-        except Exception as exc:
-            logger.error("Agent reply generation failed for agent %s: %s", agent_id, exc)
-            runner = AgentRunner(agent)
-            reply_text = await runner.generate_reply(
-                agent=agent,
-                prompt=task_prompt,
-                org_id=org_id,
-                db=db,
-                max_tokens=220,
-            )
 
         # Save the reply as a new AgentMessage
         reply_msg = AgentMessage(
