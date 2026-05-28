@@ -18,10 +18,13 @@ Use this checklist before a push intended for public visibility, demos, or produ
 - health endpoint returns `200`
 - onboarding works for a new org
 - `/clients` and `/clients/:id` load
+- `/files` and `/files/:fileId/edit` load
 - model control plane loads
 - marketplace install works for at least one template
 - a workflow executes end to end through the worker
 - portal enable/disable and public token behavior work
+- direct file uploads work through Garage presigned URLs
+- collaborative documents persist and sync through Hocuspocus
 
 ## 3. Multi-Tenant Safety
 

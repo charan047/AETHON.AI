@@ -6,6 +6,7 @@ from fastapi import Depends
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, field_validator
 from typing import Optional, Any
 from datetime import datetime
@@ -79,6 +80,11 @@ class TestInput(BaseModel):
     params: dict[str, Any] = {}
 
 
+def _is_duplicate_tool_name_error(error: IntegrityError) -> bool:
+    message = str(getattr(error, "orig", error)).lower()
+    return "uq_custom_tools_org_name" in message or "custom_tools.name" in message or "custom_tools_name_key" in message
+
+
 @router.post("/parse-params")
 async def parse_params(body: ParseParamsBody):
     """Parse the run() signature and return typed parameter definitions."""
@@ -103,7 +109,13 @@ async def create_tool(data: ToolCreate, db: AsyncSession = Depends(get_db), ctx:
         payload["code"] = DEFAULT_CODE
     ct = CustomTool(id=str(uuid4()), org_id=ctx.org.id, **payload)
     db.add(ct)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as error:
+        await db.rollback()
+        if _is_duplicate_tool_name_error(error):
+            raise HTTPException(400, f"A tool named '{data.name}' already exists") from error
+        raise
     await db.refresh(ct)
     return ct
 
@@ -123,10 +135,26 @@ async def update_tool(tool_id: str, data: ToolUpdate, db: AsyncSession = Depends
     ct = result.scalar_one_or_none()
     if not ct:
         raise HTTPException(404, "Tool not found")
+    if data.name:
+        existing = await db.scalar(
+            select(CustomTool.id).where(
+                CustomTool.org_id == ctx.org.id,
+                CustomTool.name == data.name,
+                CustomTool.id != tool_id,
+            )
+        )
+        if existing:
+            raise HTTPException(400, f"A tool named '{data.name}' already exists")
     for field, value in data.model_dump(exclude_none=True).items():
         setattr(ct, field, value)
     ct.updated_at = datetime.utcnow()
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as error:
+        await db.rollback()
+        if data.name and _is_duplicate_tool_name_error(error):
+            raise HTTPException(400, f"A tool named '{data.name}' already exists") from error
+        raise
     await db.refresh(ct)
     return ct
 

@@ -280,7 +280,7 @@ export function CompanyOS() {
               onChange={value => setYamlContent(value || '')}
               options={{
                 minimap: { enabled: false },
-                fontFamily: 'JetBrains Mono',
+                fontFamily: 'Geist Mono',
                 fontSize: 13,
                 lineNumbers: 'on',
                 lineHeight: 22,

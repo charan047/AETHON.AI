@@ -34,6 +34,7 @@ import { CTOSettings } from './pages/CTOSettings'
 import { NotificationsSettings } from './pages/NotificationsSettings'
 import { AcceptInvite } from './pages/AcceptInvite'
 import { OnboardingWizard } from './pages/OnboardingWizard'
+import { PublicIntakeForm } from './pages/PublicIntakeForm'
 import { Integrations } from './pages/Integrations'
 import { CompanyChat } from './pages/CompanyChat'
 import { DirectMessages } from './pages/DirectMessages'
@@ -42,6 +43,8 @@ import { Clients } from './pages/Clients'
 import { ClientPortal } from './pages/ClientPortal'
 import { Missions } from './pages/Missions'
 import { MissionReport } from './pages/MissionReport'
+import { DocumentWorkspace } from './pages/DocumentWorkspace'
+import { Files } from './pages/Files'
 import { A2ATasks } from './pages/A2ATasks'
 import { ExternalAgents } from './pages/ExternalAgents'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
@@ -205,18 +208,18 @@ function DocumentTitleManager() {
     : /^\/clients\/[^/]+/.test(location.pathname) ? 'Client Detail'
     : location.pathname.startsWith('/clients') ? 'Clients'
     : location.pathname.startsWith('/company-chat') ? 'Agency Chat'
-    : location.pathname.startsWith('/missions') ? 'Missions'
+    : location.pathname.startsWith('/missions') ? 'Projects'
     : location.pathname.startsWith('/a2a-tasks') ? 'A2A Tasks'
     : location.pathname.startsWith('/settings/external-agents') ? 'External Agents'
     : location.pathname.startsWith('/agents') ? 'AI Team'
     : location.pathname.startsWith('/messages') ? 'Agent Messages'
-    : location.pathname.startsWith('/workflows') ? 'Workflows'
-    : location.pathname.startsWith('/executions') ? 'Executions'
+    : location.pathname.startsWith('/workflows') ? 'Processes'
+    : location.pathname.startsWith('/executions') ? 'Runs'
     : location.pathname.startsWith('/approvals') ? 'Approvals'
     : location.pathname.startsWith('/integrations') ? 'Integrations'
     : location.pathname.startsWith('/memory') ? 'Memory'
     : location.pathname.startsWith('/tools') ? 'Custom Tools'
-    : location.pathname.startsWith('/monitoring') ? 'Executions'
+    : location.pathname.startsWith('/monitoring') ? 'Runs'
     : location.pathname.startsWith('/analytics') ? 'Analytics'
     : location.pathname.startsWith('/evals') ? 'Evals'
     : location.pathname.startsWith('/settings/models') ? 'AI Models'
@@ -236,31 +239,14 @@ function DocumentTitleManager() {
 }
 
 function AppFrame() {
-  const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false)
-
   React.useEffect(() => {
     initializeTheme()
-  }, [])
-
-  React.useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault()
-        setCommandPaletteOpen(current => !current)
-      }
-      if (event.key === 'Escape') {
-        setCommandPaletteOpen(false)
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
   return (
     <>
       <DocumentTitleManager />
-      <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+      <CommandPalette />
       <Toaster
         position="bottom-right"
         expand={false}
@@ -285,6 +271,7 @@ function AppFrame() {
         <Route path="login" element={<Login />} />
         <Route path="register" element={<Register />} />
         <Route path="invite/:token" element={<AcceptInvite />} />
+        <Route path="intake/:token" element={<PublicIntakeForm />} />
         <Route path="portal/:token" element={<ClientPortal />} />
         <Route path="marketplace" element={<Marketplace />} />
         <Route path="marketplace/:slug" element={<MarketplaceDetail />} />
@@ -305,6 +292,20 @@ function AppFrame() {
           }
         />
         <Route
+          path="files/:fileId/edit"
+          element={
+            <ProtectedRoute>
+              <OnboardingGate>
+                <DocumentWorkspace />
+              </OnboardingGate>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="files/:fileId"
+          element={<Navigate to="edit" replace />}
+        />
+        <Route
           element={
             <ProtectedRoute>
               <OnboardingGate>
@@ -320,6 +321,7 @@ function AppFrame() {
           <Route path="company-chat/:conversationId" element={<CompanyChat />} />
           <Route path="clients" element={<Clients />} />
           <Route path="clients/:clientId" element={<Clients />} />
+          <Route path="files" element={<Files />} />
           <Route path="messages" element={<DirectMessages />} />
           <Route path="messages/:agentId" element={<DirectMessages />} />
           <Route path="agents" element={<Agents />} />

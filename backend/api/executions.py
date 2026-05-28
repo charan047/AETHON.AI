@@ -9,6 +9,7 @@ from io import BytesIO
 import asyncio
 import base64
 import html
+import json
 import logging
 import re
 import secrets
@@ -30,6 +31,7 @@ from database.models import (
     Agent,
     AgentMemoryEntry,
     Client,
+    ClientKnowledge,
     ExecutionStatus,
     IntegrationType,
     UserIntegration,
@@ -40,8 +42,9 @@ from database.models import (
 from middleware.rate_limit import limiter
 from runtime.graph_builder import WorkflowExecutionStopped
 from runtime.workflow_engine import WorkflowEngine
-from services.websocket_manager import ws_manager
 from services.integration_crypto import decrypt_config
+from services.review_state_service import execution_review_presentation
+from services.websocket_manager import ws_manager
 from tools.communication.utils import get_gmail_service
 
 router = APIRouter(dependencies=[Depends(get_current_user), Depends(get_org_context)])
@@ -99,6 +102,10 @@ class ExecutionResponse(BaseModel):
     parent_execution_id: Optional[str] = None
     trigger: str
     status: str
+    status_label: str
+    review_state: str | None = None
+    review_stage: str | None = None
+    requires_ceo_action: bool = False
     input_message: str
     output: Optional[str] = None
     output_message: Optional[str]
@@ -168,6 +175,10 @@ class ExecutionRevisionResponse(BaseModel):
     id: str
     revision_number: int
     status: str
+    status_label: str
+    review_state: str | None = None
+    review_stage: str | None = None
+    requires_ceo_action: bool = False
     ceo_feedback: Optional[str] = None
     output: Optional[str] = None
     started_at: datetime
@@ -203,6 +214,10 @@ def _strip_markdown_inline(text: str) -> str:
     value = re.sub(r"`([^`]+)`", r"\1", value)
     value = re.sub(r"[*_~#>]", "", value)
     return value.strip()
+
+
+def _execution_response_payload(execution: Execution) -> dict[str, Any]:
+    return execution_review_presentation(execution.status)
 
 
 def _parse_markdown_blocks(content: str) -> list[dict[str, Any]]:
@@ -701,6 +716,97 @@ async def _extract_preferences(feedback: str, agent_id: str) -> str | None:
     except Exception as exc:
         logger.warning("Preference extraction failed for agent %s: %s", agent_id, exc)
         return None
+
+
+def _categorize_client_learning(content: str) -> str | None:
+    lowered = content.lower()
+    if any(token in lowered for token in ("prefer", "tone", "style", "voice", "avoid", "recommendation")):
+        return "preference"
+    if any(token in lowered for token in ("competitor", "compete", "rival")):
+        return "competitor"
+    if any(token in lowered for token in ("pain point", "challenge", "problem", "friction")):
+        return "pain_point"
+    if any(token in lowered for token in ("product", "feature", "offering", "service")):
+        return "product"
+    return "general"
+
+
+async def _extract_client_learnings(output_text: str, agent_id: str | None = None) -> list[dict[str, Any]]:
+    def _heuristic_extract(text: str) -> list[dict[str, Any]]:
+        candidates: list[str] = []
+        for chunk in re.split(r"(?:\n{2,}|\n[-*]\s+|\.\s+)", text):
+            cleaned = re.sub(r"\s+", " ", chunk).strip(" -\n\t.")
+            if len(cleaned) < 25:
+                continue
+            if cleaned.lower() in {item["content"].lower() for item in candidates_as_dicts(candidates)}:
+                continue
+            if any(
+                token in cleaned.lower()
+                for token in (
+                    "client",
+                    "customer",
+                    "audience",
+                    "prefer",
+                    "competitor",
+                    "pain point",
+                    "tone",
+                    "brand",
+                )
+            ):
+                candidates.append(cleaned)
+            if len(candidates) >= 5:
+                break
+        return candidates_as_dicts(candidates)
+
+    def candidates_as_dicts(items: list[str]) -> list[dict[str, Any]]:
+        return [
+            {
+                "content": item[:1000],
+                "category": _categorize_client_learning(item),
+                "confidence": 0.68,
+            }
+            for item in items
+        ]
+
+    heuristic = _heuristic_extract(output_text)
+    if heuristic:
+        return heuristic
+
+    try:
+        from services.model_service import model_service
+
+        llm = model_service._build_from_settings(temperature=0, max_tokens=300)
+        prompt = (
+            "Extract reusable client facts from this approved agency output.\n"
+            "Return JSON only as an array of up to 5 objects.\n"
+            "Each object must have: content, category, confidence.\n"
+            "Categories: preference, competitor, pain_point, product, style, general.\n"
+            "Only include facts another agent should remember for future work.\n\n"
+            f"Agent ID: {agent_id or 'unknown'}\n"
+            f"Output:\n{output_text[:8000]}"
+        )
+        response = await llm.ainvoke(prompt)
+        parsed = json.loads(str(response.content or "[]"))
+        if not isinstance(parsed, list):
+            return []
+        learnings: list[dict[str, Any]] = []
+        for item in parsed[:5]:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            if len(content) < 10:
+                continue
+            learnings.append(
+                {
+                    "content": content[:1000],
+                    "category": str(item.get("category") or _categorize_client_learning(content)),
+                    "confidence": float(item.get("confidence") or 0.72),
+                }
+            )
+        return learnings
+    except Exception as exc:
+        logger.warning("Client learning extraction failed for agent %s: %s", agent_id, exc)
+        return []
 
 
 async def _store_ceo_preference(
@@ -1249,7 +1355,16 @@ async def list_executions(
     if workflow_id:
         query = query.where(Execution.workflow_id == workflow_id)
     result = await db.execute(query)
-    return result.scalars().all()
+    rows = result.scalars().all()
+    return [
+        ExecutionResponse.model_validate(
+            {
+                **execution.__dict__,
+                **_execution_response_payload(execution),
+            }
+        )
+        for execution in rows
+    ]
 
 
 @router.get("/{execution_id}", response_model=ExecutionDetailResponse)
@@ -1318,6 +1433,7 @@ async def get_execution(execution_id: str, db: AsyncSession = Depends(get_db), c
         "model_name": model_name,
         "trigger": execution.trigger,
         "status": execution.status.value if hasattr(execution.status, "value") else str(execution.status),
+        **_execution_response_payload(execution),
         "input": execution.input_message,
         "input_message": execution.input_message,
         "output": _execution_output_text(execution),
@@ -1596,6 +1712,7 @@ async def get_execution_revisions(
             "id": item.id,
             "revision_number": item.revision_number or 1,
             "status": item.status.value if hasattr(item.status, "value") else str(item.status),
+            **execution_review_presentation(item.status),
             "ceo_feedback": item.ceo_feedback,
             "output": _execution_output_text(item),
             "started_at": item.started_at,
@@ -1661,6 +1778,39 @@ async def approve_execution(
             source="ceo_feedback",
         )
 
+    output_text = (execution.output_message or "").strip()
+    if execution.client_id and output_text:
+        learnings = await _extract_client_learnings(output_text, primary_agent_id)
+        for learning in learnings:
+            content = str(learning.get("content") or "").strip()
+            if len(content) < 10:
+                continue
+            existing = await db.scalar(
+                select(ClientKnowledge).where(
+                    ClientKnowledge.org_id == str(execution.org_id),
+                    ClientKnowledge.client_id == str(execution.client_id),
+                    ClientKnowledge.content == content[:1000],
+                )
+            )
+            if existing:
+                existing.confidence = max(float(existing.confidence or 0.0), float(learning.get("confidence") or 0.5))
+                existing.last_seen_at = datetime.utcnow()
+                continue
+            db.add(
+                ClientKnowledge(
+                    org_id=str(execution.org_id),
+                    client_id=str(execution.client_id),
+                    content=content[:1000],
+                    category=str(learning.get("category") or "general")[:100],
+                    confidence=float(learning.get("confidence") or 0.5),
+                    source_agent_id=str(primary_agent_id) if primary_agent_id else None,
+                    source_execution_id=str(execution.id),
+                    created_at=datetime.utcnow(),
+                    last_seen_at=datetime.utcnow(),
+                )
+            )
+        await db.commit()
+
     from services.cto_memory_service import cto_memory_service
 
     workflow_name = execution.workflow.name if execution.workflow else "workflow"
@@ -1672,6 +1822,61 @@ async def approve_execution(
         was_approved=True,
         db=db,
     )
+
+    if output_text and len(output_text) > 50:
+        from sqlalchemy import text as text_q
+        from database.models import FileStatus, FileType, OrgFile, OrgStorageQuota
+        from services.storage_service import storage_service
+
+        file_id = str(uuid4())
+        safe_name = (workflow_name or "output").replace(" ", "-").lower()[:60]
+        filename = f"{safe_name}-v{execution.revision_number or 1}.md"
+        storage_key = await storage_service.write_document(
+            org_id=str(execution.org_id),
+            file_id=file_id,
+            content=output_text.encode("utf-8"),
+            content_type="text/markdown",
+            client_id=str(execution.client_id) if execution.client_id else None,
+            filename=filename,
+        )
+
+        org_file = OrgFile(
+            id=file_id,
+            org_id=str(execution.org_id),
+            client_id=str(execution.client_id) if execution.client_id else None,
+            agent_id=str(primary_agent_id) if primary_agent_id else None,
+            execution_id=str(execution.id),
+            name=filename,
+            file_type=FileType.markdown,
+            status=FileStatus.ready,
+            storage_key=storage_key,
+            size_bytes=len(output_text.encode("utf-8")),
+            content_type="text/markdown",
+            extracted_text=output_text[:50_000],
+            created_by=str(current_user.id),
+        )
+        db.add(org_file)
+        await db.flush()
+
+        if "sqlite" in str(db.bind.url):
+            org_file.search_vector = output_text[:50_000]
+        else:
+            await db.execute(
+                text_q(
+                    "UPDATE org_files SET search_vector = to_tsvector('english', :txt) WHERE id = :id"
+                ),
+                {"txt": output_text[:50_000], "id": file_id},
+            )
+
+        quota = await db.scalar(
+            select(OrgStorageQuota).where(OrgStorageQuota.org_id == str(execution.org_id))
+        )
+        if not quota:
+            quota = OrgStorageQuota(org_id=str(execution.org_id))
+            db.add(quota)
+            await db.flush()
+        quota.used_bytes = int(quota.used_bytes or 0) + len(output_text.encode("utf-8"))
+        await db.commit()
 
     await ws_manager.broadcast_to_channel(
         f"org:{ctx.org.id}",

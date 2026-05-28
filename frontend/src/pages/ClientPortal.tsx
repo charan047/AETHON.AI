@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
-import { CheckCircle2, ChevronDown, ChevronRight, Clock3, Copy, ExternalLink, Globe2, Loader2, ShieldCheck, UserRound, XCircle, Zap } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, Clock3, Copy, Download, ExternalLink, Globe2, Loader2, ShieldCheck, UserRound, XCircle, Zap } from 'lucide-react'
 import { useParams } from 'react-router-dom'
 
 import { portalApi } from '../api/client'
@@ -46,6 +46,17 @@ interface PortalPayload {
     report?: string | null
   }>
   agents: PortalAgent[]
+  files: Array<{
+    id: string
+    name: string
+    description?: string | null
+    file_type: string
+    size_bytes: number
+    content_type?: string | null
+    created_at: string | null
+    updated_at: string | null
+    download_url: string
+  }>
   stats: {
     executions_this_week: number
     completed_this_week: number
@@ -384,6 +395,42 @@ export function ClientPortal() {
               ) : (
                 <div className="mt-5 rounded-2xl border border-dashed border-[#E4E7EB] bg-[#FAFAFA] p-5 text-sm text-[#6B7280]">
                   No mission reports yet.
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-[28px] border border-[#E4E7EB] bg-white p-6 shadow-sm">
+              <div>
+                <h2 className="text-2xl font-semibold tracking-tight text-[#111827]">Deliverables</h2>
+                <p className="mt-2 text-sm text-[#6B7280]">Download the latest approved files and exports for this client.</p>
+              </div>
+
+              {data.files.length ? (
+                <div className="mt-5 space-y-3">
+                  {data.files.map(file => (
+                    <div key={file.id} className="flex flex-col gap-3 rounded-2xl border border-[#E4E7EB] bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-[#111827]">{file.name}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[#6B7280]">
+                          <span className="rounded-full border border-[#E4E7EB] bg-[#F8FAFC] px-2 py-1 uppercase">
+                            {file.file_type}
+                          </span>
+                          <span>{relativeTime(file.created_at || file.updated_at)}</span>
+                        </div>
+                      </div>
+                      <a
+                        href={file.download_url}
+                        className="inline-flex w-fit items-center gap-2 rounded-xl border border-[#E4E7EB] bg-white px-3 py-2 text-xs font-medium text-[#4B5563] transition hover:bg-[#F9FAFB] hover:text-[#111827]"
+                      >
+                        <Download size={13} />
+                        Download
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-5 rounded-2xl border border-dashed border-[#E4E7EB] bg-[#FAFAFA] p-5 text-sm text-[#6B7280]">
+                  Deliverables will appear here as soon as your agency publishes files for this account.
                 </div>
               )}
             </div>

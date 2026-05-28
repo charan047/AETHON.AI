@@ -537,7 +537,7 @@ export function DirectMessages() {
               key={conv.agent_id}
               onClick={() => handleSelectAgent(conv.agent_id)}
               className={clsx(
-                'data-row relative min-h-[44px] w-full rounded-xl px-3 py-2.5 text-left transition-all',
+                'row relative min-h-[44px] w-full rounded-xl px-3 py-2.5 text-left transition-all',
                 activeAgentId === conv.agent_id
                   ? 'bg-indigo-500/[0.08] border-l-2 border-indigo-500'
                   : 'hover:bg-white/[0.04]',
@@ -703,7 +703,7 @@ export function DirectMessages() {
                         <div className="w-8 shrink-0" />
                       )}
                       <div className="min-w-0 max-w-[80%]">
-                        <div className="glass-card rounded-[18px] rounded-bl-[4px] px-4 py-3 text-sm leading-relaxed text-white/90">
+                        <div className="card rounded-[18px] rounded-bl-[4px] px-4 py-3 text-sm leading-relaxed text-white/90">
                           {msg.content ? (
                             msg.content
                           ) : (
@@ -806,6 +806,8 @@ export function DirectMessages() {
                 <button
                   onClick={handleSend}
                   disabled={!compose.trim() || sendMutation.isPending}
+                  aria-label="Send message"
+                  title="Send"
                   className={clsx(
                     'flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition',
                     compose.trim()

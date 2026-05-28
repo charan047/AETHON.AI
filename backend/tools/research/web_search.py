@@ -28,7 +28,7 @@ class WebSearchTool(BaseTool):
             return ToolOutput(success=False, error="Query is required")
 
         try:
-            results = await search_backend.search(query, max_results)
+            results = await search_backend.search(query, max_results, org_id=org_id, user_id=user_id)
             return ToolOutput(
                 success=True,
                 result={
@@ -45,7 +45,7 @@ class WebSearchTool(BaseTool):
                     ],
                     "result_count": len(results),
                 },
-                metadata={"source": await search_backend.active_provider(), "query": query},
+                metadata={"source": await search_backend.active_provider(org_id=org_id, user_id=user_id), "query": query},
             )
         except Exception as exc:
             logger.error("Web search failed: %s", exc)

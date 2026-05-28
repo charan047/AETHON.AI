@@ -28,11 +28,10 @@ Available agents:
 Rules:
 - Each task must be specific and actionable
 - Tasks that depend on previous output must list dependencies
-- CRITICAL: You MUST use the EXACT agent names listed below.
-- Do NOT invent names like "Research Analyst" or "Data Expert".
-- If no agent perfectly fits, assign the closest match anyway.
-- Available agents (copy these names EXACTLY):
-- {agents_list}
+- CRITICAL: Use ONLY the exact agent names from this list.
+- Do NOT invent names. Assign the closest match if no perfect fit.
+- Available agents (use these names EXACTLY):
+{agents_list}
 - Maximum 6 tasks total
 - Tasks that can run in parallel should NOT depend on each other
 
@@ -187,18 +186,12 @@ class GoalDecomposer:
             fallback_agent_name=(agents[0][0].persona_name or agents[0][0].name) if agents else None,
         )
 
-        agent_by_exact: dict[str, str] = {}
-        agent_by_role: dict[str, str] = {}
         agent_list_raw: list[tuple[str, str, str]] = []
 
         for agent, _trust in agents:
             name = (agent.persona_name or agent.name or "").lower().strip()
             role = (agent.role_slug or agent.role or "").lower().strip()
             agent_id = str(agent.id)
-            if name:
-                agent_by_exact[name] = agent_id
-            if role:
-                agent_by_role[role] = agent_id
             agent_list_raw.append((agent_id, name, role))
 
         def _resolve_agent(agent_name: str) -> tuple[str | None, str]:
@@ -218,18 +211,24 @@ class GoalDecomposer:
             query = agent_name.lower().strip()
 
             for agent, _trust in agents:
-                name = (agent.persona_name or agent.name or "").lower().strip()
-                if query == name:
+                persona_name = (agent.persona_name or "").lower().strip()
+                fallback_name = (agent.name or "").lower().strip()
+                if query == persona_name or query == fallback_name:
                     return str(agent.id), "exact"
 
             for agent, _trust in agents:
-                role = (agent.role_slug or agent.role or "").lower().strip()
-                if query == role or query.replace(" ", "_") == role:
+                role_slug = (agent.role_slug or "").lower().strip()
+                role_name = (agent.role or "").lower().strip()
+                slug_query = query.replace(" ", "_")
+                if query == role_slug or slug_query == role_slug or query == role_name:
                     return str(agent.id), "role_slug"
 
             for agent, _trust in agents:
-                name = (agent.persona_name or agent.name or "").lower().strip()
-                if query in name or name in query:
+                names = [
+                    (agent.persona_name or "").lower().strip(),
+                    (agent.name or "").lower().strip(),
+                ]
+                if any(name and (query in name or name in query) for name in names):
                     return str(agent.id), "partial"
 
             query_words = set(query.split())

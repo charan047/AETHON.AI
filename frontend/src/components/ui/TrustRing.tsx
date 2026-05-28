@@ -1,3 +1,5 @@
+import { NumberTicker } from './magicui/NumberTicker'
+
 function ringColor(score: number) {
   if (score >= 70) return '#10b981'
   if (score >= 40) return '#f59e0b'
@@ -61,12 +63,11 @@ function TrustRing({
         />
       </svg>
       <span className="trust-ring-value" style={{ color }}>
-        {showDash ? '–' : Math.round(safeScore)}
+        {showDash ? '–' : <NumberTicker value={Math.round(safeScore)} className="text-[11px] font-mono font-semibold" />}
       </span>
     </span>
   )
 }
 
 export { TrustRing }
-export const TrustScoreBar = TrustRing
 export default TrustRing

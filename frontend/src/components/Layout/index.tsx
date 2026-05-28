@@ -4,7 +4,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { Sidebar } from './Sidebar'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { executionsApi } from '../../api/client'
-import { Sparkles, X, Bot, PanelLeft } from 'lucide-react'
+import { Sparkles, X, Bot, PanelLeft, PanelLeftOpen } from 'lucide-react'
 
 function GlobalResultModal({ executionId, onClose }: { executionId: string; onClose: () => void }) {
   const { data: execution, isLoading } = useQuery({
@@ -69,6 +69,7 @@ export function Layout() {
   const location = useLocation()
   const [resultId, setResultId] = useState<string | null>(null)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   // Track the last execution ID we already handled so navigating between pages
   // doesn't re-trigger the popup for a stale event still sitting in the buffer.
   const lastHandledId = useRef<string | null>(null)
@@ -92,6 +93,18 @@ export function Layout() {
     setMobileSidebarOpen(false)
   }, [location.pathname])
 
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === '\\') {
+        event.preventDefault()
+        setSidebarCollapsed(value => !value)
+      }
+    }
+
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [])
+
   return (
     <div className="relative flex h-screen overflow-hidden bg-transparent text-content-primary">
       <div className="relative z-10 flex h-full w-full overflow-hidden">
@@ -103,8 +116,17 @@ export function Layout() {
             onClick={() => setMobileSidebarOpen(false)}
           />
         )}
-        <Sidebar mobileOpen={mobileSidebarOpen} onCloseMobile={() => setMobileSidebarOpen(false)} />
-        <main className="app-shell relative flex min-w-0 flex-1 flex-col overflow-hidden bg-transparent">
+        {(mobileSidebarOpen || !sidebarCollapsed) && (
+          <Sidebar
+            mobileOpen={mobileSidebarOpen}
+            onCloseMobile={() => setMobileSidebarOpen(false)}
+            onToggleCollapsed={() => {
+              setSidebarCollapsed(true)
+              setMobileSidebarOpen(false)
+            }}
+          />
+        )}
+        <main className="app-shell relative flex min-w-0 flex-1 flex-col overflow-y-auto">
           <div className="flex h-14 items-center border-b border-white/[0.06] px-4 lg:hidden">
             <button
               type="button"
@@ -115,7 +137,22 @@ export function Layout() {
               <PanelLeft size={18} />
             </button>
           </div>
-          <div className="min-w-0 flex-1 overflow-y-auto">
+          {sidebarCollapsed && !mobileSidebarOpen ? (
+            <button
+              type="button"
+              aria-label="Show sidebar"
+              onClick={() => setSidebarCollapsed(false)}
+              className="fixed left-2 top-1/2 z-20 hidden -translate-y-1/2 flex-col items-center gap-2 rounded-[20px] border border-[#2A2A2A] bg-[#111111] px-2 py-3 text-white shadow-[0_16px_48px_rgba(0,0,0,0.45)] lg:flex"
+            >
+              <PanelLeftOpen size={16} className="text-white/80" />
+              <span className="flex flex-col items-center text-[10px] font-mono uppercase tracking-[0.24em] text-white/70">
+                {['C', 'H', 'A', 'T'].map(letter => (
+                  <span key={letter}>{letter}</span>
+                ))}
+              </span>
+            </button>
+          ) : null}
+          <div className="relative min-w-0 flex-1 overflow-y-auto">
             <Outlet />
           </div>
         </main>

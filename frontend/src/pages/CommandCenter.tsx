@@ -18,9 +18,12 @@ import {
 import { clsx } from 'clsx'
 import { motion, useReducedMotion } from 'framer-motion'
 import { useAgencyOverview } from '../hooks/useAgencyOverview'
-import { AnimatedNumber } from '../components/ui/AnimatedNumber'
 import { Skeleton } from '../components/ui/Skeleton'
+import { AnimatedContent } from '../components/reactbits/AnimatedContent'
 import { useAuth } from '../contexts/AuthContext'
+import { AnimatedList, AnimatedListItem } from '../components/ui/magicui/AnimatedList'
+import { BorderBeam } from '../components/ui/magicui/BorderBeam'
+import { NumberTicker } from '../components/ui/magicui/NumberTicker'
 import { toast } from '../lib/toast'
 import type {
   AgencyOverviewActivity,
@@ -30,6 +33,7 @@ import type {
 } from '../types'
 
 const COMPANY_CHAT_DRAFT_KEY = 'aethon-company-chat-draft'
+const PRODUCT_STATEMENT = 'Your AI agency team. Handles the repeatable work. You approve before anything reaches clients.'
 
 function relativeTime(value: string | null | undefined) {
   if (!value) return 'Waiting for first run'
@@ -70,10 +74,17 @@ function statusBadge(status: string) {
   if (status === 'completed') return { className: 'badge-emerald', label: 'done' }
   if (status === 'running') return { className: 'badge-indigo', label: 'running' }
   if (status === 'failed') return { className: 'badge-red', label: 'failed' }
-  if (status === 'pending_review') return { className: 'badge-amber', label: 'needs review' }
-  if (status === 'waiting_approval') return { className: 'badge-amber', label: 'waiting approval' }
+  if (status === 'pending_review') return { className: 'badge-amber', label: 'Needs Review' }
+  if (status === 'waiting_approval') return { className: 'badge-amber', label: 'Needs Review' }
   if (status === 'cancelled') return { className: 'badge-glass', label: 'stopped' }
   return { className: 'badge-glass', label: status }
+}
+
+function statusDot(status: string, requiresCeoAction?: boolean) {
+  if (requiresCeoAction || status === 'pending_review' || status === 'waiting_approval') return 'dot-amber'
+  if (status === 'completed') return 'dot-green'
+  if (status === 'running' || status === 'working' || status === 'pending') return 'dot-blue dot-live'
+  return 'dot-muted'
 }
 
 function StatCard({
@@ -83,7 +94,7 @@ function StatCard({
   icon: Icon,
   progress,
   accent,
-  delayClass,
+  index,
 }: {
   label: string
   value: number
@@ -91,7 +102,7 @@ function StatCard({
   icon: typeof Briefcase
   progress: number
   accent: 'indigo' | 'emerald' | 'amber' | 'violet'
-  delayClass: string
+  index: number
 }) {
   const accentStyles = {
     indigo: {
@@ -120,35 +131,40 @@ function StatCard({
   return (
     <motion.div
       whileHover={{ y: -2 }}
-      className={clsx('glass-card p-5', delayClass, styles.hover)}
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.34, delay: index * 0.08, ease: [0.16, 1, 0.3, 1] }}
+      className={clsx('card relative overflow-hidden p-5', styles.hover)}
     >
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-[#4B5A73]">{label}</p>
-          <AnimatedNumber
-            value={value}
-            className="mt-2 block font-mono text-3xl font-extrabold tracking-tight text-white animate-number-flip"
-          />
+          <div className="flex items-center gap-2">
+            <div className={clsx('rounded-lg p-2', styles.iconWrap)}>
+              <Icon size={14} />
+            </div>
+            <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-[#4B5A73]">{label}</p>
+          </div>
+          <NumberTicker value={value} className="mt-2 block text-3xl font-extrabold tracking-tight text-white" />
           <p className="mt-1 text-xs text-[#8B9DBE]">{meta}</p>
         </div>
-        <div className={clsx('rounded-lg p-2.5', styles.iconWrap)}>
-          <Icon size={18} />
-        </div>
       </div>
-      <div className="mt-4 h-1 overflow-hidden rounded-full bg-white/[0.04]">
-        <div
-          className={clsx('h-full origin-left rounded-full animate-bar-fill', styles.bar)}
-          style={{ width: `${Math.max(8, Math.min(progress, 100))}%` }}
+      <div className="mt-4 h-0.5 overflow-hidden rounded-full bg-white/[0.06]">
+        <motion.div
+          initial={{ scaleX: 0 }}
+          animate={{ scaleX: Math.max(0.08, Math.min(progress, 100) / 100) }}
+          transition={{ duration: 0.6, delay: 0.12 + index * 0.08, ease: [0.16, 1, 0.3, 1] }}
+          className={clsx('h-full origin-left rounded-full', styles.bar)}
         />
       </div>
+      <BorderBeam size={250} duration={12} delay={index * 2} />
     </motion.div>
   )
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, label }: { status: string; label?: string }) {
   const config = statusBadge(status)
   return (
-    <span className={clsx('badge font-mono uppercase', config.className)}>{config.label}</span>
+    <span className={clsx('badge font-mono uppercase', config.className)}>{label || config.label}</span>
   )
 }
 
@@ -171,7 +187,7 @@ function CommandBar({
 
   return (
     <div
-      className="glass-card col-span-12 overflow-hidden transition-all duration-150"
+      className="card col-span-12 overflow-hidden transition-all duration-150"
       style={{
         boxShadow: focused ? 'inset 0 1px 0 rgba(255,255,255,0.08), 0 0 0 1px rgba(99,102,241,0.14), 0 0 26px rgba(99,102,241,0.12)' : undefined,
       }}
@@ -194,7 +210,7 @@ function CommandBar({
             placeholder="Type a command or @mention an agent..."
           />
           <kbd className="hidden shrink-0 rounded-md border border-white/[0.08] bg-white/[0.03] px-2 py-1 font-mono text-[10px] text-white/35 md:block">
-            Cmd K
+            ↵
           </kbd>
         </form>
       </div>
@@ -312,10 +328,20 @@ export function CommandCenter() {
     toast.success('Command loaded into Agency Chat.')
   }
 
+  const isEmptyWorkspace = Boolean(
+    overview &&
+    overview.clients.total === 0 &&
+    overview.agents.total === 0 &&
+    overview.approvals.pending === 0 &&
+    overview.activity.executions_today === 0 &&
+    overview.activity.recent.length === 0 &&
+    overview.needs_attention.length === 0,
+  )
+
   if (isError) {
     return (
       <div className="p-6">
-        <div className="glass-card rounded-2xl p-8 text-center">
+        <div className="card rounded-2xl p-8 text-center">
           <div className="text-lg font-semibold text-white">Could not load.</div>
           <button
             type="button"
@@ -334,26 +360,54 @@ export function CommandCenter() {
   }
 
   return (
-    <div className="p-6">
+    <div className="px-7 pb-7 pt-7">
       <motion.div {...overviewMotion(Boolean(prefersReducedMotion))} className="space-y-6">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div className="flex flex-col gap-3">
           <div>
-            <h1 className="text-4xl font-extrabold tracking-[-0.04em] text-white">{greeting}</h1>
+            <h1 className="text-[clamp(28px,3vw,38px)] font-extrabold tracking-[-0.04em] text-white">{greeting}</h1>
             <div className="mt-2 font-mono text-sm uppercase tracking-[0.14em] text-[#4B5A73]">{nowLabel}</div>
           </div>
-          <div className="text-right text-xs text-[#8B9DBE]">{firstName}</div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Active Agents" value={overview.agents.total} meta={`${overview.agents.working} working now`} icon={Bot} progress={overview.agents.total ? (overview.agents.working / overview.agents.total) * 100 : 8} accent="indigo" delayClass="animate-d-0" />
-          <StatCard label="Clients" value={overview.clients.total} meta={`${overview.clients.active} active accounts`} icon={Briefcase} progress={overview.clients.total ? (overview.clients.active / overview.clients.total) * 100 : 8} accent="emerald" delayClass="animate-d-1" />
-          <StatCard label="Pending Reviews" value={overview.attention_count} meta={`${overview.approvals.pending} in approvals`} icon={ShieldAlert} progress={Math.min(Math.max(overview.attention_count * 14, 8), 100)} accent="amber" delayClass="animate-d-2" />
-          <StatCard label="Done Today" value={overview.activity.completed_today} meta={`${overview.activity.executions_today} total runs today`} icon={CalendarDays} progress={overview.activity.executions_today ? (overview.activity.completed_today / overview.activity.executions_today) * 100 : 8} accent="violet" delayClass="animate-d-3" />
+        <div className="grid grid-cols-1 gap-4 py-5 md:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Active Agents" value={overview.agents.total} meta={`${overview.agents.working} working now`} icon={Bot} progress={overview.agents.total ? (overview.agents.working / overview.agents.total) * 100 : 8} accent="indigo" index={0} />
+          <StatCard label="Clients" value={overview.clients.total} meta={`${overview.clients.active} active accounts`} icon={Briefcase} progress={overview.clients.total ? (overview.clients.active / overview.clients.total) * 100 : 8} accent="emerald" index={1} />
+          <StatCard label="Pending Reviews" value={overview.attention_count} meta={`${overview.approvals.pending} in approvals`} icon={ShieldAlert} progress={Math.min(Math.max(overview.attention_count * 14, 8), 100)} accent="amber" index={2} />
+          <StatCard label="Done Today" value={overview.activity.completed_today} meta={`${overview.activity.executions_today} total runs today`} icon={CalendarDays} progress={overview.activity.executions_today ? (overview.activity.completed_today / overview.activity.executions_today) * 100 : 8} accent="violet" index={3} />
         </div>
 
+        {isEmptyWorkspace ? (
+          <section className="card flex min-h-[420px] items-center justify-center p-8">
+            <div className="mx-auto max-w-xl text-center">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-500/15 text-indigo-300 shadow-[0_0_24px_rgba(99,102,241,0.18)]">
+                <Zap size={28} />
+              </div>
+              <h2 className="mt-6 text-3xl font-extrabold tracking-tight text-white">Welcome to Aethon</h2>
+              <p className="mx-auto mt-3 max-w-lg text-base leading-7 text-[#8B9DBE]">
+                {PRODUCT_STATEMENT}
+              </p>
+              <p className="mt-3 text-sm text-[#8B9DBE]">
+                Start by adding a team member or running the demo below
+              </p>
+              <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+                <button type="button" className="btn-primary h-11" onClick={() => navigate('/agents')}>
+                  Add team member
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary h-11"
+                  onClick={() => executeCommand('How is the team doing? Any blockers?')}
+                >
+                  Try the demo
+                </button>
+              </div>
+            </div>
+          </section>
+        ) : (
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,1fr)]">
           <div className="space-y-6">
-            <section className="glass-card overflow-hidden">
+            <AnimatedContent distance={40} direction="vertical" duration={0.5}>
+            <section className="card overflow-hidden">
               <div className="flex items-center justify-between px-5 py-3">
                 <div className="section-title mb-0 border-none pb-0">NEEDS ATTENTION</div>
                 {overview.attention_count > 0 ? (
@@ -363,82 +417,102 @@ export function CommandCenter() {
                 ) : null}
               </div>
               {overview.needs_attention.length ? (
-                <div>
+                <AnimatedList className="gap-0">
                   {overview.needs_attention.map((item: AgencyOverviewAttentionItem) => (
-                    <button
-                      key={`${item.type}-${item.approval_id || item.execution_id || item.url}`}
-                      type="button"
-                      onClick={() => navigate(item.url)}
-                      className={clsx(
-                        'data-row w-full text-left',
-                        item.type === 'approval_request'
-                          ? 'data-row-red'
-                          : item.type === 'pending_review'
-                            ? 'data-row-amber'
-                            : 'data-row-indigo',
-                      )}
-                    >
-                      <span className={clsx('status-dot', item.urgency === 'critical' ? 'dot-red' : item.urgency === 'high' ? 'dot-amber' : item.type === 'pending_review' ? 'dot-amber' : 'dot-blue')} />
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold text-white">{item.title}</div>
-                        <div className="truncate text-xs text-[#8B9DBE]">{item.subtitle}</div>
-                      </div>
-                      <div className="font-mono text-[11px] text-[#4B5A73]">
-                        {item.age_minutes >= 60 ? `${Math.floor(item.age_minutes / 60)}h` : `${Math.max(item.age_minutes, 0)}m`}
-                      </div>
-                      <span className={clsx('badge font-mono uppercase', item.urgency === 'critical' ? 'badge-red' : item.urgency === 'high' ? 'badge-amber' : 'badge-indigo')}>
-                        {item.urgency}
-                      </span>
-                    </button>
+                    <AnimatedListItem key={`${item.type}-${item.approval_id || item.execution_id || item.url}`}>
+                      <button
+                        type="button"
+                        onClick={() => navigate(item.url)}
+                        className={clsx(
+                          'row relative w-full border-l-2 text-left transition-colors',
+                          item.type === 'approval_request'
+                            ? 'border-l-red-500 bg-red-500/[0.04]'
+                            : item.type === 'pending_review'
+                              ? 'border-l-amber-500 bg-amber-500/[0.04]'
+                              : 'border-l-white/10 bg-white/[0.02]',
+                          item.type === 'approval_request' && item.urgency === 'critical'
+                            ? 'animate-pulse'
+                            : '',
+                        )}
+                      >
+                        <span
+                          className={clsx(
+                            'status-dot',
+                            item.type === 'approval_request'
+                              ? item.urgency === 'critical'
+                                ? 'dot-red dot-live'
+                                : 'dot-red'
+                              : item.type === 'pending_review'
+                                ? 'dot-amber'
+                                : 'dot-muted',
+                          )}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-semibold text-white">{item.title}</div>
+                          <div className="truncate text-xs text-[#8B9DBE]">{item.subtitle}</div>
+                        </div>
+                        <div className="font-mono text-[11px] text-[#4B5A73]">
+                          {item.age_minutes >= 60 ? `${Math.floor(item.age_minutes / 60)}h` : `${Math.max(item.age_minutes, 0)}m`}
+                        </div>
+                        <span className={clsx('badge font-mono uppercase', item.urgency === 'critical' ? 'badge-red' : item.urgency === 'high' ? 'badge-amber' : 'badge-indigo')}>
+                          {item.urgency}
+                        </span>
+                      </button>
+                    </AnimatedListItem>
                   ))}
-                </div>
+                </AnimatedList>
               ) : (
-                <div className="data-row cursor-default">
-                  <span className="status-dot dot-green" />
+                <div className="row cursor-default">
+                  <span className="status-dot dot-green dot-live" />
                   <span className="text-sm text-[#8B9DBE]">All clear — nothing needs your attention</span>
                 </div>
               )}
             </section>
+            </AnimatedContent>
 
-            <section className="glass-card overflow-hidden">
+            <AnimatedContent distance={40} direction="vertical" duration={0.5}>
+            <section className="card overflow-hidden">
               <div className="px-5 py-3">
                 <div className="section-title mb-0 border-none pb-0">RECENT</div>
               </div>
               {overview.activity.recent.length ? (
                 <div>
                   {overview.activity.recent.slice(0, 8).map((item: AgencyOverviewActivity) => {
-                    const label = item.agent_name || (item as AgencyOverviewActivity & { workflow_name?: string }).workflow_name || 'Execution'
+                    const label = item.agent_name || (item as AgencyOverviewActivity & { workflow_name?: string }).workflow_name || 'Agent'
                     return (
                       <button
                         key={item.id}
                         type="button"
                         onClick={() => navigate(`/executions/${item.id}`)}
-                        className="data-row w-full text-left"
+                        className="row w-full text-left"
                       >
-                        <span className={clsx('status-dot', item.status === 'completed' ? 'dot-green' : item.status === 'running' ? 'dot-blue dot-live' : item.status === 'pending_review' || item.status === 'waiting_approval' ? 'dot-amber' : 'dot-red')} />
+                        <span className={clsx('status-dot', statusDot(item.status, item.requires_ceo_action))} />
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm font-semibold text-white">{label}</div>
                           <div className="truncate text-xs text-[#8B9DBE]">
-                            {item.client_name || 'Internal'} · {item.input_preview}
+                            {item.input_preview}
                           </div>
                         </div>
+                        <div className="truncate text-xs text-[#8B9DBE]">{item.client_name || 'Internal'}</div>
                         <div className="font-mono text-[11px] text-[#4B5A73]">{relativeTime(item.started_at)}</div>
-                        <StatusBadge status={item.status} />
+                        <StatusBadge status={item.status} label={item.status_label} />
                       </button>
                     )
                   })}
                 </div>
               ) : (
-                <div className="data-row cursor-default">
+                <div className="row cursor-default">
                   <span className="status-dot dot-muted" />
                   <span className="text-sm text-[#8B9DBE]">No recent work yet.</span>
                 </div>
               )}
             </section>
+            </AnimatedContent>
           </div>
 
           <div className="flex min-h-0 flex-col gap-6">
-            <section className="glass-card overflow-hidden">
+            <AnimatedContent distance={40} direction="vertical" duration={0.5}>
+            <section className="card overflow-hidden">
               <div className="px-5 py-3">
                 <div className="section-title mb-0 border-none pb-0">TEAM</div>
               </div>
@@ -448,7 +522,7 @@ export function CommandCenter() {
                     key={agent.id}
                     type="button"
                     onClick={() => navigate(`/agents?agent=${agent.id}`)}
-                    className="data-row w-full text-left"
+                    className="row w-full text-left"
                   >
                     <span className={clsx('status-dot', agent.current_status === 'working' ? 'dot-green dot-live' : agent.current_status === 'waiting_approval' ? 'dot-amber' : 'dot-muted')} />
                     <div className="min-w-0 flex-1">
@@ -462,12 +536,14 @@ export function CommandCenter() {
                 ))}
               </div>
             </section>
+            </AnimatedContent>
 
             <div className="sticky bottom-4 z-10 pt-2">
               <CommandBar onRun={executeCommand} chips={chips} />
             </div>
           </div>
         </div>
+        )}
       </motion.div>
     </div>
   )

@@ -186,7 +186,7 @@ export function Evaluations() {
         <div className="border-b border-white/[0.08] px-4 py-5">
           <div className="mb-3">
             <h1 className="page-title">Evaluations</h1>
-            <p className="page-subtitle">{(suitesQuery.data?.length || 0)} suites · test your agents</p>
+            <p className="page-sub">{(suitesQuery.data?.length || 0)} suites · test your agents</p>
           </div>
           <button className="btn-primary w-full justify-center" onClick={() => setShowSuiteForm(true)}>
             <Plus size={14} /> Create Suite
@@ -208,7 +208,7 @@ export function Evaluations() {
               {[...Array(4)].map((_, index) => <Skeleton key={index} className="h-32" />)}
             </div>
           ) : !filteredSuites.length ? (
-            <div className="glass-card rounded-2xl p-5 text-center">
+            <div className="card rounded-2xl p-5 text-center">
               <FlaskConical className="mx-auto mb-3 text-indigo-300" size={28} />
               <div className="font-medium text-white">{suitesQuery.data?.length ? 'No suites match your search' : 'No eval suites yet'}</div>
               <p className="mt-2 text-sm text-[#8B9DBE]">Create one to start measuring your agent quality.</p>
@@ -396,7 +396,7 @@ function SuiteCard({ suite, selected, onSelect }: {
   return (
     <button
       className={clsx(
-        'data-row w-full rounded-xl px-3 py-3 text-left transition-all',
+        'row w-full rounded-xl px-3 py-3 text-left transition-all',
         selected ? 'bg-indigo-500/[0.08] border-l-2 border-indigo-400' : 'hover:bg-white/[0.04]',
       )}
       onClick={onSelect}
@@ -427,7 +427,7 @@ function SuiteCard({ suite, selected, onSelect }: {
 function EmptyEvalHero({ onNew }: { onNew: () => void }) {
   return (
     <div className="grid h-full place-items-center">
-      <div className="glass-card max-w-xl rounded-[28px] p-10 text-center">
+      <div className="card max-w-xl rounded-[28px] p-10 text-center">
         <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 shadow-btn-primary">
           <Beaker size={28} className="text-white" />
         </div>
@@ -446,7 +446,7 @@ function SuiteHeader({ suite, onRun, onQuickTest, quickTesting }: {
   quickTesting: boolean
 }) {
   return (
-    <div className="glass-card p-5">
+    <div className="card p-5">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -474,7 +474,7 @@ function Tabs({ tab, setTab }: { tab: Tab; setTab: (tab: Tab) => void }) {
     { id: 'compare', label: 'COMPARE' },
   ]
   return (
-    <div className="glass-card flex flex-wrap gap-5 rounded-xl px-4 py-3">
+    <div className="card flex flex-wrap gap-5 rounded-xl px-4 py-3">
       {tabs.map(({ id, label }) => (
         <button
           key={id}
@@ -504,7 +504,7 @@ function TestCasesTab({ suite, cases, latestScores, caseRunState, onAddCase, onI
 }) {
   if (!cases.length) {
     return (
-      <div className="glass-card rounded-[24px] border border-dashed border-white/[0.12] p-10 text-center">
+      <div className="card rounded-[24px] border border-dashed border-white/[0.12] p-10 text-center">
         <FileJson className="mx-auto mb-3 text-indigo-300" size={30} />
         <div className="font-semibold text-white">No test cases yet</div>
         <p className="mt-2 text-sm text-[#8B9DBE]">Add cases manually or generate them from execution history.</p>
@@ -530,7 +530,7 @@ function TestCasesTab({ suite, cases, latestScores, caseRunState, onAddCase, onI
           const latestScore = latestScores.get(caseItem.id)
           const state = caseRunState[caseItem.id]
           return (
-            <div key={caseItem.id} className="glass-card p-4">
+            <div key={caseItem.id} className="card p-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-medium text-white">{caseItem.name}</div>
@@ -585,7 +585,7 @@ function RunHistoryTab({ suite, runs, trend, selectedRunId, selectedRun, loading
 
   return (
     <div className="space-y-4">
-      <div className="glass-card glass-card-indigo p-5">
+      <div className="card card-indigo p-5">
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h3 className="font-semibold text-white">Score trend</h3>
@@ -608,10 +608,10 @@ function RunHistoryTab({ suite, runs, trend, selectedRunId, selectedRun, loading
 
       <div className="space-y-3">
         {!runs.length ? (
-          <div className="glass-card rounded-2xl border border-dashed border-white/[0.12] p-8 text-center text-[#8B9DBE]">No runs yet. Run the suite to start tracking quality.</div>
+          <div className="card rounded-2xl border border-dashed border-white/[0.12] p-8 text-center text-[#8B9DBE]">No runs yet. Run the suite to start tracking quality.</div>
         ) : runs.map((run, index) => (
-          <div key={run.id} className="glass-card overflow-hidden">
-            <button className="data-row min-h-[44px] w-full text-left" onClick={() => onSelectRun(run)}>
+          <div key={run.id} className="card overflow-hidden">
+            <button className="row min-h-[44px] w-full text-left" onClick={() => onSelectRun(run)}>
               <div className={clsx('font-mono text-sm font-semibold', (run.suite_score || 0) >= suite.pass_threshold ? 'text-emerald-300' : 'text-red-300')}>
                 {Math.round((run.suite_score || 0) * 100)}%
               </div>
@@ -674,7 +674,7 @@ function InsightsTab({ suite, insights, loading }: { suite: EvalSuite; insights?
 
   return (
     <div className="grid gap-4 xl:grid-cols-2">
-      <div className={clsx('glass-card p-5', delta != null && delta < 0 ? 'glass-card-red' : 'glass-card-emerald')}>
+      <div className={clsx('card p-5', delta != null && delta < 0 ? 'card-red' : 'card-emerald')}>
         <div className="flex items-center gap-3">
           <div className={clsx('grid h-11 w-11 place-items-center rounded-xl', delta == null || delta >= 0 ? 'bg-emerald-400/10 text-emerald-300' : 'bg-red-400/10 text-red-300')}>
             {delta == null || delta >= 0 ? <ArrowUpRight /> : <ArrowDownRight />}
@@ -685,14 +685,14 @@ function InsightsTab({ suite, insights, loading }: { suite: EvalSuite; insights?
           </div>
         </div>
       </div>
-      <div className="glass-card glass-card-indigo p-5">
+      <div className="card card-indigo p-5">
         <div className="mb-2 flex items-center gap-2 font-semibold text-white"><Sparkles size={17} /> Recommendation</div>
         <p className="text-sm leading-6 text-[#D7E0EF]">{recommendation}</p>
       </div>
       <InsightList title="Hardest Cases" icon={AlertTriangle} items={(insights?.hardest_cases || []).filter((item: any) => (item.avg_score || 0) < 0.6).map((item: any) => `${item.case_name || item.case_id} · avg ${Math.round((item.avg_score || 0) * 100)}%`)} />
       <InsightList title="Regressions" icon={ArrowDownRight} items={(insights?.regression_cases || []).map((item: any) => item.case_name || item.case_id)} />
       <InsightList title="Most Improved" icon={ArrowUpRight} items={(insights?.most_improved_cases || []).map((item: any) => `${item.case_name || item.case_id} · +${Math.round((item.delta || 0) * 100)} pts`)} />
-      <div className="glass-card p-5">
+      <div className="card p-5">
         <div className="mb-3 font-semibold text-white">Suite threshold</div>
         <ScoreBadge score={suite.pass_threshold} threshold={suite.pass_threshold} size="lg" />
         <p className="mt-3 text-sm text-[#8B9DBE]">Runs pass when the weighted average reaches this threshold.</p>
@@ -750,7 +750,7 @@ function CompareTab({
 
   return (
     <div className="space-y-4">
-      <div className="glass-card glass-card-indigo p-5">
+      <div className="card card-indigo p-5">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <h3 className="text-xl font-semibold text-white">Compare Models on This Suite</h3>
@@ -802,7 +802,7 @@ function CompareTab({
       </div>
 
       {result && (
-        <div className={clsx('glass-card p-5', winnerSide ? 'glass-card-emerald shadow-btn-approve' : 'glass-card-indigo')}>
+        <div className={clsx('card p-5', winnerSide ? 'card-emerald shadow-btn-approve' : 'card-indigo')}>
           <div className="grid gap-4 lg:grid-cols-2">
             {([
               ['A', result.model_a],
@@ -865,7 +865,7 @@ function CompareTab({
         </div>
       )}
 
-      <div className="glass-card overflow-hidden">
+      <div className="card overflow-hidden">
         <div className="border-b border-white/[0.08] px-5 py-4">
           <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-white/70">Previous Comparisons</h4>
         </div>
@@ -1084,7 +1084,7 @@ function ImportCasesModal({ open, suite, onClose, onImported }: {
   return (
     <ModalShell title="Import eval cases" onClose={onClose}>
       <div className="space-y-5">
-        <div className="glass-card p-4">
+        <div className="card p-4">
           <div className="mb-2 flex items-center gap-2 font-medium text-white"><Sparkles size={16} /> Generate from history</div>
           <p className="mb-4 text-sm text-[#8B9DBE]">Analyzes the last 50 successful executions for this agent and creates regression cases.</p>
           <button className="btn-secondary w-full" disabled={generating} onClick={generate}>
@@ -1102,7 +1102,7 @@ function ImportCasesModal({ open, suite, onClose, onImported }: {
 
 function InsightList({ title, icon: Icon, items }: { title: string; icon: LucideIcon; items: string[] }) {
   return (
-    <div className="glass-card glass-card-indigo p-5">
+    <div className="card card-indigo p-5">
       <div className="mb-4 flex items-center gap-2 font-semibold text-white"><Icon size={17} /> {title}</div>
       {items.length ? (
         <div className="space-y-2">

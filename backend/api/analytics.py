@@ -311,6 +311,34 @@ async def get_analytics_overview(
             )
         )
     ).one()
+    approved_counts = (
+        await db.execute(
+            select(
+                func.count(Execution.id).label("total_approved"),
+                func.count(
+                    case(
+                        (
+                            (Execution.approved_by.is_not(None))
+                            & (Execution.revision_number == 1),
+                            1,
+                        )
+                    )
+                ).label("first_draft_approved"),
+                func.coalesce(func.avg(Execution.revision_number), 1.0).label("avg_revisions"),
+            )
+            .where(
+                Execution.org_id == ctx.org.id,
+                Execution.started_at >= since,
+                Execution.approved_by.is_not(None),
+            )
+        )
+    ).one()
+    pending_review_count = await db.scalar(
+        select(func.count(Execution.id)).where(
+            Execution.org_id == ctx.org.id,
+            Execution.status == ExecutionStatus.pending_review,
+        )
+    ) or 0
     daily_execution_rows = (
         await db.execute(
             select(
@@ -336,6 +364,14 @@ async def get_analytics_overview(
             ),
         )
     ) or 0
+    total_approved = int(approved_counts.total_approved or 0)
+    first_draft_approved = int(approved_counts.first_draft_approved or 0)
+    first_draft_rate = (
+        round((first_draft_approved / total_approved) * 100)
+        if total_approved > 0
+        else 0
+    )
+    avg_revisions = round(float(approved_counts.avg_revisions or 1), 1)
 
     return {
         "costs": costs,
@@ -348,6 +384,11 @@ async def get_analytics_overview(
             daily_execution_rows,
             period_days=period_days,
         ),
+        "total_approved": total_approved,
+        "first_draft_approved": first_draft_approved,
+        "first_draft_rate": first_draft_rate,
+        "avg_revisions": avg_revisions,
+        "pending_review_count": int(pending_review_count),
         "tool_calls": tool_calls,
         "api_calls_last_minute": telemetry_service.get_api_calls_last_minute(),
     }

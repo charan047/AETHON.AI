@@ -6,6 +6,7 @@ import { clsx } from 'clsx'
 import { marketplaceApi } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { InstallModal } from '../components/marketplace/InstallModal'
+import { ShimmerButton } from '../components/ui/magicui/ShimmerButton'
 import { Skeleton } from '../components/ui/Skeleton'
 import type { MarketplaceCategory, MarketplaceListing, MarketplaceListingType } from '../types'
 
@@ -23,7 +24,7 @@ const CATEGORIES: { id: MarketplaceCategory | 'all'; label: string }[] = [
 
 const TYPE_LABELS: Record<MarketplaceListingType, string> = {
   agent: 'Agent',
-  workflow: 'Workflow',
+  workflow: 'Process',
   tool_config: 'Tool Config',
   eval_suite: 'Eval Suite',
 }
@@ -84,7 +85,7 @@ function ListingCard({ listing, installed, onInstall }: {
   return (
     <Link
       to={`/marketplace/${listing.slug}`}
-      className="group glass-card listing-card overflow-hidden rounded-2xl transition-all duration-150 hover:-translate-y-0.5 hover:border-indigo-400/35 hover:shadow-glass-hover"
+      className="group card listing-card overflow-hidden rounded-2xl transition-all duration-150 hover:-translate-y-0.5 hover:border-indigo-400/35 hover:shadow-glass-hover"
     >
       <div className={clsx('h-1 w-full bg-gradient-to-r', meta.bar)} />
       <div className="p-4">
@@ -108,15 +109,18 @@ function ListingCard({ listing, installed, onInstall }: {
           {installed ? (
             <span className="badge badge-emerald">Installed ✓</span>
           ) : (
-            <button
-              className="btn-primary btn-sm"
+            <ShimmerButton
+              className="h-8 rounded-lg px-4 text-xs font-semibold"
+              background="#6366F1"
+              shimmerColor="rgba(255,255,255,0.4)"
+              shimmerDuration="2.5s"
               onClick={event => {
                 event.preventDefault()
                 onInstall(listing)
               }}
             >
               Install
-            </button>
+            </ShimmerButton>
           )}
         </div>
       </div>
@@ -132,7 +136,7 @@ function SearchResultRow({ listing, installed, onInstall }: {
   const meta = categoryMeta(listing.category)
   const Icon = meta.icon
   return (
-    <div className="listing-card glass-card flex flex-col gap-4 rounded-2xl p-4 transition hover:border-indigo-400/35 md:flex-row md:items-center">
+    <div className="listing-card card flex flex-col gap-4 rounded-2xl p-4 transition hover:border-indigo-400/35 md:flex-row md:items-center">
       <Link to={`/marketplace/${listing.slug}`} className={clsx('grid h-20 w-20 shrink-0 place-items-center rounded-2xl', meta.iconWrap)}>
         <Icon size={26} />
       </Link>
@@ -147,7 +151,19 @@ function SearchResultRow({ listing, installed, onInstall }: {
           {listing.tags.slice(0, 4).map(tag => <span key={tag} className="rounded-full bg-white/[0.04] px-2 py-0.5 text-xs text-[#8B9DBE]">#{tag}</span>)}
         </div>
       </div>
-      {installed ? <span className="badge badge-emerald">Installed ✓</span> : <button className="btn-primary btn-sm" onClick={() => onInstall(listing)}>Install</button>}
+      {installed ? (
+        <span className="badge badge-emerald">Installed ✓</span>
+      ) : (
+        <ShimmerButton
+          className="h-8 rounded-lg px-4 text-xs font-semibold"
+          background="#6366F1"
+          shimmerColor="rgba(255,255,255,0.4)"
+          shimmerDuration="2.5s"
+          onClick={() => onInstall(listing)}
+        >
+          Install
+        </ShimmerButton>
+      )}
     </div>
   )
 }
@@ -213,7 +229,7 @@ export function Marketplace() {
             <input
               autoFocus
               className="input h-12 w-full pl-11 pr-4"
-              placeholder="Search agents, workflows, tools, eval suites..."
+              placeholder="Search agents, processes, tools, eval suites..."
               value={query}
               onChange={event => setQuery(event.target.value)}
             />
@@ -262,7 +278,7 @@ export function Marketplace() {
       <section className="mx-auto max-w-7xl px-4 py-8">
         <div className="mb-5 flex flex-wrap items-center gap-3 text-xs text-[#8B9DBE]">
           <span className="badge badge-glass">{stats.agentCount} agents</span>
-          <span className="badge badge-glass">{stats.workflowCount} workflows</span>
+          <span className="badge badge-glass">{stats.workflowCount} processes</span>
           <span className="badge badge-glass">{stats.toolCount} tools</span>
           <span className="badge badge-glass">{formatCount(stats.installsCount)} installs</span>
         </div>
@@ -286,7 +302,7 @@ export function Marketplace() {
           <select className="input h-10 w-[160px]" value={type} onChange={event => setType(event.target.value as MarketplaceListingType | 'all')}>
             <option value="all">All Types</option>
             <option value="agent">Agents</option>
-            <option value="workflow">Workflows</option>
+            <option value="workflow">Processes</option>
             <option value="tool_config">Tool Configs</option>
             <option value="eval_suite">Eval Suites</option>
           </select>
@@ -319,7 +335,7 @@ export function Marketplace() {
       <main className="mx-auto max-w-7xl px-4 pb-12">
         <section>
           {query && (
-            <div className="glass-card mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl p-4">
+            <div className="card mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl p-4">
               <div>
                 <p className="font-medium text-white">Search results for “{query}”</p>
                 <p className="mt-1 text-sm text-[#8B9DBE]">{items.length} result{items.length === 1 ? '' : 's'} found</p>
@@ -333,7 +349,7 @@ export function Marketplace() {
               {[...Array(9)].map((_, index) => <Skeleton key={index} className="h-72 rounded-2xl" />)}
             </div>
           ) : !items.length ? (
-            <div className="glass-card grid min-h-[360px] place-items-center rounded-2xl text-center">
+            <div className="card grid min-h-[360px] place-items-center rounded-2xl text-center">
               <div>
                 <Boxes className="mx-auto text-[#8B9DBE]" size={42} />
                 <h2 className="mt-4 text-xl font-semibold text-white">No marketplace listings found</h2>

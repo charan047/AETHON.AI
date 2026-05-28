@@ -10,7 +10,7 @@ import type { Execution, ExecutionRevisionSummary } from '../types'
 
 function refetchExecutionInterval(data: Execution | undefined) {
   const status = data?.status
-  if (!status || ['completed', 'pending_review', 'failed', 'cancelled', 'timed_out', 'rejected'].includes(status)) {
+  if (!status || data?.requires_ceo_action || ['completed', 'pending_review', 'failed', 'cancelled', 'timed_out', 'rejected', 'waiting_approval'].includes(status)) {
     return false
   }
   return 3000
@@ -33,17 +33,19 @@ function formatDuration(durationSeconds?: number | null) {
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`
 }
 
-function statusBadgeClass(status: Execution['status']) {
+function statusBadgeClass(execution: Execution) {
+  const status = execution.status
+  if (execution.review_state === 'needs_review') return 'badge-amber'
   if (status === 'completed') return 'badge-emerald'
   if (status === 'running' || status === 'pending') return 'badge-indigo'
-  if (status === 'pending_review' || status === 'waiting_approval') return 'badge-amber'
   if (status === 'cancelled') return 'badge-glass'
   return 'badge-red'
 }
 
-function statusBadgeLabel(status: Execution['status']) {
-  if (status === 'pending_review') return 'needs review'
-  if (status === 'waiting_approval') return 'waiting approval'
+function statusBadgeLabel(execution: Execution) {
+  if (execution.status_label) return execution.status_label
+  const status = execution.status
+  if (status === 'pending_review' || status === 'waiting_approval') return 'Needs Review'
   if (status === 'completed') return 'done'
   if (status === 'cancelled') return 'stopped'
   return status
@@ -65,7 +67,7 @@ function RevisionHistory({
   const previousRevisionNumber = currentRevision && currentRevision.revision_number > 1 ? currentRevision.revision_number - 1 : null
 
   return (
-    <section className="glass-card overflow-hidden p-0">
+    <section className="card overflow-hidden p-0">
       <div className="flex flex-wrap items-center gap-5 border-b border-white/[0.08] px-5 py-4">
         {revisions.map(revision => {
           const isCurrent = revision.id === execution.id
@@ -123,10 +125,10 @@ function ReviewPanel({ execution }: { execution: Execution }) {
   const [docTitle, setDocTitle] = useState('')
   const [deliveryError, setDeliveryError] = useState<string | null>(null)
   const output = useMemo(() => extractReviewOutput(execution), [execution])
-  const isPendingReview = execution.status === 'pending_review'
-  const isWaitingApproval = execution.status === 'waiting_approval'
+  const isPendingReview = execution.review_state === 'needs_review' && execution.review_stage !== 'workflow_pause'
+  const isWaitingApproval = execution.review_state === 'needs_review' && execution.review_stage === 'workflow_pause'
   const isApproved = execution.status === 'completed' && Boolean(execution.approved_by)
-  const completedWithoutReview = execution.status === 'completed' && !execution.approved_by
+  const completedWithoutReview = execution.status === 'completed' && !execution.approved_by && execution.review_state !== 'needs_review'
   const isDelivered = isApproved && Boolean(execution.delivered_at && execution.delivery_method)
 
   const { data: integrations = [] } = useQuery({
@@ -232,13 +234,13 @@ function ReviewPanel({ execution }: { execution: Execution }) {
   }
 
   return (
-    <section className="glass-card p-5">
+    <section className="card p-5">
       <div className="section-title">Output</div>
       <div className="mt-4 flex items-center justify-between gap-3">
         <div className="text-sm text-[var(--text-2)]">Review the final execution output.</div>
         {isApproved ? <div className="badge badge-emerald">approved</div> : null}
-        {isPendingReview ? <div className="badge badge-amber">review needed</div> : null}
-        {isWaitingApproval ? <div className="badge badge-amber">workflow paused</div> : null}
+        {isPendingReview ? <div className="badge badge-amber">Needs Review</div> : null}
+        {isWaitingApproval ? <div className="badge badge-amber">Needs Review</div> : null}
       </div>
 
       {isWaitingApproval && (
@@ -267,7 +269,7 @@ function ReviewPanel({ execution }: { execution: Execution }) {
       )}
 
       {isApproved && (
-        <div className="glass-card glass-card-emerald mt-4 rounded-2xl px-4 py-3">
+        <div className="card card-emerald mt-4 rounded-2xl px-4 py-3">
           <div className="flex items-center gap-2 text-sm text-emerald-300">
             <CheckCircle2 size={15} />
             <span className="font-medium">
@@ -426,7 +428,7 @@ function ReviewPanel({ execution }: { execution: Execution }) {
         <textarea
           value={feedback}
           onChange={event => setFeedback(event.target.value)}
-          placeholder="What needs to change? Be specific — the agent will use this to regenerate."
+          placeholder="What needs to change?"
           className="input mt-3 min-h-[120px] w-full resize-y px-3.5 py-3"
         />
 
@@ -495,7 +497,7 @@ export function ExecutionPage() {
   }
 
   if (isError || !execution) {
-    const detail = extractApiError(error) || 'Execution could not be loaded.'
+    const detail = extractApiError(error) || 'Run could not be loaded.'
     return (
       <div className="mx-auto max-w-2xl space-y-4 px-4 py-10">
         <div className="flex items-center gap-2 text-sm text-white/30">
@@ -503,20 +505,20 @@ export function ExecutionPage() {
             onClick={() => navigate('/monitoring')}
             className="transition-colors hover:text-white/60"
           >
-            Monitoring
+            Runs
           </button>
           <span>/</span>
           <span className="max-w-[240px] truncate font-mono text-xs text-white/50">{executionId}</span>
         </div>
         <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4">
-          <div className="text-sm font-medium text-red-300">Execution unavailable</div>
+          <div className="text-sm font-medium text-red-300">Run unavailable</div>
           <div className="mt-1 text-sm text-white/60">{detail}</div>
         </div>
       </div>
     )
   }
 
-  const showReviewPanel = execution.status === 'pending_review' || execution.status === 'completed' || execution.status === 'waiting_approval'
+  const showReviewPanel = execution.review_state === 'needs_review' || execution.status === 'completed'
 
   return (
     <div className="animate-in-up mx-auto max-w-5xl space-y-4 px-4 py-6">
@@ -527,7 +529,7 @@ export function ExecutionPage() {
           className="inline-flex items-center gap-2 transition-colors hover:text-[var(--text-2)]"
         >
           <ArrowLeft size={14} />
-          Monitoring
+          Runs
         </button>
         <span className="text-[var(--text-3)]">·</span>
         <span className="max-w-[260px] truncate text-[var(--text-2)]">
@@ -535,7 +537,7 @@ export function ExecutionPage() {
         </span>
       </div>
 
-      <div className="glass-card flex flex-wrap items-center gap-4 px-4 py-3">
+      <div className="card flex flex-wrap items-center gap-4 px-4 py-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/18 text-sm font-bold text-indigo-200">
           {initials(execution.agent_name || execution.workflow_name)}
         </div>
@@ -546,8 +548,8 @@ export function ExecutionPage() {
           <span>·</span>
           <span className="font-mono text-xs uppercase tracking-[0.10em]">{formatDuration(execution.duration_seconds)}</span>
           <span>·</span>
-          <span className={['badge font-mono text-[10px] uppercase tracking-[0.08em]', statusBadgeClass(execution.status)].join(' ')}>
-            {statusBadgeLabel(execution.status)}
+          <span className={['badge font-mono text-[10px] uppercase tracking-[0.08em]', statusBadgeClass(execution)].join(' ')}>
+            {statusBadgeLabel(execution)}
           </span>
         </div>
       </div>

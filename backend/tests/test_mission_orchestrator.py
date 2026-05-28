@@ -288,7 +288,7 @@ async def test_dispatch_task_skips_with_clear_reason_when_no_active_agents(monke
 
     assert stored_task.agent_id is None
     assert stored_task.status == MissionTaskStatus.skipped
-    assert stored_task.output_summary == "No active agents in this agency."
+    assert stored_task.output_summary == "No active agents"
 
 
 @pytest.mark.asyncio

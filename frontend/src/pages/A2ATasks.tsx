@@ -69,7 +69,7 @@ function SetupState() {
           'Restart backend services so A2A discovery is exposed',
           'Provision an API key for approved external callers',
         ].map(step => (
-          <div key={step} className="data-row rounded-2xl border border-white/[0.06] bg-white/[0.025]">
+          <div key={step} className="row rounded-2xl border border-white/[0.06] bg-white/[0.025]">
             <span className="status-dot dot-blue dot-live mt-0.5" />
             <span className="text-sm text-[#C9D7EE]">{step}</span>
           </div>
@@ -84,7 +84,7 @@ function TaskRow({ task }: { task: A2ATaskRecord }) {
   const incoming = task.direction === 'incoming'
 
   return (
-    <div className="data-row min-h-[44px]">
+    <div className="row min-h-[44px]">
       <div
         className={clsx(
           'flex h-8 w-8 items-center justify-center rounded-xl',
@@ -137,7 +137,7 @@ export function A2ATasks() {
     <div className="space-y-6 p-6">
       <div>
         <h1 className="page-title">Agent Requests</h1>
-        <p className="page-subtitle">Incoming and outgoing A2A tasks</p>
+        <p className="page-sub">Incoming and outgoing A2A tasks</p>
       </div>
 
       {isLoading && (

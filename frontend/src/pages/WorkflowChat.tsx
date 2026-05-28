@@ -72,7 +72,7 @@ export function WorkflowChat() {
 
   return (
     <div className="flex h-full flex-col bg-transparent px-4 py-4 lg:px-6">
-      <div className="glass-card flex flex-1 min-h-0 flex-col overflow-hidden rounded-[24px]">
+      <div className="card flex flex-1 min-h-0 flex-col overflow-hidden rounded-[24px]">
       <div className="flex-shrink-0 border-b border-white/[0.08] bg-white/[0.02] px-5 py-4 flex items-center gap-3">
         <Link to="/workflows" className="rounded-lg p-1.5 text-white/45 transition-colors hover:bg-white/[0.05] hover:text-white/80">
           <ArrowLeft size={18} />
@@ -124,7 +124,7 @@ export function WorkflowChat() {
               <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.03]">
                 <Bot size={12} className="text-emerald-300" />
               </div>
-              <div className="glass-card max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed text-[#F0F6FF] whitespace-pre-wrap">
+              <div className="card max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed text-[#F0F6FF] whitespace-pre-wrap">
                 {ex.output_message}
                 <div className="mt-2 flex gap-2 border-t border-white/[0.08] pt-1.5 text-[10px] text-white/35">
                   <span>{ex.token_count} tokens</span>
@@ -149,7 +149,7 @@ export function WorkflowChat() {
         )}
 
         {currentExecution && (
-          <div className="glass-card rounded-3xl p-4">
+          <div className="card rounded-3xl p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-medium text-white">Live standup room</div>
@@ -186,7 +186,7 @@ export function WorkflowChat() {
 
       <div className="flex-shrink-0 border-t border-white/[0.08] bg-white/[0.02] p-4">
         <div className="mx-auto max-w-4xl">
-          <div className="glass-card flex items-end gap-3 p-3 focus-within:border-indigo-500/30 focus-within:shadow-[0_0_24px_rgba(99,102,241,0.12)]">
+          <div className="card flex items-end gap-3 p-3 focus-within:border-indigo-500/30 focus-within:shadow-[0_0_24px_rgba(99,102,241,0.12)]">
             <textarea
               ref={textareaRef}
               rows={1}
@@ -226,7 +226,7 @@ export function WorkflowChat() {
                   setRunning(false)
                   setRunningId(null)
                   setPendingMessage(null)
-                  toast.success('Execution stopped')
+                  toast.success('Run stopped')
                 } catch (e) {
                   toast.error(extractApiError(e))
                 }

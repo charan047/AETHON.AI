@@ -10,6 +10,10 @@ from tools.base import BaseTool, ToolCategory, ToolHealth
 
 
 logger = logging.getLogger("tool_registry")
+TOOL_ALIASES = {
+    "google_docs_create": "google_docs",
+    "google_sheets_create": "google_sheets",
+}
 
 
 class ToolRegistry:
@@ -63,7 +67,11 @@ class ToolRegistry:
     def _category_value(self, category: str | ToolCategory) -> str:
         return category.value if isinstance(category, ToolCategory) else str(category)
 
+    def _canonical_name(self, name: str) -> str:
+        return TOOL_ALIASES.get(name, name)
+
     def _get_catalog_instance(self, name: str) -> Optional[BaseTool]:
+        name = self._canonical_name(name)
         if name in self._tool_instances:
             return self._tool_instances[name]
         cached = self._catalog_instances.get(name)
@@ -164,6 +172,7 @@ class ToolRegistry:
         config: dict | None = None,
     ) -> BaseTool:
         """Get or create a user-scoped tool instance."""
+        tool_name = self._canonical_name(tool_name)
         cache_key = f"{user_id}:{tool_name}"
         self._evict_expired_instances()
         cached_entry = self._instances.get(cache_key)

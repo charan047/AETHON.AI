@@ -40,6 +40,7 @@ class CTOTaskService:
         conversation_id: str,
         mission_id: str | None = None,
         execution_ids: list[str] | None = None,
+        status: CTOTaskStatus = CTOTaskStatus.monitoring,
         db: AsyncSession | None = None,
     ) -> CTOTask:
         async def _create(session: AsyncSession) -> CTOTask:
@@ -48,7 +49,7 @@ class CTOTaskService:
                 org_id=org_id,
                 original_request=request,
                 plan=plan,
-                status=CTOTaskStatus.monitoring,
+                status=status,
                 mission_id=mission_id,
                 execution_ids=execution_ids or [],
                 conversation_id=conversation_id,
@@ -88,6 +89,135 @@ class CTOTaskService:
             return await _get(db)
         async with AsyncSessionLocal() as session:
             return await _get(session)
+
+    async def get_latest_conversation_task(
+        self,
+        org_id: str,
+        conversation_id: str,
+        db: AsyncSession | None = None,
+    ) -> CTOTask | None:
+        async def _get(session: AsyncSession) -> CTOTask | None:
+            return await session.scalar(
+                select(CTOTask)
+                .where(
+                    CTOTask.org_id == org_id,
+                    CTOTask.conversation_id == conversation_id,
+                    CTOTask.status.in_(
+                        [
+                            CTOTaskStatus.active,
+                            CTOTaskStatus.monitoring,
+                            CTOTaskStatus.waiting_ceo,
+                        ]
+                    ),
+                )
+                .order_by(CTOTask.created_at.desc())
+                .limit(1)
+            )
+
+        if db is not None:
+            return await _get(db)
+        async with AsyncSessionLocal() as session:
+            return await _get(session)
+
+    async def get_latest_conversation_task_any_status(
+        self,
+        org_id: str,
+        conversation_id: str,
+        db: AsyncSession | None = None,
+    ) -> CTOTask | None:
+        async def _get(session: AsyncSession) -> CTOTask | None:
+            return await session.scalar(
+                select(CTOTask)
+                .where(
+                    CTOTask.org_id == org_id,
+                    CTOTask.conversation_id == conversation_id,
+                )
+                .order_by(CTOTask.created_at.desc())
+                .limit(1)
+            )
+
+        if db is not None:
+            return await _get(db)
+        async with AsyncSessionLocal() as session:
+            return await _get(session)
+
+    async def ensure_conversation_task(
+        self,
+        org_id: str,
+        conversation_id: str,
+        request: str,
+        plan: str | None,
+        db: AsyncSession | None = None,
+    ) -> CTOTask:
+        async def _ensure(session: AsyncSession) -> CTOTask:
+            task = await self.get_latest_conversation_task(org_id, conversation_id, db=session)
+            if task:
+                if plan and task.plan != plan:
+                    task.plan = plan
+                if request and task.original_request != request:
+                    task.original_request = request
+                if task.status == CTOTaskStatus.waiting_ceo:
+                    task.status = CTOTaskStatus.active
+                    task.ceo_action_needed = None
+                await session.commit()
+                await session.refresh(task)
+                return task
+
+            return await self.create_task(
+                org_id=org_id,
+                request=request,
+                plan=plan,
+                conversation_id=conversation_id,
+                status=CTOTaskStatus.active,
+                db=session,
+            )
+
+        if db is not None:
+            return await _ensure(db)
+        async with AsyncSessionLocal() as session:
+            return await _ensure(session)
+
+    async def sync_task_dispatch(
+        self,
+        task: CTOTask,
+        *,
+        mission_id: str | None = None,
+        execution_ids: list[str] | None = None,
+        db: AsyncSession | None = None,
+    ) -> CTOTask:
+        async def _sync(session: AsyncSession) -> CTOTask:
+            changed = False
+
+            if mission_id and task.mission_id != mission_id:
+                task.mission_id = mission_id
+                changed = True
+
+            if execution_ids:
+                merged_execution_ids = list(task.execution_ids or [])
+                for execution_id in execution_ids:
+                    if execution_id and execution_id not in merged_execution_ids:
+                        merged_execution_ids.append(execution_id)
+                if merged_execution_ids != list(task.execution_ids or []):
+                    task.execution_ids = merged_execution_ids
+                    changed = True
+
+            if mission_id or execution_ids:
+                if task.status != CTOTaskStatus.monitoring:
+                    task.status = CTOTaskStatus.monitoring
+                    changed = True
+                if task.ceo_action_needed:
+                    task.ceo_action_needed = None
+                    changed = True
+
+            if changed:
+                await session.commit()
+                await session.refresh(task)
+            return task
+
+        if db is not None:
+            return await _sync(db)
+        async with AsyncSessionLocal() as session:
+            return await _sync(session)
 
     async def watch_task(self, task_id: str) -> None:
         max_wait = 7200
@@ -313,22 +443,7 @@ class CTOTaskService:
         db: AsyncSession | None = None,
     ) -> CTOTask | None:
         async def _mark(session: AsyncSession) -> CTOTask | None:
-            task = await session.scalar(
-                select(CTOTask)
-                .where(
-                    CTOTask.org_id == org_id,
-                    CTOTask.conversation_id == conversation_id,
-                    CTOTask.status.in_(
-                        [
-                            CTOTaskStatus.active,
-                            CTOTaskStatus.monitoring,
-                            CTOTaskStatus.waiting_ceo,
-                        ]
-                    ),
-                )
-                .order_by(CTOTask.created_at.desc())
-                .limit(1)
-            )
+            task = await self.get_latest_conversation_task(org_id, conversation_id, db=session)
             if not task:
                 return None
 

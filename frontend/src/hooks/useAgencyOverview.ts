@@ -81,13 +81,44 @@ export function useAgencyOverview() {
         const nextAttention: AgencyOverviewAttentionItem = {
           type: 'pending_review',
           urgency: 'high',
-          title: `Review ready: ${String(lastEvent.workflow_name || 'Workflow')}`,
+          title: `Needs Review: ${String(lastEvent.workflow_name || 'Workflow')}`,
           subtitle: 'Execution finished and is waiting for your review.',
           client_name: null,
           execution_id: lastEvent.execution_id ? String(lastEvent.execution_id) : null,
           approval_id: null,
+          status: 'pending_review',
+          status_label: 'Needs Review',
+          review_state: 'needs_review',
+          review_stage: 'final_review',
+          requires_ceo_action: true,
           age_minutes: 0,
           url: `/executions/${String(lastEvent.execution_id || '')}`,
+        }
+        const withoutDuplicate = current.needs_attention.filter(item => item.execution_id !== nextAttention.execution_id)
+        return {
+          ...current,
+          needs_attention: sortAttention([nextAttention, ...withoutDuplicate]),
+          attention_count: current.attention_count + (withoutDuplicate.length === current.needs_attention.length ? 1 : 0),
+        }
+      }
+
+      if (eventType === 'workflow_paused') {
+        const executionId = String(lastEvent.execution_id || '')
+        const nextAttention: AgencyOverviewAttentionItem = {
+          type: 'pending_review',
+          urgency: 'high',
+          title: `Needs Review: ${String(lastEvent.workflow_name || 'Workflow')}`,
+          subtitle: 'Workflow paused and is waiting for your approval.',
+          client_name: null,
+          execution_id: executionId || null,
+          approval_id: null,
+          status: 'waiting_approval',
+          status_label: 'Needs Review',
+          review_state: 'needs_review',
+          review_stage: 'workflow_pause',
+          requires_ceo_action: true,
+          age_minutes: 0,
+          url: executionId ? `/executions/${executionId}` : '/approvals',
         }
         const withoutDuplicate = current.needs_attention.filter(item => item.execution_id !== nextAttention.execution_id)
         return {
@@ -106,10 +137,19 @@ export function useAgencyOverview() {
         }
       }
 
+      if (eventType === 'workflow_resumed' || eventType === 'workflow_rejected' || eventType === 'workflow_timed_out') {
+        const filtered = current.needs_attention.filter(item => item.execution_id !== String(lastEvent.execution_id || ''))
+        return {
+          ...current,
+          needs_attention: filtered,
+          attention_count: filtered.length,
+        }
+      }
+
       if (eventType === 'execution_failed') {
         const executionId = String(lastEvent.execution_id || '')
         const nextAttention: AgencyOverviewAttentionItem = {
-          type: 'failed_execution',
+          type: 'failed',
           urgency: 'medium',
           title: `Failed: ${String(lastEvent.workflow_name || 'Workflow')}`,
           subtitle: String(lastEvent.error || 'Execution failed'),

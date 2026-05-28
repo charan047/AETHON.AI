@@ -79,6 +79,7 @@ async def test_gmail_oauth_start_returns_url_and_stores_state(monkeypatch, authe
     assert "accounts.google.com" in payload["oauth_url"]
     assert "gmail.send" in payload["oauth_url"]
     assert "drive.file" in payload["oauth_url"]
+    assert "spreadsheets" in payload["oauth_url"]
     assert len(fake_redis.values) == 1
 
     stored_payload = json.loads(next(iter(fake_redis.values.values())))
@@ -106,7 +107,7 @@ async def test_gmail_oauth_callback_upserts_integration(monkeypatch, authed_clie
             {
                 "access_token": "gmail-access",
                 "refresh_token": "gmail-refresh",
-                "scope": "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.file",
+                "scope": "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets",
                 "expires_in": 3600,
                 "token_type": "Bearer",
             }
@@ -141,7 +142,8 @@ async def test_gmail_oauth_callback_upserts_integration(monkeypatch, authed_clie
     assert stored["granted_scopes"] == (
         "https://www.googleapis.com/auth/gmail.send "
         "https://www.googleapis.com/auth/gmail.readonly "
-        "https://www.googleapis.com/auth/drive.file"
+        "https://www.googleapis.com/auth/drive.file "
+        "https://www.googleapis.com/auth/spreadsheets"
     )
     assert stored["email"] == "hello@example.com"
 
@@ -299,7 +301,8 @@ async def test_list_integrations_marks_updated_gmail_connection_as_ready(authed_
                 "granted_scopes": (
                     "https://www.googleapis.com/auth/gmail.send "
                     "https://www.googleapis.com/auth/gmail.readonly "
-                    "https://www.googleapis.com/auth/drive.file"
+                    "https://www.googleapis.com/auth/drive.file "
+                    "https://www.googleapis.com/auth/spreadsheets"
                 ),
             }
         ),
@@ -332,3 +335,46 @@ async def test_gmail_tool_returns_helpful_error_when_not_connected(monkeypatch, 
     )
     assert result.success is False
     assert result.error == "Gmail is not connected. Visit /integrations to connect with OAuth."
+
+
+@pytest.mark.asyncio
+async def test_list_integrations_marks_unsupported_stored_types(authed_client, db, test_org, test_user):
+    integration = UserIntegration(
+        id=str(uuid4()),
+        org_id=test_org.id,
+        user_id=test_user.id,
+        integration_type=IntegrationType.notion,
+        name="Legacy Notion",
+        config=encrypt_config({"token": "secret"}),
+        is_active=True,
+    )
+    db.add(integration)
+    await db.commit()
+
+    response = await authed_client.get("/api/integrations")
+
+    assert response.status_code == 200
+    payload = response.json()
+    notion = next(item for item in payload if item["integration_type"] == "notion")
+    assert notion["is_supported"] is False
+    assert "not yet supported" in notion["support_note"].lower()
+
+
+@pytest.mark.asyncio
+async def test_testing_unsupported_integration_returns_400(authed_client, db, test_org, test_user):
+    integration = UserIntegration(
+        id=str(uuid4()),
+        org_id=test_org.id,
+        user_id=test_user.id,
+        integration_type=IntegrationType.linear,
+        name="Legacy Linear",
+        config=encrypt_config({"token": "secret"}),
+        is_active=True,
+    )
+    db.add(integration)
+    await db.commit()
+
+    response = await authed_client.post(f"/api/integrations/{integration.id}/test")
+
+    assert response.status_code == 400
+    assert "not yet supported" in response.json()["detail"].lower()

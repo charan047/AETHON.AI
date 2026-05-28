@@ -81,7 +81,7 @@ export function MessagesInbox() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="page-title">Messages</h1>
-          <p className="page-subtitle">Agent inbox and direct threads</p>
+          <p className="page-sub">Agent inbox and direct threads</p>
         </div>
         <span className={clsx('badge', unreadCount > 0 ? 'badge-red' : 'badge-glass')}>
           {unreadCount} unread
@@ -111,7 +111,7 @@ export function MessagesInbox() {
         ))}
       </div>
 
-      <section className="glass-card overflow-hidden p-0">
+      <section className="card overflow-hidden p-0">
         {inboxQuery.isLoading ? (
           <div className="px-5 py-10 text-sm text-[var(--text-3)]">Loading messages…</div>
         ) : filtered.length === 0 ? (
@@ -133,7 +133,7 @@ export function MessagesInbox() {
                   onClick={() => {
                     if (message.from_agent_id) navigate(`/messages/${message.from_agent_id}`)
                   }}
-                  className="data-row min-h-[44px] w-full text-left"
+                  className="row min-h-[44px] w-full text-left"
                 >
                   <div className={clsx('flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-[10px] font-bold text-white', avatarTone(name))}>
                     {name.charAt(0).toUpperCase()}
@@ -151,7 +151,7 @@ export function MessagesInbox() {
         )}
       </section>
 
-      <div className="glass-card flex items-center gap-3 px-4 py-3 text-sm text-[#8B9DBE]">
+      <div className="card flex items-center gap-3 px-4 py-3 text-sm text-[#8B9DBE]">
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/12 text-indigo-300">
           <MessageSquare size={16} />
         </div>

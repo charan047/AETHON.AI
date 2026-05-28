@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowRight, CheckCircle2, Download, Play, X } from 'lucide-react'
 import { agentsApi, extractApiError, marketplaceApi } from '../../api/client'
 import { useAuth } from '../../contexts/AuthContext'
+import { ShimmerButton } from '../ui/magicui/ShimmerButton'
 import { toast } from '../../lib/toast'
 import type { MarketplaceListing } from '../../types'
 
@@ -129,7 +130,7 @@ export function InstallModal({ listing, open, onClose }: InstallModalProps) {
 
                 <div className="mt-6 space-y-3 text-left">
                   {[
-                    `Open it in ${installed.type === 'agent' ? 'Agents' : installed.type === 'workflow' ? 'Workflows' : installed.type === 'tool_config' ? 'Tools' : 'Evaluations'}.`,
+                    `Open it in ${installed.type === 'agent' ? 'Agents' : installed.type === 'workflow' ? 'Processes' : installed.type === 'tool_config' ? 'Tools' : 'Evaluations'}.`,
                     installed.type === 'workflow' ? 'Assign your own agents and variables before the first run.' : 'Review the installed configuration and personalize it for your agency.',
                     'Run it now to verify everything is wired correctly.',
                   ].map((step, index) => (
@@ -179,14 +180,15 @@ export function InstallModal({ listing, open, onClose }: InstallModalProps) {
                   Create a fresh copy if already installed
                   <input type="checkbox" className="indigo-indigo-500" checked={reinstall} onChange={event => setReinstall(event.target.checked)} />
                 </label>
-                <button
-                  className="btn-primary btn-runner h-12 w-full justify-center"
+                <ShimmerButton
+                  className="h-12 w-full justify-center rounded-xl px-6 text-sm font-semibold"
+                  background="rgba(79,70,229,1)"
                   disabled={install.isPending || (listing.listing_type === 'eval_suite' && !agentId)}
                   onClick={() => install.mutate()}
                 >
                   <Download size={16} />
                   {install.isPending ? 'Installing...' : 'Install Now'}
-                </button>
+                </ShimmerButton>
               </>
             )}
           </div>

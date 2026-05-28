@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from io import BytesIO
+import html
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,6 +75,218 @@ class MissionReportResponse(BaseModel):
     mission_id: str
     status: str
     report: str | None = None
+
+
+def _build_mission_export_filename(title: str | None, completed_at: datetime | None, ext: str) -> str:
+    safe_title = (title or "mission-report").strip().lower().replace(" ", "-")
+    safe_title = "".join(ch for ch in safe_title if ch.isalnum() or ch in {"-", "_"}).strip("-_") or "mission-report"
+    date_part = (completed_at or datetime.utcnow()).strftime("%Y-%m-%d")
+    return f"{safe_title}-{date_part}.{ext}"
+
+
+def _parse_markdown_blocks(content: str) -> list[dict]:
+    blocks: list[dict] = []
+    lines = (content or "").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index].rstrip()
+        stripped = line.strip()
+        if not stripped:
+            index += 1
+            continue
+        if stripped.startswith("```"):
+            code_lines: list[str] = []
+            index += 1
+            while index < len(lines) and not lines[index].strip().startswith("```"):
+                code_lines.append(lines[index].rstrip("\n"))
+                index += 1
+            index += 1
+            blocks.append({"type": "code", "text": "\n".join(code_lines)})
+            continue
+        if stripped.startswith("##"):
+            level = len(stripped) - len(stripped.lstrip("#"))
+            blocks.append({"type": "heading", "level": level, "text": stripped[level:].strip()})
+            index += 1
+            continue
+        if stripped.startswith(("- ", "* ")):
+            items: list[str] = []
+            while index < len(lines):
+                current = lines[index].strip()
+                if not current.startswith(("- ", "* ")):
+                    break
+                items.append(current[2:].strip())
+                index += 1
+            blocks.append({"type": "bullet", "items": items})
+            continue
+        if stripped[:2].isdigit() and ". " in stripped:
+            items: list[str] = []
+            while index < len(lines):
+                current = lines[index].strip()
+                if ". " not in current:
+                    break
+                prefix, body = current.split(". ", 1)
+                if not prefix.isdigit():
+                    break
+                items.append(body.strip())
+                index += 1
+            blocks.append({"type": "numbered", "items": items})
+            continue
+        paragraph: list[str] = [stripped]
+        index += 1
+        while index < len(lines):
+            current = lines[index].strip()
+            if not current or current.startswith(("##", "- ", "* ", "```")):
+                break
+            paragraph.append(current)
+            index += 1
+        blocks.append({"type": "paragraph", "text": "\n".join(paragraph)})
+    return blocks
+
+
+async def _render_mission_report_pdf(
+    *,
+    agency_name: str,
+    mission_title: str,
+    client_name: str | None,
+    completed_at: datetime | None,
+    report: str,
+    tasks: list[MissionTask],
+) -> bytes:
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import LETTER
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from reportlab.platypus import ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer
+    except Exception as exc:
+        raise RuntimeError("PDF export dependency is not installed") from exc
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=LETTER,
+        leftMargin=0.9 * inch,
+        rightMargin=0.9 * inch,
+        topMargin=1.0 * inch,
+        bottomMargin=0.85 * inch,
+        title=mission_title,
+        author=agency_name,
+    )
+
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="MissionTitle", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=20, leading=24, textColor=colors.HexColor("#111827"), spaceAfter=14))
+    styles.add(ParagraphStyle(name="MissionMeta", parent=styles["BodyText"], fontName="Helvetica", fontSize=9.5, leading=13, textColor=colors.HexColor("#6B7280"), spaceAfter=4))
+    styles.add(ParagraphStyle(name="MissionH2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=14, leading=18, textColor=colors.HexColor("#111827"), spaceBefore=10, spaceAfter=6))
+    styles.add(ParagraphStyle(name="MissionH3", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=12, leading=16, textColor=colors.HexColor("#1F2937"), spaceBefore=8, spaceAfter=5))
+    styles.add(ParagraphStyle(name="MissionBody", parent=styles["BodyText"], fontName="Helvetica", fontSize=10.5, leading=16, textColor=colors.HexColor("#111827"), spaceAfter=8))
+    styles.add(ParagraphStyle(name="MissionCode", parent=styles["Code"], fontName="Courier", fontSize=9, leading=12, textColor=colors.HexColor("#111827"), backColor=colors.HexColor("#F8FAFC"), borderColor=colors.HexColor("#CBD5E1"), borderWidth=0.5, borderPadding=8, spaceAfter=10))
+
+    story = [
+        Paragraph(mission_title + (f" — {client_name}" if client_name else ""), styles["MissionTitle"]),
+        Paragraph((completed_at or datetime.utcnow()).strftime("%b %d, %Y %I:%M %p"), styles["MissionMeta"]),
+        Paragraph(f"Agency: {agency_name}", styles["MissionMeta"]),
+    ]
+    if client_name:
+        story.append(Paragraph(f"Client: {client_name}", styles["MissionMeta"]))
+    story.append(Spacer(1, 10))
+
+    for block in _parse_markdown_blocks(report):
+        if block["type"] == "heading":
+            style_name = "MissionH2" if block["level"] <= 2 else "MissionH3"
+            story.append(Paragraph(html.escape(block["text"]), styles[style_name]))
+        elif block["type"] == "bullet":
+            items = [ListItem(Paragraph(html.escape(item), styles["MissionBody"])) for item in block["items"]]
+            story.append(ListFlowable(items, bulletType="bullet", leftIndent=18))
+            story.append(Spacer(1, 8))
+        elif block["type"] == "numbered":
+            items = [ListItem(Paragraph(html.escape(item), styles["MissionBody"])) for item in block["items"]]
+            story.append(ListFlowable(items, bulletType="1", leftIndent=18))
+            story.append(Spacer(1, 8))
+        elif block["type"] == "code":
+            story.append(Paragraph(html.escape(block["text"]).replace("\n", "<br/>"), styles["MissionCode"]))
+        else:
+            story.append(Paragraph(html.escape(block["text"]).replace("\n", "<br/>"), styles["MissionBody"]))
+
+    if tasks:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Task Breakdown", styles["MissionH2"]))
+        for task in tasks:
+            title = f"{task.sequence}. {task.title} — {_status_value(task.status)}"
+            story.append(Paragraph(html.escape(title), styles["MissionH3"]))
+            if task.output_summary:
+                story.append(Paragraph(html.escape(task.output_summary).replace("\n", "<br/>"), styles["MissionBody"]))
+
+    doc.build(story)
+    return buffer.getvalue()
+
+
+async def _render_mission_report_docx(
+    *,
+    agency_name: str,
+    mission_title: str,
+    client_name: str | None,
+    completed_at: datetime | None,
+    report: str,
+    tasks: list[MissionTask],
+) -> bytes:
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt
+    except Exception as exc:
+        raise RuntimeError("DOCX export dependency is not installed") from exc
+
+    document = Document()
+    section = document.sections[0]
+    section.top_margin = Inches(0.8)
+    section.bottom_margin = Inches(0.7)
+    section.left_margin = Inches(0.85)
+    section.right_margin = Inches(0.85)
+
+    normal_style = document.styles["Normal"]
+    normal_style.font.name = "Arial"
+    normal_style.font.size = Pt(10.5)
+
+    title = document.add_paragraph()
+    title.style = document.styles["Title"]
+    title.add_run(mission_title + (f" — {client_name}" if client_name else "")).bold = True
+
+    for text in (
+        (completed_at or datetime.utcnow()).strftime("%b %d, %Y %I:%M %p"),
+        f"Agency: {agency_name}",
+        f"Client: {client_name}" if client_name else None,
+    ):
+        if not text:
+            continue
+        document.add_paragraph(str(text))
+
+    for block in _parse_markdown_blocks(report):
+        if block["type"] == "heading":
+            level = 2 if block["level"] <= 2 else 3
+            document.add_heading(block["text"], level=level)
+        elif block["type"] == "bullet":
+            for item in block["items"]:
+                document.add_paragraph(item, style="List Bullet")
+        elif block["type"] == "numbered":
+            for item in block["items"]:
+                document.add_paragraph(item, style="List Number")
+        elif block["type"] == "code":
+            paragraph = document.add_paragraph()
+            run = paragraph.add_run(block["text"])
+            run.font.name = "Courier New"
+            run.font.size = Pt(9)
+        else:
+            document.add_paragraph(block["text"])
+
+    if tasks:
+        document.add_heading("Task Breakdown", level=2)
+        for task in tasks:
+            document.add_heading(f"{task.sequence}. {task.title} — {_status_value(task.status)}", level=3)
+            if task.output_summary:
+                document.add_paragraph(task.output_summary)
+
+    buffer = BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
 
 
 def _status_value(value) -> str:
@@ -247,6 +462,53 @@ async def get_mission_report(
         mission_id=mission.id,
         status=_status_value(mission.status),
         report=mission.report,
+    )
+
+
+@router.get("/missions/{mission_id}/export")
+async def export_mission_report(
+    mission_id: str,
+    format: str = Query(..., pattern="^(pdf|docx)$"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    mission = await _get_org_scoped_mission(mission_id, ctx.org.id, db)
+    if not mission.report:
+        raise HTTPException(status_code=400, detail="Mission report is not ready yet")
+
+    tasks = await _mission_tasks(mission.id, ctx.org.id, db)
+    client_name = None
+    if mission.client_id:
+        client = await db.scalar(
+            select(Client).where(Client.id == mission.client_id, Client.org_id == ctx.org.id)
+        )
+        if client:
+            client_name = client.company_name or client.name
+
+    exporter = _render_mission_report_pdf if format == "pdf" else _render_mission_report_docx
+    try:
+        content = await exporter(
+            agency_name=ctx.org.name,
+            mission_title=mission.title or mission.goal or "Mission Report",
+            client_name=client_name,
+            completed_at=mission.completed_at,
+            report=mission.report,
+            tasks=tasks,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    media_type = (
+        "application/pdf"
+        if format == "pdf"
+        else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    filename = _build_mission_export_filename(mission.title or mission.goal, mission.completed_at, format)
+    return StreamingResponse(
+        BytesIO(content),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

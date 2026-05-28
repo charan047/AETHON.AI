@@ -48,7 +48,7 @@ function MemberRow({
   onRemove: () => void
 }) {
   return (
-    <div className="data-row group min-h-[48px]">
+    <div className="row group min-h-[48px]">
       <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500/15 text-xs font-semibold text-indigo-200">
         {initials(member.full_name, member.email)}
       </div>
@@ -93,7 +93,7 @@ function PendingInviteRow({
   onCancel: () => void
 }) {
   return (
-    <div className="data-row data-row-amber min-h-[48px]">
+    <div className="row row-amber min-h-[48px]">
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold text-white">{invite.email}</div>
         <div className="text-xs text-[#8B9DBE]">Sent {formatAgo(invite.created_at)}</div>
@@ -182,7 +182,7 @@ export function TeamManagement() {
   if (!auth.activeOrg) {
     return (
       <div className="grid min-h-full place-items-center p-6 text-center">
-        <div className="glass-card max-w-md p-8">
+        <div className="card max-w-md p-8">
           <Users className="mx-auto text-[#4B5A73]" size={44} />
           <h1 className="mt-4 text-2xl font-semibold text-white">No organization selected</h1>
           <p className="mt-2 text-sm text-[#8B9DBE]">Create or switch into an organization before managing teammates.</p>
@@ -196,7 +196,7 @@ export function TeamManagement() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="page-title">Team</h1>
-          <p className="page-subtitle">{members.length} members</p>
+          <p className="page-sub">{members.length} members</p>
         </div>
         {canManage && (
           <button className="btn-primary btn-runner" onClick={() => setInviteOpen(true)}>
@@ -205,7 +205,7 @@ export function TeamManagement() {
         )}
       </div>
 
-      <section className="glass-card overflow-hidden">
+      <section className="card overflow-hidden">
         <div className="page-header px-5 py-4">
           <div>
             <div className="section-title mb-0 border-none pb-0">Members</div>
@@ -235,7 +235,7 @@ export function TeamManagement() {
       </section>
 
       {canManage && (
-        <section className="glass-card overflow-hidden">
+        <section className="card overflow-hidden">
           <div className="px-5 py-4">
             <div className="section-title mb-0 border-none pb-0">Pending Invites</div>
           </div>

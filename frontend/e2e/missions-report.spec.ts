@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import { loginHelper, uniqueEmail } from './helpers'
 
-test.describe('Missions and Reports', () => {
+test.describe('Projects and Reports', () => {
   test('missions page can create a new mission from the redesigned composer', async ({ page, request }) => {
     await loginHelper(page, request, uniqueEmail('missions-page'))
 
@@ -60,8 +60,8 @@ test.describe('Missions and Reports', () => {
 
     await page.goto('/missions')
 
-    await expect(page.getByRole('heading', { name: 'Missions' })).toBeVisible()
-    await page.getByRole('button', { name: /New Mission/i }).click()
+    await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
+    await page.getByRole('button', { name: /New Project/i }).click()
     await page.getByPlaceholder('Describe the goal for your agency...').fill('Launch the Acme strategy sprint')
     await page.getByRole('button', { name: 'Acme Corp', exact: true }).click()
     await page.getByRole('button', { name: /Create Mission/i }).click()

@@ -1,3 +1,4 @@
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,8 @@ from database.models import (
     CTOAuthority,
     Client,
     CompanyChatMessage,
+    Execution,
+    ExecutionStatus,
     HumanApprovalRequest,
     Mission,
     MissionTask,
@@ -85,6 +88,13 @@ def test_system_prompt_includes_cto_sections():
     assert "create_cto_task" in prompt
     assert "cto_memory_add" in prompt
     assert "cto_status" in prompt
+
+
+def test_cto_ownership_detector_handles_report_back_language():
+    from services.cto_operator_service import looks_like_cto_ownership_request
+
+    assert looks_like_cto_ownership_request("Create a mission for Acme and report me back after it is done") is True
+    assert looks_like_cto_ownership_request("Start a mission and let me know when it's done") is True
 
 
 @pytest.mark.asyncio
@@ -182,9 +192,10 @@ async def test_run_workflow_requires_cto_workflow_authority(db, test_org, test_u
         db,
     )
 
-    assert result["type"] == "error"
+    assert result["type"] == "run_workflow"
     assert result["success"] is False
-    assert "not authorized" in result["label"].lower()
+    assert result["requires_confirmation"] is True
+    assert "requires ceo confirmation" in result["message"].lower()
 
     await db.refresh(task)
     assert task.status == CTOTaskStatus.waiting_ceo
@@ -219,13 +230,67 @@ async def test_create_mission_requires_cto_mission_authority(db, test_org, test_
         db,
     )
 
-    assert result["type"] == "error"
+    assert result["type"] == "create_mission"
     assert result["success"] is False
-    assert "not authorized" in result["label"].lower()
+    assert result["requires_confirmation"] is True
+    assert "requires your approval" in result["message"].lower()
 
     await db.refresh(task)
     assert task.status == CTOTaskStatus.waiting_ceo
     assert "mission" in (task.ceo_action_needed or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_sync_cto_dispatch_for_mission_spawns_watch_task(monkeypatch, db, test_org, test_user):
+    from api import company_chat as company_chat_module
+    import services.cto_task_service as cto_task_service_module
+
+    captured_task_ids: list[str] = []
+    spawned: list[object] = []
+
+    async def fake_watch_task(task_id: str):
+        captured_task_ids.append(task_id)
+
+    def fake_spawn_background_task(coro):
+        spawned.append(coro)
+        return None
+
+    monkeypatch.setattr(cto_task_service_module.cto_task_service, "watch_task", fake_watch_task)
+    monkeypatch.setattr(company_chat_module, "_spawn_background_task", fake_spawn_background_task)
+
+    task = CTOTask(
+        org_id=test_org.id,
+        original_request="Research Acme and prepare a project brief",
+        status=CTOTaskStatus.active,
+        conversation_id="conv-watch",
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+
+    await company_chat_module._sync_cto_dispatch_for_conversation(
+        org_id=test_org.id,
+        conversation_id="conv-watch",
+        request_text="Research Acme and prepare a project brief",
+        action_results=[
+            {
+                "type": "mission_created",
+                "mission_id": "mission-123",
+                "success": True,
+            }
+        ],
+        db=db,
+        task_plan="1. Research 2. Draft 3. Deliver",
+        ensure_task=False,
+    )
+    assert len(spawned) == 1
+    await spawned[0]
+
+    await db.refresh(task)
+
+    assert task.mission_id == "mission-123"
+    assert task.status == CTOTaskStatus.monitoring
+    assert captured_task_ids == [str(task.id)]
 
 
 @pytest.mark.asyncio
@@ -354,6 +419,114 @@ async def test_bulk_approve_requires_explicit_or_learned_authority(db, test_org,
 
 
 @pytest.mark.asyncio
+async def test_run_workflow_uses_lazy_default_authority_when_missing(db, test_org, test_user):
+    from api import company_chat as company_chat_module
+
+    workflow = Workflow(
+        org_id=test_org.id,
+        name="Weekly Brief",
+        description="Prepare the weekly brief",
+        nodes=[],
+        edges=[],
+        trigger="manual",
+        status="active",
+    )
+    db.add(workflow)
+    await db.commit()
+
+    async def fake_enqueue(*_args, **_kwargs):
+        return None
+
+    from api import executions as executions_module
+
+    original_enqueue = executions_module.enqueue_workflow_execution
+    executions_module.enqueue_workflow_execution = fake_enqueue
+
+    try:
+        result = await company_chat_module._execute_action(
+            {
+                "type": "run_workflow",
+                "workflow_id": workflow.id,
+                "input": "Run the weekly brief",
+                "conversation_id": "conv-default-authority",
+            },
+            test_user.id,
+            test_org.id,
+            db,
+        )
+    finally:
+        executions_module.enqueue_workflow_execution = original_enqueue
+
+    assert result["type"] == "run_workflow"
+    assert result["success"] is True
+
+    authority = await db.scalar(select(CTOAuthority).where(CTOAuthority.org_id == test_org.id))
+    assert authority is not None
+    assert authority.auto_run_workflows is True
+    assert authority.auto_create_missions is True
+    assert authority.auto_approve_portal is True
+
+
+@pytest.mark.asyncio
+async def test_deliver_execution_requires_portal_authority(db, test_org, test_user):
+    from api import company_chat as company_chat_module
+
+    client = Client(
+        id="client-portal-1",
+        org_id=test_org.id,
+        name="Acme",
+        company_name="Acme Corp",
+        portal_enabled=False,
+    )
+    workflow = Workflow(
+        id="workflow-portal-1",
+        org_id=test_org.id,
+        name="Weekly Brief",
+        description="Prepare the weekly brief",
+        nodes=[],
+        edges=[],
+        trigger="manual",
+        status="active",
+        requires_review=True,
+    )
+    authority = CTOAuthority(
+        org_id=test_org.id,
+        auto_approve_portal=False,
+    )
+    execution = Execution(
+        id="execution-portal-1",
+        org_id=test_org.id,
+        workflow_id=workflow.id,
+        client_id=client.id,
+        trigger="manual",
+        status=ExecutionStatus.completed,
+        input_message="Prepare the weekly brief",
+        output_message="Ready for the client.",
+        started_at=datetime.utcnow(),
+        approved_at=datetime.utcnow(),
+    )
+    db.add_all([client, workflow, authority, execution])
+    await db.commit()
+
+    result = await company_chat_module._execute_action(
+        {
+            "type": "deliver_execution",
+            "execution_id": execution.id,
+            "method": "portal",
+            "conversation_id": "conv-portal-delivery",
+        },
+        test_user.id,
+        test_org.id,
+        db,
+    )
+
+    assert result["type"] == "deliver_execution"
+    assert result["success"] is False
+    assert result["requires_confirmation"] is True
+    assert "portal delivery requires your approval" in result["message"].lower()
+
+
+@pytest.mark.asyncio
 async def test_bulk_approve_allows_repeated_workflow_approval_pattern(db, test_org, test_user):
     from api import company_chat as company_chat_module
 
@@ -427,7 +600,7 @@ async def test_company_chat_stream_injects_cto_context_and_links_mission(
     monkeypatch.setattr(cto_task_service_module, "AsyncSessionLocal", session_factory)
     monkeypatch.setattr(cto_memory_service_module, "AsyncSessionLocal", session_factory)
 
-    captured = {"system_prompt": None, "watch_started": False}
+    captured = {"llm_called": False, "watch_started": False}
 
     client = Client(org_id=test_org.id, name="Acme", company_name="Acme Corp")
     db.add(client)
@@ -439,7 +612,7 @@ async def test_company_chat_stream_injects_cto_context_and_links_mission(
 
     class FakeLLM:
         async def astream(self, messages):
-            captured["system_prompt"] = messages[0].content
+            captured["llm_called"] = True
             text = (
                 "On it."
                 '<action>{"type":"create_cto_task","request":"Handle Acme weekly deliverables",'
@@ -502,9 +675,46 @@ async def test_company_chat_stream_injects_cto_context_and_links_mission(
     assert stored_task.conversation_id
     assert stored_task.mission_id == mission.id
     assert captured["watch_started"] is True
-    assert "TASKS I OWN:" in (captured["system_prompt"] or "")
-    assert "WHAT I REMEMBER ABOUT THIS ORG:" in (captured["system_prompt"] or "")
-    assert "MY AUTHORITY (do these without asking CEO):" in (captured["system_prompt"] or "")
+    assert captured["llm_called"] is False
+
+
+@pytest.mark.asyncio
+async def test_company_chat_returns_fallback_for_empty_successful_llm_reply(
+    monkeypatch,
+    authed_client,
+    db,
+    test_org,
+):
+    from api import company_chat as company_chat_module
+
+    class EmptyLLM:
+        async def astream(self, messages):
+            if False:
+                yield messages
+
+    monkeypatch.setattr(company_chat_module, "build_llm", lambda *args, **kwargs: EmptyLLM())
+
+    response = await authed_client.post(
+        "/api/company/chat",
+        json={"message": "nice"},
+    )
+
+    assert response.status_code == 200
+
+    lines = [line for line in response.text.splitlines() if line.strip()]
+    assert any('"type": "text"' in line and '"Got it."' in line for line in lines)
+
+    stored_message = await db.scalar(
+        select(CompanyChatMessage)
+        .where(
+            CompanyChatMessage.org_id == test_org.id,
+            CompanyChatMessage.role == "assistant",
+        )
+        .order_by(CompanyChatMessage.created_at.desc())
+    )
+
+    assert stored_message is not None
+    assert stored_message.content == "Got it."
 
 
 @pytest.mark.asyncio

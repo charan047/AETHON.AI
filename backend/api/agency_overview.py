@@ -20,6 +20,10 @@ from database.models import (
     User,
     Workflow,
 )
+from services.review_state_service import (
+    agent_status_presentation,
+    execution_review_presentation,
+)
 
 
 router = APIRouter(dependencies=[Depends(get_current_user), Depends(get_org_context)])
@@ -158,6 +162,7 @@ async def _agents_overview(org_id: str) -> dict:
             working += 1
         else:
             idle += 1
+        status_meta = agent_status_presentation(status)
         agents.append(
             {
                 "id": agent.id,
@@ -165,7 +170,9 @@ async def _agents_overview(org_id: str) -> dict:
                 "persona_name": agent.persona_name,
                 "role": agent.role,
                 "role_slug": agent.role_slug,
-                "current_status": status,
+                "current_status": status_meta["status"],
+                "current_status_label": status_meta["status_label"],
+                "requires_ceo_action": status_meta["requires_ceo_action"],
                 "current_task_summary": agent.current_task_summary,
                 "client_id": agent.client_id,
                 "client_name": client_name,
@@ -297,13 +304,14 @@ async def _activity_overview(org_id: str) -> dict:
 
     recent = []
     for row in rows:
+        status_meta = execution_review_presentation(row.status)
         recent.append(
             {
                 "id": row.id,
                 "client_id": row.client_id,
                 "client_name": row.client_name,
                 "agent_name": row.agent_name or "Agent",
-                "status": row.status.value if hasattr(row.status, "value") else row.status,
+                **status_meta,
                 "started_at": _iso(row.started_at),
                 "input_preview": _preview(row.input_message, limit=110),
             }
@@ -328,7 +336,9 @@ async def _needs_attention(org_id: str) -> list[dict]:
                 .where(
                     Execution.org_id == org_id,
                     Workflow.org_id == org_id,
-                    Execution.status == ExecutionStatus.pending_review,
+                    Execution.status.in_(
+                        [ExecutionStatus.pending_review, ExecutionStatus.waiting_approval]
+                    ),
                 )
                 .order_by(Execution.started_at.asc())
                 .limit(10)
@@ -372,17 +382,24 @@ async def _needs_attention(org_id: str) -> list[dict]:
             if execution.started_at
             else 0
         )
+        status_meta = execution_review_presentation(execution.status)
+        subtitle = (
+            "Workflow paused and is waiting for your approval."
+            if status_meta["review_stage"] == "workflow_pause"
+            else _preview(execution.input_message, 60)
+        )
         items.append(
             {
                 "type": "pending_review",
                 "urgency": "high",
-                "title": f"Review ready: {workflow.name}",
-                "subtitle": _preview(execution.input_message, 60),
+                "title": f"Needs review: {workflow.name}",
+                "subtitle": subtitle,
                 "client_name": client_name,
                 "execution_id": str(execution.id),
                 "approval_id": None,
                 "age_minutes": age_minutes,
                 "url": f"/executions/{execution.id}",
+                **status_meta,
             }
         )
 
@@ -415,7 +432,7 @@ async def _needs_attention(org_id: str) -> list[dict]:
         )
         items.append(
             {
-                "type": "failed_execution",
+                "type": "failed",
                 "urgency": "medium",
                 "title": f"Failed: {workflow.name}",
                 "subtitle": (execution.error or "Unknown error")[:80],

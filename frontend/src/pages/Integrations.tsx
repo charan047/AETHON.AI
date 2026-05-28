@@ -57,7 +57,8 @@ const PROVIDER_LABELS: Record<string, string> = {
   github: 'GitHub',
 }
 
-type ModalType = 'github' | 'email' | null
+type ModalType = 'github' | 'email' | 'search' | null
+const SUPPORTED_INTEGRATION_TYPES = new Set(['github', 'gmail', 'slack', 'email_smtp', 'search_api'])
 
 function statusBadge(integration: UserIntegration) {
   if (!integration.last_tested_at) return 'badge-gray'
@@ -89,7 +90,7 @@ function providerStatusSummary(key: keyof ProviderHealth, status: ProviderStatus
 }
 
 function canTestIntegration(type: string) {
-  return ['github', 'gmail', 'slack', 'email_smtp'].includes(type)
+  return SUPPORTED_INTEGRATION_TYPES.has(type)
 }
 
 export function Integrations() {
@@ -108,6 +109,11 @@ export function Integrations() {
     imap_host: '',
     imap_port: 993,
     from_name: '',
+  })
+  const [searchForm, setSearchForm] = useState({
+    name: 'Agency Search',
+    provider: 'brave' as 'brave' | 'serper',
+    api_key: '',
   })
 
   const { data: integrations = [], isLoading } = useQuery({
@@ -128,8 +134,10 @@ export function Integrations() {
   }
   const github = integrations.filter(item => item.integration_type === 'github')
   const email = integrations.filter(item => item.integration_type === 'email_smtp')
+  const searchIntegrations = integrations.filter(item => item.integration_type === 'search_api')
   const gmailIntegration = integrations.find(item => item.integration_type === 'gmail') || null
   const slackIntegration = integrations.find(item => item.integration_type === 'slack') || null
+  const unsupportedIntegrations = integrations.filter(item => item.is_supported === false)
 
   const createGitHub = useMutation({
     mutationFn: integrationsApi.createGitHub,
@@ -147,6 +155,16 @@ export function Integrations() {
       toast.success('Email connected')
       setModal(null)
       refresh()
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
+
+  const createSearch = useMutation({
+    mutationFn: integrationsApi.createSearch,
+    onSuccess: () => {
+      toast.success('Search provider connected')
+      setModal(null)
+      refreshAll()
     },
     onError: error => toast.error(extractApiError(error)),
   })
@@ -248,7 +266,13 @@ export function Integrations() {
   ]), [gmailIntegration, providerHealth?.gmail, providerHealth?.slack, slackIntegration, startGmailOAuth, startSlackOAuth])
 
   const IntegrationCard = ({ integration }: { integration: UserIntegration }) => (
-    <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-4">
+    <div
+      className={integration.is_supported === false
+        ? 'cursor-not-allowed rounded-xl border border-white/[0.08] bg-white/[0.03] p-4 opacity-50'
+        : 'rounded-xl border border-white/[0.08] bg-white/[0.03] p-4'}
+      title={integration.is_supported === false ? 'Coming soon' : undefined}
+      aria-disabled={integration.is_supported === false || undefined}
+    >
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="font-semibold text-white">{integration.name}</div>
@@ -256,21 +280,31 @@ export function Integrations() {
             {integration.integration_type}
             {integration.default_repo ? ` · ${integration.default_repo}` : ''}
           </div>
+          {integration.support_note ? (
+            <div className="mt-2 max-w-xl text-xs text-amber-200">{integration.support_note}</div>
+          ) : null}
         </div>
-        <span className={statusBadge(integration)}>{statusLabel(integration)}</span>
+        <div className="flex items-center gap-2">
+          {integration.is_supported === false ? <span className="badge-glass">Coming soon</span> : null}
+          <span className={integration.is_supported === false ? 'badge-glass' : statusBadge(integration)}>
+            {integration.is_supported === false ? 'Unsupported' : statusLabel(integration)}
+          </span>
+        </div>
       </div>
       <div className="mt-4 flex items-center justify-between gap-3">
         <div className="text-xs text-ink-faint">
-          Last tested: {integration.last_tested_at ? new Date(integration.last_tested_at).toLocaleString() : 'Never'}
+          {integration.is_supported === false
+            ? 'Coming soon. Available for disconnect only.'
+            : `Last tested: ${integration.last_tested_at ? new Date(integration.last_tested_at).toLocaleString() : 'Never'}`}
         </div>
         <div className="flex gap-2">
-          {canTestIntegration(integration.integration_type) ? (
+          {integration.is_supported === false ? (
+            <span className="badge-glass px-3 text-xs">unsupported</span>
+          ) : canTestIntegration(integration.integration_type) ? (
             <button className="btn-secondary px-3 text-xs" onClick={() => testIntegration.mutate(integration.id)}>
               <RefreshCw size={13} /> Test
             </button>
-          ) : (
-            <span className="badge-glass px-3 text-xs">testing soon</span>
-          )}
+          ) : null}
           <button className="btn-danger px-3 text-xs" onClick={() => deleteIntegration.mutate(integration.id)}>
             <Trash2 size={13} />
           </button>
@@ -329,13 +363,9 @@ export function Integrations() {
           </button>
         ) : (
           <div className="flex gap-2">
-            {canTestIntegration(integration.integration_type) ? (
-              <button className="btn-secondary btn-sm" onClick={() => testIntegration.mutate(integration.id)}>
-                Test
-              </button>
-            ) : (
-              <span className="badge-glass btn-sm px-3">testing soon</span>
-            )}
+            <button className="btn-secondary btn-sm" onClick={() => testIntegration.mutate(integration.id)}>
+              Test
+            </button>
             <button className="btn-ghost btn-sm" onClick={() => deleteIntegration.mutate(integration.id)}>
               Disconnect
             </button>
@@ -375,7 +405,13 @@ export function Integrations() {
               </div>
               <p className="mt-1 text-sm text-[#8B9DBE]">{description}</p>
               <p className="mt-3 text-xs text-[#4B5A73]">
-                Required for: {title === 'GitHub' ? 'repo access, code agents' : 'email delivery, outreach agent'}
+                Required for: {
+                  title === 'GitHub'
+                    ? 'repo access, code agents'
+                    : title === 'Search'
+                      ? 'web research, news, competitive analysis'
+                      : 'email delivery, outreach agent'
+                }
               </p>
               {primary ? (
                 <p className="mt-3 font-mono text-xs text-white/70">
@@ -423,7 +459,7 @@ export function Integrations() {
       <div className="space-y-2">
         <div>
           <h1 className="page-title">Integrations</h1>
-          <p className="page-subtitle">Connect your tools</p>
+          <p className="page-sub">Connect your tools</p>
         </div>
       </div>
 
@@ -449,11 +485,11 @@ export function Integrations() {
       </GlowCard>
 
       {gmailIntegration?.needs_reauth ? (
-        <GlowCard glowColor="amber" className="glass-card-amber flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <GlowCard glowColor="amber" className="card-amber flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <AlertTriangle size={18} className="text-amber-300" />
             <div className="text-sm text-amber-100">
-              Gmail needs updated permissions for Google Docs
+              Gmail needs updated permissions for Google Docs and Sheets
             </div>
           </div>
           <button className="btn-amber btn-sm" onClick={() => startGmailOAuth.mutate()} disabled={startGmailOAuth.isPending}>
@@ -463,6 +499,13 @@ export function Integrations() {
       ) : null}
 
       <div className="grid gap-5 xl:grid-cols-2">
+        <ManualProviderCard
+          title="Search"
+          icon={<Search className="h-5 w-5" />}
+          description="Give agents reliable Brave or Serper web search for current research tasks."
+          integrationsList={searchIntegrations}
+          onAdd={() => setModal('search')}
+        />
         {providerCards.map(card => (
           <OAuthCard
             key={card.key}
@@ -491,11 +534,29 @@ export function Integrations() {
         />
       </div>
 
+      {unsupportedIntegrations.length ? (
+        <GlowCard glowColor="amber" className="p-5">
+          <div className="mb-3">
+            <div className="section-title mb-0 border-0 pb-0">LEGACY / UNSUPPORTED</div>
+            <p className="mt-2 text-sm text-ink-muted">
+                  These integration records exist in your workspace, but Aethon does not support configuring or testing them yet. They stay visible for cleanup only.
+                </p>
+              </div>
+          <div className="space-y-3">
+            {unsupportedIntegrations.map(item => (
+              <IntegrationCard key={item.id} integration={item} />
+            ))}
+          </div>
+        </GlowCard>
+      ) : null}
+
       {modal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm">
           <div className="glass-elevated w-full max-w-xl p-5">
             <div className="mb-5 flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-white">Add {modal === 'github' ? 'GitHub' : 'Email'} Integration</h2>
+              <h2 className="text-xl font-semibold text-white">
+                Add {modal === 'github' ? 'GitHub' : modal === 'search' ? 'Search' : 'Email'} Integration
+              </h2>
               <button className="btn-ghost p-2" onClick={() => setModal(null)}><X size={16} /></button>
             </div>
 
@@ -512,6 +573,53 @@ export function Integrations() {
                 <FloatingField label="Default repo (owner/repo)" type="text" value={githubForm.default_repo} onChange={value => setGithubForm({ ...githubForm, default_repo: value })} />
                 <button className="btn-primary btn-runner w-full" disabled={createGitHub.isPending}>
                   {createGitHub.isPending ? <><Loader2 size={16} className="animate-spin" /> Connecting…</> : 'Connect GitHub'}
+                </button>
+              </form>
+            ) : modal === 'search' ? (
+              <form
+                className="space-y-4"
+                onSubmit={event => {
+                  event.preventDefault()
+                  createSearch.mutate(searchForm)
+                }}
+              >
+                <FloatingField
+                  label="Integration name"
+                  type="text"
+                  value={searchForm.name}
+                  onChange={value => setSearchForm({ ...searchForm, name: value })}
+                  required
+                />
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">Provider</p>
+                  <div className="flex flex-wrap gap-2">
+                    {(['brave', 'serper'] as const).map(provider => {
+                      const active = searchForm.provider === provider
+                      return (
+                        <button
+                          key={provider}
+                          type="button"
+                          className={active ? 'badge-indigo badge px-3 py-2' : 'badge-glass badge px-3 py-2'}
+                          onClick={() => setSearchForm({ ...searchForm, provider })}
+                        >
+                          {provider === 'brave' ? 'Brave Search' : 'Serper'}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+                <FloatingField
+                  label={searchForm.provider === 'brave' ? 'Brave API key' : 'Serper API key'}
+                  type="password"
+                  value={searchForm.api_key}
+                  onChange={value => setSearchForm({ ...searchForm, api_key: value })}
+                  required
+                />
+                <p className="text-xs text-ink-muted">
+                  Agents in this org will use this search provider before any platform fallback.
+                </p>
+                <button className="btn-primary btn-runner w-full" disabled={createSearch.isPending}>
+                  {createSearch.isPending ? <><Loader2 size={16} className="animate-spin" /> Connecting…</> : 'Connect Search'}
                 </button>
               </form>
             ) : (

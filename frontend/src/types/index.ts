@@ -125,6 +125,90 @@ export interface ClientActivityResponse {
   activity: ClientActivityItem[]
 }
 
+export interface ClientKnowledgeRecord {
+  id: string
+  org_id: string
+  client_id: string
+  content: string
+  category?: string | null
+  confidence: number
+  source_agent_id?: string | null
+  source_execution_id?: string | null
+  created_at: string
+  last_seen_at: string
+}
+
+export interface ClientIntakeField {
+  name: string
+  label: string
+  type?: 'text' | 'textarea' | 'select'
+  required?: boolean
+  options?: string[]
+}
+
+export interface ClientIntakeFormRecord {
+  id: string
+  org_id: string
+  client_id: string
+  client_name?: string | null
+  client_company_name?: string | null
+  title: string
+  workflow_id?: string | null
+  fields: ClientIntakeField[]
+  token: string
+  is_active: boolean
+  created_at: string
+  public_url: string
+}
+
+export interface ClientIntakeSubmissionRecord {
+  id: string
+  form_id: string
+  org_id: string
+  submitted_data: Record<string, string>
+  execution_id?: string | null
+  submitted_at: string
+}
+
+export type OrgFileStatus = 'pending' | 'uploading' | 'ready' | 'deleted' | 'error'
+export type OrgFileType = 'document' | 'pdf' | 'docx' | 'image' | 'markdown' | 'text' | 'other'
+
+export interface OrgFileRecord {
+  id: string
+  org_id: string
+  client_id?: string | null
+  agent_id?: string | null
+  execution_id?: string | null
+  mission_id?: string | null
+  name: string
+  description?: string | null
+  file_type: OrgFileType
+  status: OrgFileStatus
+  storage_key?: string | null
+  size_bytes: number
+  content_type?: string | null
+  checksum_sha256?: string | null
+  extracted_text?: string | null
+  version: number
+  parent_file_id?: string | null
+  is_latest: boolean
+  collab_room?: string | null
+  yjs_storage_key?: string | null
+  tags: string[]
+  created_by?: string | null
+  created_at: string
+  updated_at: string
+  last_accessed_at?: string | null
+  download_url?: string | null
+}
+
+export interface OrgFileListResponse {
+  files: OrgFileRecord[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface LongTaskStatus {
   task_id: string
   agent_id?: string
@@ -164,7 +248,7 @@ export interface WorkflowEdge {
 export interface WorkflowInputVariable {
   name: string
   label: string
-  type: 'text' | 'select' | 'number'
+  type: 'text' | 'textarea' | 'select' | 'number'
   required: boolean
   default?: string
   options?: string[]
@@ -387,6 +471,10 @@ export interface Execution {
   token_count: number
   cost: number
   error: string | null
+  status_label?: string
+  review_state?: 'needs_review' | null
+  review_stage?: 'final_review' | 'workflow_pause' | null
+  requires_ceo_action?: boolean
   messages: Message[]
   steps?: ExecutionStep[]
 }
@@ -434,6 +522,10 @@ export interface ExecutionRevisionSummary {
   id: string
   revision_number: number
   status: string
+  status_label?: string
+  review_state?: 'needs_review' | null
+  review_stage?: 'final_review' | 'workflow_pause' | null
+  requires_ceo_action?: boolean
   ceo_feedback?: string | null
   output?: string | null
   started_at: string
@@ -672,9 +764,11 @@ export interface BusinessSummary {
 
 export interface UserIntegration {
   id: string
-  integration_type: 'github' | 'email_smtp' | 'gmail' | 'slack' | 'notion' | 'linear'
+  integration_type: 'github' | 'email_smtp' | 'gmail' | 'slack' | 'search_api' | 'notion' | 'linear'
   name: string
   connected_account?: string | null
+  is_supported?: boolean
+  support_note?: string | null
   needs_reauth?: boolean
   reauth_reason?: string | null
   is_active: boolean
@@ -743,6 +837,8 @@ export interface DashboardSummary {
     autonomy_level?: string | null
     trust_score?: number | null
     status: 'working' | 'idle' | 'waiting_approval'
+    status_label?: string
+    requires_ceo_action?: boolean
     current_task: string | null
     last_active: string | null
     approval_rate: number | null
@@ -787,6 +883,8 @@ export interface AgencyOverviewAgent {
   role: string
   role_slug?: string | null
   current_status: string
+  current_status_label?: string
+  requires_ceo_action?: boolean
   current_task_summary?: string | null
   client_id?: string | null
   client_name?: string | null
@@ -810,18 +908,27 @@ export interface AgencyOverviewActivity {
   client_name?: string | null
   agent_name: string
   status: string
+  status_label?: string
+  review_state?: 'needs_review' | null
+  review_stage?: 'final_review' | 'workflow_pause' | null
+  requires_ceo_action?: boolean
   started_at: string | null
   input_preview: string
 }
 
 export interface AgencyOverviewAttentionItem {
-  type: 'pending_review' | 'approval_request' | 'failed_execution'
+  type: 'pending_review' | 'approval_request' | 'failed'
   urgency: 'critical' | 'high' | 'medium' | 'low' | string
   title: string
   subtitle: string
   client_name?: string | null
   execution_id?: string | null
   approval_id?: string | null
+  status?: string
+  status_label?: string
+  review_state?: 'needs_review' | null
+  review_stage?: 'final_review' | 'workflow_pause' | null
+  requires_ceo_action?: boolean
   age_minutes: number
   url: string
 }
@@ -905,6 +1012,11 @@ export interface AnalyticsOverview {
   completed_this_week: number
   failed_this_week: number
   daily_executions: { date: string; count: number }[]
+  total_approved: number
+  first_draft_approved: number
+  first_draft_rate: number
+  avg_revisions: number
+  pending_review_count: number
   tool_calls: number
   api_calls_last_minute: number
 }
@@ -932,6 +1044,15 @@ export interface Organization {
   updated_at?: string | null
   role?: OrgMemberRole | null
   member_count?: number | null
+}
+
+export interface OrgVariableRecord {
+  id: string
+  org_id: string
+  key: string
+  value: string
+  description?: string | null
+  created_at: string
 }
 
 export interface OrgMember {

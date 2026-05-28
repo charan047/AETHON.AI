@@ -10,6 +10,7 @@ from sqlalchemy import select
 from config import settings
 from database.db import AsyncSessionLocal
 from database.models import ApprovalStatus, HumanApprovalRequest
+from services.approval_notification_service import approval_notification_service
 from services.distributed_lock import DistributedLock
 from services.telemetry_service import telemetry_service
 from services.websocket_manager import ws_manager
@@ -63,6 +64,14 @@ class HITLService:
                 "workflow_id": approval.workflow_id,
                 "execution_id": approval.execution_id,
             }
+        )
+        await approval_notification_service.notify_human_approval_requested(
+            workflow_id=workflow_id,
+            approval_id=str(approval.id),
+            execution_id=str(execution_id),
+            title=title,
+            description=description,
+            requested_by_agent_id=agent_id,
         )
         return approval
 
@@ -218,3 +227,6 @@ class HITLService:
             )
         )
         telemetry_service.set_hitl_pending(pending or 0)
+
+
+hitl_service = HITLService()

@@ -291,6 +291,82 @@ async def test_analytics_overview_counts_executions_without_cost_logs(client, or
     assert payload["executions_this_week"] == 3
     assert payload["completed_this_week"] == 3
     assert payload["failed_this_week"] == 0
+    assert payload["total_approved"] == 0
+    assert payload["first_draft_approved"] == 0
+    assert payload["first_draft_rate"] == 0
+    assert payload["avg_revisions"] == 1.0
+    assert payload["pending_review_count"] == 0
     assert payload["costs"]["total_cost"] == 0.0
     assert len(payload["daily_executions"]) == 7
     assert sum(day["count"] for day in payload["daily_executions"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_analytics_overview_includes_review_quality_metrics(client, org_pair, db: AsyncSession):
+    workflow = Workflow(
+        id=str(uuid4()),
+        org_id=org_pair["org_a"].id,
+        name="Reviewed Workflow",
+        description="Review metrics coverage",
+        nodes=[],
+        edges=[],
+        status="draft",
+        trigger="manual",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(workflow)
+    await db.commit()
+
+    now = datetime.utcnow()
+    approved_first_draft = Execution(
+        id=str(uuid4()),
+        org_id=org_pair["org_a"].id,
+        workflow_id=workflow.id,
+        trigger="manual",
+        status=ExecutionStatus.completed,
+        input_message="First draft approved",
+        output_message="done",
+        started_at=now - timedelta(days=1),
+        completed_at=now - timedelta(days=1),
+        approved_by=org_pair["org_a_user"].id,
+        approved_at=now - timedelta(days=1),
+        revision_number=1,
+        max_runtime_seconds=3600,
+    )
+    approved_second_draft = Execution(
+        id=str(uuid4()),
+        org_id=org_pair["org_a"].id,
+        workflow_id=workflow.id,
+        trigger="manual",
+        status=ExecutionStatus.completed,
+        input_message="Second draft approved",
+        output_message="done",
+        started_at=now - timedelta(hours=10),
+        completed_at=now - timedelta(hours=10),
+        approved_by=org_pair["org_a_user"].id,
+        approved_at=now - timedelta(hours=10),
+        revision_number=2,
+        max_runtime_seconds=3600,
+    )
+    waiting_review = Execution(
+        id=str(uuid4()),
+        org_id=org_pair["org_a"].id,
+        workflow_id=workflow.id,
+        trigger="manual",
+        status=ExecutionStatus.pending_review,
+        input_message="Needs review",
+        started_at=now - timedelta(hours=1),
+        max_runtime_seconds=3600,
+    )
+    db.add_all([approved_first_draft, approved_second_draft, waiting_review])
+    await db.commit()
+
+    response = await client.get("/api/analytics/overview?period_days=30", headers=org_pair["org_a_headers"])
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_approved"] == 2
+    assert payload["first_draft_approved"] == 1
+    assert payload["first_draft_rate"] == 50
+    assert payload["avg_revisions"] == 1.5
+    assert payload["pending_review_count"] == 1

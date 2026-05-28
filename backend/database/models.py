@@ -1,12 +1,18 @@
 import enum
+import secrets
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, String, Text, Boolean, Integer, Float, DateTime, JSON, ForeignKey, Enum as SAEnum, UniqueConstraint, Index, func, text
+from sqlalchemy import BigInteger, Column, String, Text, Boolean, Integer, Float, DateTime, JSON, ForeignKey, Enum as SAEnum, UniqueConstraint, Index, func, text
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import relationship
 from uuid import uuid4
 
 from database.db import Base
+
+
+def uuid4str() -> str:
+    return str(uuid4())
 
 
 class Agent(Base):
@@ -109,6 +115,24 @@ class MissionTaskStatus(str, enum.Enum):
     skipped = "skipped"
 
 
+class FileStatus(str, enum.Enum):
+    pending = "pending"
+    uploading = "uploading"
+    ready = "ready"
+    deleted = "deleted"
+    error = "error"
+
+
+class FileType(str, enum.Enum):
+    document = "document"
+    pdf = "pdf"
+    docx = "docx"
+    image = "image"
+    markdown = "markdown"
+    text = "text"
+    other = "other"
+
+
 class CTOTaskStatus(str, enum.Enum):
     active = "active"
     monitoring = "monitoring"
@@ -144,6 +168,7 @@ class IntegrationType(str, enum.Enum):
     gmail = "gmail"
     email_smtp = "email_smtp"
     slack = "slack"
+    search_api = "search_api"
     notion = "notion"
     linear = "linear"
 
@@ -476,6 +501,88 @@ class MissionTask(Base):
     mission = relationship("Mission", back_populates="tasks")
 
 
+class OrgFile(Base):
+    """
+    Metadata record for every file in an org.
+    Actual file data lives in S3-compatible storage.
+    Postgres only holds metadata + search index.
+    """
+
+    __tablename__ = "org_files"
+    __table_args__ = (
+        Index("ix_orgfiles_org_client", "org_id", "client_id"),
+        Index("ix_orgfiles_org_status", "org_id", "status"),
+        Index("ix_orgfiles_search", "search_vector", postgresql_using="gin"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid4str)
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    client_id = Column(String, ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
+    agent_id = Column(String, ForeignKey("agents.id", ondelete="SET NULL"), nullable=True)
+    execution_id = Column(String, ForeignKey("executions.id", ondelete="SET NULL"), nullable=True)
+    mission_id = Column(String, ForeignKey("missions.id", ondelete="SET NULL"), nullable=True)
+
+    name = Column(String(500), nullable=False)
+    description = Column(Text, nullable=True)
+    file_type = Column(
+        SAEnum(
+            FileType,
+            values_callable=lambda values: [item.value for item in values],
+            name="filetype",
+        ),
+        nullable=False,
+        default=FileType.document,
+    )
+    status = Column(
+        SAEnum(
+            FileStatus,
+            values_callable=lambda values: [item.value for item in values],
+            name="filestatus",
+        ),
+        nullable=False,
+        default=FileStatus.pending,
+    )
+
+    storage_key = Column(String(1000), nullable=True)
+    size_bytes = Column(BigInteger, default=0)
+    content_type = Column(String(200), nullable=True)
+    checksum_sha256 = Column(String(64), nullable=True)
+
+    version = Column(Integer, default=1, nullable=False)
+    parent_file_id = Column(String, ForeignKey("org_files.id", ondelete="SET NULL"), nullable=True)
+    is_latest = Column(Boolean, default=True, nullable=False)
+
+    collab_room = Column(String(255), nullable=True, unique=True)
+    yjs_storage_key = Column(String(1000), nullable=True)
+
+    search_vector = Column(TSVECTOR().with_variant(Text(), "sqlite"), nullable=True)
+    extracted_text = Column(Text, nullable=True)
+
+    tags = Column(JSON, default=list)
+
+    created_by = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    last_accessed_at = Column(DateTime, nullable=True)
+
+
+class OrgStorageQuota(Base):
+    __tablename__ = "org_storage_quota"
+
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True)
+    used_bytes = Column(BigInteger, default=0, nullable=False)
+    quota_bytes = Column(BigInteger, default=10 * 1024 * 1024 * 1024, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CollabDocument(Base):
+    __tablename__ = "collab_documents"
+
+    room = Column(String(255), primary_key=True)
+    yjs_state = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class CTOTask(Base):
     __tablename__ = "cto_tasks"
     __table_args__ = (
@@ -575,10 +682,13 @@ class ExecutionStep(Base):
 
 class CustomTool(Base):
     __tablename__ = "custom_tools"
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_custom_tools_org_name"),
+    )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid4()))
     org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
-    name = Column(String, nullable=False, unique=True)   # snake_case — used as LangChain tool name
+    name = Column(String, nullable=False)   # snake_case — used as LangChain tool name
     description = Column(Text, nullable=False)           # shown to LLM to decide when to use it
     code = Column(Text, nullable=False)
     is_active = Column(Boolean, default=True)
@@ -714,6 +824,63 @@ class Client(Base):
     color = Column(String(7), nullable=True, default="#6366F1")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ClientKnowledge(Base):
+    __tablename__ = "client_knowledge"
+    __table_args__ = (
+        Index("ix_client_knowledge_client", "client_id"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid4str)
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    client_id = Column(String, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    content = Column(Text, nullable=False)
+    category = Column(String(100), nullable=True)
+    confidence = Column(Float, default=0.5, nullable=False)
+    source_agent_id = Column(String, nullable=True)
+    source_execution_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class OrgVariable(Base):
+    __tablename__ = "org_variables"
+    __table_args__ = (
+        UniqueConstraint("org_id", "key", name="uq_org_variable"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid4str)
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    key = Column(String(100), nullable=False)
+    value = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ClientIntakeForm(Base):
+    __tablename__ = "client_intake_forms"
+
+    id = Column(String, primary_key=True, default=uuid4str)
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    client_id = Column(String, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(255), nullable=False)
+    workflow_id = Column(String, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True)
+    fields = Column(JSON, default=list)
+    token = Column(String(64), unique=True, nullable=False, default=lambda: secrets.token_urlsafe(32)[:64])
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ClientIntakeSubmission(Base):
+    __tablename__ = "client_intake_submissions"
+
+    id = Column(String, primary_key=True, default=uuid4str)
+    form_id = Column(String, ForeignKey("client_intake_forms.id", ondelete="CASCADE"), nullable=False)
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    submitted_data = Column(JSON, nullable=False)
+    execution_id = Column(String, nullable=True)
+    submitted_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class OrgMember(Base):

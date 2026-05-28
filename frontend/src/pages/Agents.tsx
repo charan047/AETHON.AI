@@ -6,8 +6,12 @@ import { clsx } from 'clsx'
 
 import { agentsApi, clientsApi, evalsApi, executionsApi, extractApiError, memoryApi, modelsApi } from '../api/client'
 import { ReputationCard } from '../components/agents/ReputationCard'
+import { AnimatedContent } from '../components/reactbits/AnimatedContent'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
+import { EmptyState } from '../components/ui/EmptyState'
 import { PageShell } from '../components/Layout/PageShell'
+import { SpotlightCard } from '../components/ui/aceternity/Spotlight'
+import { BorderBeam } from '../components/ui/magicui/BorderBeam'
 import { AgentCardSkeleton } from '../components/ui/Skeleton'
 import { StatusDot } from '../components/ui/StatusDot'
 import { TrustRing } from '../components/ui/TrustRing'
@@ -122,9 +126,27 @@ function buildPersonaSuggestions(name: string, roleSlug?: string | null) {
 
 function presentStatus(status?: string | null) {
   if (!status) return 'idle'
-  if (status === 'pending_review') return 'needs review'
-  if (status === 'waiting_approval') return 'waiting approval'
+  if (status === 'pending_review') return 'Needs Review'
+  if (status === 'waiting_approval') return 'Needs Review'
   return status.replace(/_/g, ' ')
+}
+
+function executionNeedsReview(execution: { review_state?: string | null; requires_ceo_action?: boolean }) {
+  return execution.review_state === 'needs_review' || execution.requires_ceo_action
+}
+
+function executionStatusDot(execution: { status: string; review_state?: string | null; requires_ceo_action?: boolean }) {
+  if (execution.status === 'completed') return 'dot-green'
+  if (execution.status === 'running' || execution.status === 'pending') return 'dot-blue dot-live'
+  if (executionNeedsReview(execution)) return 'dot-amber'
+  return 'dot-red'
+}
+
+function executionBadgeClass(execution: { status: string; review_state?: string | null; requires_ceo_action?: boolean }) {
+  if (execution.status === 'completed') return 'badge-green'
+  if (execution.status === 'running' || execution.status === 'pending') return 'badge-blue'
+  if (executionNeedsReview(execution)) return 'badge-amber'
+  return 'badge-red'
 }
 
 function costLabel(value?: number | null) {
@@ -840,18 +862,25 @@ export function Agents() {
       contentClassName="space-y-6 p-6"
     >
       {isLoading ? (
-        <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+        <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
           <div className="space-y-3">
             {Array.from({ length: 8 }).map((_, index) => <AgentCardSkeleton key={index} />)}
           </div>
           <AgentCardSkeleton />
         </div>
       ) : !agents.length ? (
-        <div className="rounded-2xl border border-dashed border-white/[0.08] px-6 py-16 text-center font-mono text-xs uppercase tracking-[0.16em] text-white/30">
-          No agents yet. Add your first teammate.
+        <div className="surface-card">
+          <EmptyState
+            icon={<Brain size={22} />}
+            title="Your AI team members"
+            description="Each one handles a type of work — research, writing, outreach, reporting. Start with a research analyst."
+            action={() => setEditing({ memory_enabled: memoryAvailable })}
+            actionLabel="Add team member"
+          />
         </div>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+        <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
+          <AnimatedContent distance={40} direction="vertical" duration={0.5}>
           <section className="surface-card overflow-hidden">
             <div className="border-b border-[var(--border)] p-3">
               <div className="relative">
@@ -874,10 +903,10 @@ export function Agents() {
                     setActiveTab('overview')
                   }}
                   className={clsx(
-                    'data-row w-full text-left',
+                    'row w-full text-left',
                     STAGGER_CLASSES[Math.min(index, STAGGER_CLASSES.length - 1)],
                     selectedAgent?.id === agent.id
-                      ? 'border-l-2 border-l-indigo-400 bg-indigo-500/[0.08]'
+                      ? 'border-l-2 border-l-indigo-400 bg-indigo-500/[0.04]'
                       : '',
                   )}
                 >
@@ -893,9 +922,11 @@ export function Agents() {
               ))}
             </div>
           </section>
+          </AnimatedContent>
 
           {selectedAgent ? (
-            <section className="surface-card overflow-hidden">
+            <AnimatedContent distance={40} direction="vertical" duration={0.5}>
+            <SpotlightCard className="surface-card relative overflow-hidden">
               <div className="border-b border-[var(--border)] px-5 py-5">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="flex min-w-0 items-start gap-4">
@@ -906,7 +937,7 @@ export function Agents() {
                       {(selectedAgent.persona_name || selectedAgent.name).charAt(0).toUpperCase()}
                     </div>
                     <div className="min-w-0">
-                      <h2 className="truncate text-2xl font-extrabold tracking-tight text-[var(--t1)]">
+                      <h2 className="truncate text-[clamp(20px,2.2vw,28px)] font-bold tracking-tight text-[var(--t1)]">
                         {selectedAgent.persona_name || selectedAgent.name}
                       </h2>
                       <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -916,8 +947,12 @@ export function Agents() {
                           {presentStatus(selectedAgent.current_status)}
                         </span>
                         <div className="flex flex-col items-center gap-1">
-                          <TrustRing score={trustScore} radius={20} />
-                          <span className="font-mono text-[11px] text-[var(--t3)]">{noTasksYet ? 'no tasks yet' : 'live trust'}</span>
+                          <TrustRing
+                            score={trustScore}
+                            radius={20}
+                            totalTasks={selectedTrustQuery.data?.counters.total_tasks ?? selectedAgent.total_tasks_completed ?? 0}
+                          />
+                          <span className="font-mono text-[11px] text-[var(--t3)]">{noTasksYet ? 'no runs yet' : 'live trust'}</span>
                         </div>
                       </div>
                     </div>
@@ -957,31 +992,31 @@ export function Agents() {
                 {activeTab === 'overview' && (
                   <>
                     <div className="space-y-3">
-                      <div className="data-row rounded-lg border border-[var(--border)]"><span className="text-sm text-[var(--t2)]">Tasks completed</span><span className="ml-auto font-mono text-sm text-[var(--t1)]">{selectedAgent.total_tasks_completed ?? selectedTrustQuery.data?.counters.total_tasks ?? 0}</span></div>
-                      <div className="data-row rounded-lg border border-[var(--border)]"><span className="text-sm text-[var(--t2)]">Success rate</span><span className="ml-auto font-mono text-sm text-[var(--t1)]">{Math.round(selectedTrustQuery.data?.components.task_success_rate ?? 0)}%</span></div>
-                      <div className="data-row rounded-lg border border-[var(--border)]"><span className="text-sm text-[var(--t2)]">Trust score</span><span className="ml-auto"><TrustRing score={trustScore} radius={18} /></span></div>
+                      <div className="row rounded-lg border border-[var(--border)]"><span className="text-sm text-[var(--t2)]">Tasks completed</span><span className="ml-auto font-mono text-sm text-[var(--t1)]">{selectedAgent.total_tasks_completed ?? selectedTrustQuery.data?.counters.total_tasks ?? 0}</span></div>
+                      <div className="row rounded-lg border border-[var(--border)]"><span className="text-sm text-[var(--t2)]">Success rate</span><span className="ml-auto font-mono text-sm text-[var(--t1)]">{Math.round(selectedTrustQuery.data?.components.task_success_rate ?? 0)}%</span></div>
+                      <div className="row rounded-lg border border-[var(--border)]"><span className="text-sm text-[var(--t2)]">Trust score</span><span className="ml-auto"><TrustRing score={trustScore} radius={18} totalTasks={selectedTrustQuery.data?.counters.total_tasks ?? selectedAgent.total_tasks_completed ?? 0} /></span></div>
                     </div>
 
                     <div>
-                      <div className="section-title">Recent Executions</div>
+                      <div className="section-title">Recent Runs</div>
                       <div className="surface-card overflow-hidden">
                         {recentExecutions.map(execution => (
-                          <Link key={execution.id} to={`/executions/${execution.id}`} className="data-row block">
+                          <Link key={execution.id} to={`/executions/${execution.id}`} className="row block">
                             <div className="flex items-center gap-3">
-                              <span className={clsx('status-dot', execution.status === 'completed' ? 'dot-green' : execution.status === 'running' ? 'dot-blue dot-live' : execution.status === 'pending_review' || execution.status === 'waiting_approval' ? 'dot-amber' : 'dot-red')} />
+                              <span className={clsx('status-dot', executionStatusDot(execution))} />
                               <div className="min-w-0 flex-1">
                                 <div className="truncate text-sm text-[var(--t1)]">{execution.input_message || execution.workflow_name || 'Execution'}</div>
                                 <div className="truncate text-xs text-[var(--t2)]">{execution.started_at ? new Date(execution.started_at).toLocaleDateString() : 'Recently'}</div>
                               </div>
-                              <span className={clsx('badge font-mono uppercase', execution.status === 'completed' ? 'badge-green' : execution.status === 'running' ? 'badge-blue' : execution.status === 'pending_review' || execution.status === 'waiting_approval' ? 'badge-amber' : 'badge-red')}>
-                                {presentStatus(execution.status)}
+                              <span className={clsx('badge font-mono uppercase', executionBadgeClass(execution))}>
+                                {execution.status_label || presentStatus(execution.status)}
                               </span>
                             </div>
                           </Link>
                         ))}
                         {!recentExecutions.length && (
                           <div className="m-4 rounded-2xl border border-dashed border-[var(--border)] px-4 py-8 text-center font-mono text-xs uppercase tracking-[0.14em] text-[var(--t3)]">
-                            No executions yet
+                            No runs yet
                           </div>
                         )}
                       </div>
@@ -1034,14 +1069,14 @@ export function Agents() {
                         <div>Agents won't learn between sessions until MEM0_API_KEY is configured.</div>
                       </div>
                     )}
-                    <div className="data-row rounded-lg border border-[var(--border)]">
+                    <div className="row rounded-lg border border-[var(--border)]">
                       <span className="text-sm text-[var(--t2)]">Stats</span>
                       <span className="ml-auto font-mono text-sm text-[var(--t1)]">{selectedMemoryStatsQuery.data?.total_memories ?? 0} memories · {selectedMemoryStatsQuery.data?.session_count ?? 0} tasks</span>
                     </div>
                     <div className="surface-card overflow-hidden">
                       {memoryHistory.length ? (
                         memoryHistory.map((memory: AgentMemoryItem, index: number) => (
-                          <div key={index} className="data-row cursor-default">
+                          <div key={index} className="row cursor-default">
                             <div className="min-w-0 flex-1">
                               <div className="truncate text-sm text-[var(--t1)]">{memory.content}</div>
                             </div>
@@ -1060,12 +1095,16 @@ export function Agents() {
                   renderPreferences(true)
                 )}
               </div>
-            </section>
+              <BorderBeam size={320} duration={14} delay={1} />
+            </SpotlightCard>
+            </AnimatedContent>
           ) : (
             <section className="surface-card flex min-h-[520px] items-center justify-center">
-              <div className="rounded-2xl border border-dashed border-[var(--border)] px-6 py-14 text-center font-mono text-xs uppercase tracking-[0.16em] text-[var(--t3)]">
-                Select an agent to view details
-              </div>
+              <EmptyState
+                icon={<Brain size={22} />}
+                title="Select a team member"
+                description="Choose someone from the list to inspect trust, contract, memory, and preferences."
+              />
             </section>
           )}
         </div>
@@ -1087,7 +1126,7 @@ export function Agents() {
       <ConfirmDialog
         open={Boolean(agentToDelete)}
         title={`Delete ${agentToDelete?.name || 'agent'}?`}
-        description="This removes the teammate from your workspace. Existing execution history stays available, but new workflows cannot use this agent."
+        description="This removes the teammate from your workspace. Existing run history stays available, but new processes cannot use this agent."
         confirmLabel="Delete agent"
         loading={deleteMut.isPending}
         onClose={() => setAgentToDelete(null)}

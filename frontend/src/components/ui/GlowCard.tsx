@@ -40,7 +40,7 @@ export function GlowCard({
     <div
       style={style}
       className={clsx(
-        'glass-card rounded-2xl transition-all duration-150 ease-out',
+        'card rounded-2xl transition-all duration-150 ease-out',
         hoverable && ['hover:-translate-y-1', glow[glowColor], 'hover:border-white/[0.12]'],
         active && activeGlow[glowColor],
         className,

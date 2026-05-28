@@ -8,7 +8,8 @@ from auth.dependencies import get_current_user, require_admin
 from auth.org_context import OrgContext, get_org_context
 from config import settings
 from database import get_db
-from database.models import Agent, Execution, ToolCallLog, User
+from database.models import Agent, Execution, IntegrationType, ToolCallLog, User, UserIntegration
+from services.integration_crypto import decrypt_config
 from tools.research.search_backend import search_backend
 from tools.registry import tool_registry
 
@@ -16,15 +17,23 @@ from tools.registry import tool_registry
 router = APIRouter()
 
 
+def _ensure_builtin_tools_loaded() -> None:
+    if tool_registry.get("google_docs") and tool_registry.get("google_sheets"):
+        return
+    tool_registry.load_all_tools()
+
+
 @router.get("/catalog")
 async def get_tool_catalog():
     """Public catalog of platform tools and metadata."""
+    _ensure_builtin_tools_loaded()
     return tool_registry.get_available_tools()
 
 
 @router.get("/catalog-health")
 async def get_tool_catalog_health(current_user: User = Depends(require_admin)):
     """Admin-only health status for every registered tool."""
+    _ensure_builtin_tools_loaded()
     await tool_registry.run_health_checks()
     return [
         {
@@ -37,54 +46,130 @@ async def get_tool_catalog_health(current_user: User = Depends(require_admin)):
     ]
 
 
-async def _build_provider_health() -> dict:
+async def _get_active_integration(
+    db: AsyncSession,
+    org_id: str | None,
+    user_id: str | None,
+    integration_type: IntegrationType,
+) -> UserIntegration | None:
+    if not org_id or not user_id:
+        return None
+    return await db.scalar(
+        select(UserIntegration).where(
+            UserIntegration.org_id == org_id,
+            UserIntegration.user_id == user_id,
+            UserIntegration.integration_type == integration_type,
+            UserIntegration.is_active == True,  # noqa: E712
+        )
+    )
+
+
+def _scopes_from_config(config: dict) -> set[str]:
+    granted = config.get("granted_scopes")
+    if isinstance(granted, str) and granted.strip():
+        return set(granted.split())
+    scopes = config.get("scopes")
+    if isinstance(scopes, str) and scopes.strip():
+        return set(scopes.split())
+    if isinstance(scopes, list):
+        return {str(item) for item in scopes if item}
+    return set()
+
+
+async def _build_provider_health(
+    db: AsyncSession,
+    org_id: str | None = None,
+    user_id: str | None = None,
+) -> dict:
     """
     Returns configuration and live status for each tool provider.
     Results are cached in Redis for 60 seconds.
     """
     now = datetime.now(timezone.utc).isoformat()
-    search_status = await search_backend.check_health()
+    search_status = await search_backend.check_health(org_id=org_id, user_id=user_id, db=db)
     if "last_check" not in search_status:
         search_status["last_check"] = now
 
     gmail_status = {
         "provider": "oauth",
-        "status": "healthy" if settings.google_client_id else "not_configured",
+        "status": "not_configured",
         "last_check": now,
         "note": (
-            "Google OAuth configured."
+            "Connect Google in Integrations to enable Gmail, Google Docs, and Google Sheets."
             if settings.google_client_id
-            else "No Google OAuth configured. Visit Settings → Integrations."
+            else "Google OAuth is not configured on the server."
         ),
     }
+    gmail_integration = await _get_active_integration(db, org_id, user_id, IntegrationType.gmail)
+    if gmail_integration:
+        gmail_config = decrypt_config(gmail_integration.config)
+        gmail_status["note"] = f"Connected as {gmail_config.get('email') or gmail_integration.name}."
+        gmail_status["status"] = "healthy"
+        required_scopes = {
+            "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/spreadsheets",
+        }
+        if not required_scopes.issubset(_scopes_from_config(gmail_config)):
+            gmail_status["status"] = "degraded"
+            gmail_status["note"] = "Connected, but Google Docs and Sheets need updated permissions."
+
+    slack_status = {
+        "provider": "oauth",
+        "status": "not_configured",
+        "last_check": now,
+        "note": (
+            "Connect Slack in Integrations to enable this tool."
+            if settings.slack_client_id
+            else "Slack OAuth is not configured on the server."
+        ),
+    }
+    slack_integration = await _get_active_integration(db, org_id, user_id, IntegrationType.slack)
+    if slack_integration:
+        slack_config = decrypt_config(slack_integration.config)
+        slack_status["status"] = "healthy"
+        slack_status["note"] = (
+            f"Connected to {slack_config.get('workspace') or slack_integration.name}."
+        )
+
+    github_status = {
+        "provider": "token",
+        "status": "not_configured",
+        "last_check": now,
+        "note": "Connect a GitHub token via the Integrations page.",
+    }
+    github_integration = await _get_active_integration(db, org_id, user_id, IntegrationType.github)
+    if github_integration:
+        github_config = decrypt_config(github_integration.config)
+        github_status["status"] = "healthy"
+        github_status["note"] = (
+            f"Connected to {github_config.get('default_repo') or github_integration.name}."
+        )
 
     result = {
         "search": search_status,
         "gmail": gmail_status,
-        "slack": {
-            "provider": "oauth",
-            "status": "not_configured",
-            "last_check": now,
-            "note": "Slack integration not configured. Connect via Integrations page.",
-        },
-        "github": {
-            "provider": "token",
-            "status": "not_configured",
-            "last_check": now,
-            "note": "Connect a GitHub token via the Integrations page.",
-        },
+        "slack": slack_status,
+        "github": github_status,
     }
     return result
 
 
 @router.get("/health")
-async def get_tool_health(current_user: User = Depends(get_current_user)):
-    return await _build_provider_health()
+async def get_tool_health(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    return await _build_provider_health(db, org_id=ctx.org.id, user_id=current_user.id)
 
 
 @router.get("/provider-health")
-async def get_provider_health(current_user: User = Depends(get_current_user)):
-    return await _build_provider_health()
+async def get_provider_health(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    return await _build_provider_health(db, org_id=ctx.org.id, user_id=current_user.id)
 
 
 @router.get("/analytics")

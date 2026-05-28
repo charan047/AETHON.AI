@@ -3,7 +3,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from auth.dependencies import get_current_user, require_editor
 from auth.org_context import OrgContext, get_org_context
 from database import get_db
-from database.models import Agent, Client, ClientStatus, Execution, ExecutionStatus, Mission, MissionStatus, Organization, User, Workflow
+from database.models import Agent, Client, ClientKnowledge, ClientStatus, Execution, ExecutionStatus, FileStatus, Mission, MissionStatus, OrgFile, Organization, User, Workflow
+from services.storage_service import storage_service
 
 router = APIRouter(dependencies=[Depends(get_current_user), Depends(get_org_context)])
 portal_router = APIRouter()
@@ -36,6 +37,12 @@ class ClientUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     color: Optional[str] = None
+
+
+class ClientKnowledgeCreate(BaseModel):
+    content: str = Field(..., min_length=1, max_length=5000)
+    category: Optional[str] = Field(None, max_length=100)
+    confidence: float = Field(default=0.75, ge=0.0, le=1.0)
 
 
 def _status_value(status: ClientStatus | str | None) -> str | None:
@@ -171,6 +178,46 @@ def _client_detail_payload(
         "notes": client.notes,
         "portal_token": client.portal_token,
         "updated_at": client.updated_at,
+    }
+
+
+def _knowledge_payload(entry: ClientKnowledge) -> dict:
+    return {
+        "id": entry.id,
+        "org_id": entry.org_id,
+        "client_id": entry.client_id,
+        "content": entry.content,
+        "category": entry.category,
+        "confidence": float(entry.confidence or 0.0),
+        "source_agent_id": entry.source_agent_id,
+        "source_execution_id": entry.source_execution_id,
+        "created_at": entry.created_at,
+        "last_seen_at": entry.last_seen_at,
+    }
+
+
+async def _portal_file_payload(file: OrgFile, request: Request, portal_token: str) -> dict:
+    if storage_service._uses_local_storage():
+        download_url = str(
+            request.url_for(
+                "download_portal_file_content",
+                portal_token=portal_token,
+                file_id=file.id,
+            )
+        )
+    else:
+        download_url = await storage_service.generate_download_url(file.storage_key or "", file.name)
+
+    return {
+        "id": file.id,
+        "name": file.name,
+        "description": file.description,
+        "file_type": file.file_type.value if hasattr(file.file_type, "value") else str(file.file_type),
+        "size_bytes": int(file.size_bytes or 0),
+        "content_type": file.content_type,
+        "created_at": file.created_at,
+        "updated_at": file.updated_at,
+        "download_url": download_url,
     }
 
 
@@ -375,9 +422,76 @@ async def get_client_activity(
     }
 
 
+@router.get("/{client_id}/knowledge")
+async def list_client_knowledge(
+    client_id: str,
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await _client_or_404(client_id, db, ctx.org.id)
+    rows = (
+        await db.execute(
+            select(ClientKnowledge)
+            .where(
+                ClientKnowledge.org_id == ctx.org.id,
+                ClientKnowledge.client_id == client_id,
+            )
+            .order_by(ClientKnowledge.confidence.desc(), ClientKnowledge.created_at.desc())
+        )
+    ).scalars().all()
+    return [_knowledge_payload(row) for row in rows]
+
+
+@router.post("/{client_id}/knowledge", status_code=201)
+async def create_client_knowledge(
+    client_id: str,
+    data: ClientKnowledgeCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await _client_or_404(client_id, db, ctx.org.id)
+    entry = ClientKnowledge(
+        org_id=ctx.org.id,
+        client_id=client_id,
+        content=data.content.strip(),
+        category=data.category,
+        confidence=data.confidence,
+        created_at=datetime.utcnow(),
+        last_seen_at=datetime.utcnow(),
+    )
+    db.add(entry)
+    await db.commit()
+    await db.refresh(entry)
+    return _knowledge_payload(entry)
+
+
+@router.delete("/{client_id}/knowledge/{knowledge_id}", status_code=204)
+async def delete_client_knowledge(
+    client_id: str,
+    knowledge_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await _client_or_404(client_id, db, ctx.org.id)
+    entry = await db.scalar(
+        select(ClientKnowledge).where(
+            ClientKnowledge.id == knowledge_id,
+            ClientKnowledge.org_id == ctx.org.id,
+            ClientKnowledge.client_id == client_id,
+        )
+    )
+    if not entry:
+        raise HTTPException(status_code=404, detail="Knowledge entry not found")
+    await db.delete(entry)
+    await db.commit()
+
+
 @portal_router.get("/{portal_token}")
 async def get_client_portal(
     portal_token: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     client = await db.scalar(
@@ -416,6 +530,19 @@ async def get_client_portal(
             )
             .order_by(Mission.completed_at.desc().nullslast(), Mission.created_at.desc())
             .limit(5)
+        )
+    ).scalars().all()
+    ready_files = (
+        await db.execute(
+            select(OrgFile)
+            .where(
+                OrgFile.org_id == client.org_id,
+                OrgFile.client_id == client.id,
+                OrgFile.status == FileStatus.ready,
+                OrgFile.is_latest.is_(True),
+            )
+            .order_by(OrgFile.created_at.desc())
+            .limit(25)
         )
     ).scalars().all()
 
@@ -521,6 +648,7 @@ async def get_client_portal(
             }
             for mission in recent_mission_rows
         ],
+        "files": [await _portal_file_payload(file, request, portal_token) for file in ready_files],
         "agents": [
             {
                 "name": agent.persona_name or agent.name,
@@ -537,3 +665,37 @@ async def get_client_portal(
             "agents_active": agents_active,
         },
     }
+
+
+@portal_router.get("/{portal_token}/files/{file_id}/content", name="download_portal_file_content")
+async def download_portal_file_content(
+    portal_token: str,
+    file_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    if not storage_service._uses_local_storage():
+        raise HTTPException(status_code=404, detail="Local portal file content route is disabled")
+    client = await db.scalar(
+        select(Client).where(
+            Client.portal_token == portal_token,
+            Client.portal_enabled.is_(True),
+        )
+    )
+    if not client:
+        raise HTTPException(status_code=404, detail="Portal not found")
+    file = await db.scalar(
+        select(OrgFile).where(
+            OrgFile.id == file_id,
+            OrgFile.org_id == client.org_id,
+            OrgFile.client_id == client.id,
+            OrgFile.status == FileStatus.ready,
+        )
+    )
+    if not file or not file.storage_key:
+        raise HTTPException(status_code=404, detail="File not found")
+    content = await storage_service.read_document(file.storage_key)
+    return Response(
+        content=content,
+        media_type=file.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{file.name}"'},
+    )

@@ -36,7 +36,7 @@ export function AgentPerformanceCard({
   const offset = circumference - approvalRate * circumference
 
   return (
-    <div className="glass-card rounded-2xl p-5">
+    <div className="card rounded-2xl p-5">
       <div className="flex items-start gap-3">
         <AgentAvatar name={agent.name} size="lg" running={false} />
         <div className="min-w-0 flex-1">

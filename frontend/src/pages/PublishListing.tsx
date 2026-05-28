@@ -37,7 +37,7 @@ function PreviewCard({ name, tagline, category, tags, previewUrl, kind }: {
 }) {
   const Icon = kind === 'agent' ? Bot : kind === 'workflow' ? Workflow : Wrench
   return (
-    <div className="glass-card overflow-hidden rounded-2xl">
+    <div className="card overflow-hidden rounded-2xl">
       <div className="h-1 w-full bg-gradient-to-r from-indigo-500 to-violet-500" />
       <div className="relative h-40 overflow-hidden bg-gradient-to-br from-indigo-500/40 to-black">
         {previewUrl ? <img src={previewUrl} alt="" className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center"><Icon size={38} className="text-white" /></div>}
@@ -233,7 +233,7 @@ export function PublishListing() {
           </div>
         ) : (
           <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
-            <section className="glass-elevated space-y-5 p-6">
+            <section className="card space-y-5 p-6">
               <div className="rounded-2xl border border-indigo-400/20 bg-indigo-500/10 p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-indigo-100"><Sparkles size={16} /> Publishing {selectedName}</div>
                 <p className="mt-1 text-xs text-indigo-100/70">Template data is sanitized server-side before review.</p>
@@ -311,7 +311,7 @@ export function PublishListing() {
             </section>
 
             <aside className="lg:sticky lg:top-6 lg:h-max">
-              <div className="glass-elevated p-5">
+              <div className="card p-5">
                 <p className="mb-3 font-mono text-xs uppercase tracking-[0.22em] text-[#8B9DBE]">Live preview</p>
               <PreviewCard
                 name={form.name}

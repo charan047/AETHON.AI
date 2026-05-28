@@ -35,7 +35,7 @@ export function GlassCard({
     <motion.div
       whileHover={hover ? { y: -1, scale: 1.002 } : undefined}
       className={clsx(
-        'glass-card relative rounded-2xl border border-white/[0.08] bg-base-surface bg-glass-card shadow-card transition-shadow duration-200',
+        'card relative rounded-2xl border border-white/[0.08] bg-base-surface bg-card shadow-card transition-shadow duration-200',
         hover && 'cursor-pointer hover:shadow-card-hover hover:border-white/[0.08]',
         glow !== 'none' && GLOW_CLASSES[glow],
         PADDING_CLASSES[padding],

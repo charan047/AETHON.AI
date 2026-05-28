@@ -9,12 +9,13 @@ import { useAuth } from '../contexts/AuthContext'
 import { InstallModal } from '../components/marketplace/InstallModal'
 import { Skeleton } from '../components/ui/Skeleton'
 import { AgentAvatar } from '../components/ui/AgentAvatar'
+import { ShimmerButton } from '../components/ui/magicui/ShimmerButton'
 import type { MarketplaceListing, MarketplaceListingType } from '../types'
 import { toast } from '../lib/toast'
 
 const TYPE_LABELS: Record<MarketplaceListingType, string> = {
   agent: 'Agent',
-  workflow: 'Workflow',
+  workflow: 'Process',
   tool_config: 'Tool Config',
   eval_suite: 'Eval Suite',
 }
@@ -234,7 +235,7 @@ export function MarketplaceDetail() {
 
       <main className="mx-auto grid max-w-7xl gap-8 px-4 py-8 lg:grid-cols-[1fr_380px]">
         <section className="space-y-8">
-          <div className="glass-card overflow-hidden rounded-[28px] p-8">
+          <div className="card overflow-hidden rounded-[28px] p-8">
             <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
               <div className="max-w-2xl">
                 <div className="mb-5 flex flex-wrap gap-2">
@@ -245,7 +246,7 @@ export function MarketplaceDetail() {
                 <h1 className="text-5xl font-semibold tracking-[-0.06em]">{listing.name}</h1>
                 <p className="mt-4 text-lg leading-8 text-[#D7E0EF]">{listing.tagline}</p>
               </div>
-              <div className="glass-card flex h-24 w-24 items-center justify-center rounded-3xl bg-white/[0.03]">
+              <div className="card flex h-24 w-24 items-center justify-center rounded-3xl bg-white/[0.03]">
                 {listing.preview_image_url ? (
                   <img src={listing.preview_image_url} alt="" className="h-full w-full rounded-3xl object-cover" />
                 ) : (
@@ -257,7 +258,7 @@ export function MarketplaceDetail() {
             </div>
           </div>
 
-          <div className="glass-card flex flex-wrap gap-5 rounded-xl px-4 py-3">
+          <div className="card flex flex-wrap gap-5 rounded-xl px-4 py-3">
             {([
               ['overview', 'Overview'],
               ['requirements', 'Requirements'],
@@ -278,13 +279,13 @@ export function MarketplaceDetail() {
 
           {tab === 'overview' && (
             <>
-              <div className="glass-card p-6">
+              <div className="card p-6">
                 <h2 className="mb-4 text-2xl font-semibold text-white">Overview</h2>
                 <MarkdownBlock content={listing.description} />
               </div>
 
               {listing.readme && (
-                <div className="glass-card p-6">
+                <div className="card p-6">
                   <div className="mb-5 flex items-center justify-between">
                     <h2 className="text-2xl font-semibold text-white">Readme</h2>
                     <span className="font-mono text-xs text-[#8B9DBE]">Markdown docs</span>
@@ -315,25 +316,25 @@ export function MarketplaceDetail() {
 
           {tab === 'requirements' && (
             <div className="grid gap-4 md:grid-cols-2">
-              <div className="glass-card p-6">
+              <div className="card p-6">
                 <h2 className="mb-4 text-2xl font-semibold text-white">Requirements</h2>
                 <div className="space-y-3">
-                  <div className="data-row rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
+                  <div className="row rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
                     <span className="text-[#8B9DBE]">Listing type</span>
                     <span className="ml-auto font-mono text-xs text-white">{TYPE_LABELS[listing.listing_type]}</span>
                   </div>
-                  <div className="data-row rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
+                  <div className="row rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
                     <span className="text-[#8B9DBE]">Category</span>
                     <span className="ml-auto font-mono text-xs text-white">{listing.category.replace('_', ' ')}</span>
                   </div>
-                  <div className="data-row rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
+                  <div className="row rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
                     <span className="text-[#8B9DBE]">Version</span>
                     <span className="ml-auto font-mono text-xs text-white">v{listing.version}</span>
                   </div>
                 </div>
               </div>
 
-              <div className="glass-card p-6">
+              <div className="card p-6">
                 <h3 className="font-semibold text-white">Tags</h3>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {listing.tags.map(tag => <span key={tag} className="badge badge-glass">#{tag}</span>)}
@@ -365,7 +366,7 @@ export function MarketplaceDetail() {
           )}
 
           {tab === 'reviews' && (
-            <div className="glass-card p-6">
+            <div className="card p-6">
               <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="text-2xl font-semibold text-white">Reviews</h2>
@@ -417,19 +418,23 @@ export function MarketplaceDetail() {
         </section>
 
         <aside className="space-y-4 lg:sticky lg:top-6 lg:h-max">
-          <div className="glass-elevated p-5">
+          <div className="card p-5">
             <div className="mb-4 flex items-center gap-2">
               <span className="badge badge-glass">{TYPE_LABELS[listing.listing_type]}</span>
               <span className={clsx('badge capitalize', categoryTone(listing.category))}>{listing.category.replace('_', ' ')}</span>
             </div>
             {installed ? (
               <Link className="btn-secondary h-12 w-full justify-center text-emerald-200" to={`${installedPath}${installedResource ? `?installed=${installedResource}` : ''}`}>
-                ✓ Installed — View in {listing.listing_type === 'agent' ? 'My Team' : listing.listing_type === 'workflow' ? 'Workflows' : listing.listing_type === 'tool_config' ? 'Tools' : 'Eval Lab'}
+                ✓ Installed — View in {listing.listing_type === 'agent' ? 'My Team' : listing.listing_type === 'workflow' ? 'Processes' : listing.listing_type === 'tool_config' ? 'Tools' : 'Eval Lab'}
               </Link>
             ) : (
-              <button className="btn-primary btn-runner btn-lg w-full justify-center" onClick={() => setInstalling(listing)}>
+              <ShimmerButton
+                className="h-12 w-full justify-center rounded-xl px-6 text-sm font-semibold"
+                background="rgba(79,70,229,1)"
+                onClick={() => setInstalling(listing)}
+              >
                 Install to My Company <Download size={16} />
-              </button>
+              </ShimmerButton>
             )}
             <div className="mt-5 grid grid-cols-3 gap-2 text-center">
               <div className="rounded-xl bg-white/[0.03] p-3"><div className="font-mono text-sm text-white">{formatCount(listing.install_count)}</div><div className="mt-1 text-[11px] text-[#8B9DBE]">installs</div></div>
@@ -438,7 +443,7 @@ export function MarketplaceDetail() {
             </div>
           </div>
 
-          <div className="glass-card p-5">
+          <div className="card p-5">
             <h3 className="font-semibold text-white">Publisher</h3>
             <div className="mt-4 flex items-center gap-3">
               <AgentAvatar name={listing.publisher_org?.name || listing.publisher?.name || 'Community'} size="md" />
@@ -451,7 +456,7 @@ export function MarketplaceDetail() {
             </div>
           </div>
 
-          <div className="glass-card p-5">
+          <div className="card p-5">
             <h3 className="font-semibold text-white">Tags</h3>
             <div className="mt-3 flex flex-wrap gap-2">
               {listing.tags.map(tag => <span key={tag} className="badge badge-glass">#{tag}</span>)}
@@ -459,7 +464,7 @@ export function MarketplaceDetail() {
             </div>
           </div>
 
-          <div className="glass-card p-5">
+          <div className="card p-5">
             <h3 className="font-semibold text-white">Version history</h3>
             <div className="mt-3 space-y-2">
               {(listing.version_history?.length ? listing.version_history : [{ version: listing.version, note: 'Current published version', created_at: listing.published_at || listing.created_at }]).slice(0, 3).map((version, index) => (
@@ -477,7 +482,7 @@ export function MarketplaceDetail() {
           </div>
 
           {listing.source_url && (
-            <a className="glass-card flex items-center justify-between p-5 text-sm text-[#8B9DBE] hover:text-white" href={listing.source_url} target="_blank" rel="noreferrer">
+            <a className="card flex items-center justify-between p-5 text-sm text-[#8B9DBE] hover:text-white" href={listing.source_url} target="_blank" rel="noreferrer">
               Source URL <ExternalLink size={16} />
             </a>
           )}

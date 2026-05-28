@@ -459,12 +459,6 @@ function StandupThread({
           </div>
         )}
       </div>
-
-      {isLive && (
-        <div className="mt-5 rounded-2xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-sm text-white/55">
-          Live standup controls are read-only right now. Use Agency Chat or the workflow controls to redirect work.
-        </div>
-      )}
     </div>
   )
 }

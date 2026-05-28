@@ -45,16 +45,16 @@ export function Memory() {
     <div className="space-y-6 p-6 animate-fade-in">
       <div>
         <h1 className="page-title">Memory</h1>
-        <p className="page-subtitle">Inspect and tune the long-term memory your AI team builds over time.</p>
+        <p className="page-sub">Inspect what each agent remembers, what it should always follow, and how its memory is evolving.</p>
       </div>
 
       {!agents.length ? (
-        <div className="surface-card py-20 text-center text-[var(--t3)]">No agents available yet.</div>
+        <div className="surface-card py-20 text-center text-[var(--t3)]">No team members yet. Add an agent to start building memory.</div>
       ) : (
         <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
           <section className="surface-card overflow-hidden">
             <div className="border-b border-[var(--border)] px-4 py-3">
-              <div className="section-title mb-0">AI TEAM</div>
+              <div className="section-title mb-0">AGENTS</div>
             </div>
             <div className="max-h-[calc(100vh-220px)] overflow-y-auto">
               {agents.map(agent => {
@@ -66,7 +66,7 @@ export function Memory() {
                     type="button"
                     onClick={() => setSelected(agent)}
                     className={clsx(
-                      'data-row w-full text-left',
+                      'row w-full text-left',
                       isActive ? 'border-l-2 border-l-indigo-500 bg-indigo-500/[0.08]' : '',
                     )}
                   >
@@ -91,12 +91,12 @@ export function Memory() {
               <AgentMemoryPanel agent={selected} />
             ) : (
               <div className="surface-card flex min-h-[520px] items-center justify-center">
-                <div className="glass-card max-w-md px-6 py-12 text-center">
+                <div className="card max-w-md px-6 py-12 text-center">
                   <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-500/10 text-blue-300">
                     <Brain size={24} />
                   </div>
                   <div className="text-lg font-semibold text-white">Select an agent</div>
-                  <div className="mt-2 text-sm text-[var(--t2)]">Choose a teammate from the left to inspect memories, preferences, and learning status inline.</div>
+                  <div className="mt-2 text-sm text-[var(--t2)]">Choose a teammate from the left to inspect memories, CEO preferences, and recent learning inline.</div>
                 </div>
               </div>
             )}

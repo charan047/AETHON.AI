@@ -39,6 +39,7 @@ from database.seed_roles import seed_system_roles
 from services.hitl_service import HITLService
 from services.memory_service import MemoryService
 from services.scheduler_service import SchedulerService
+from services.storage_service import storage_service
 from services.telemetry_service import generate_latest, telemetry_service
 from services.websocket_manager import ws_manager
 from runtime.agent_runner import AgentRunner
@@ -233,6 +234,8 @@ async def lifespan(app: FastAPI):
                 f"Reset {len(stuck_ids)} orphaned 'running' execution(s) to failed on startup"
             )
     logger.info("Database initialized.")
+    await storage_service.ensure_bucket()
+    logger.info("Storage bucket ready: %s", settings.storage_bucket)
     tool_registry.load_all_tools()
     logger.info("Loaded %s tools", len(tool_registry.get_all()))
     async with AsyncSessionLocal() as db:

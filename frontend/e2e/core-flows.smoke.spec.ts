@@ -133,19 +133,19 @@ test.describe('Core product smoke', () => {
     await loginHelper(page, request, uniqueEmail('core-workflows'))
 
     await page.goto('/workflows')
-    await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Processes' })).toBeVisible()
 
-    await page.getByRole('button', { name: /new workflow/i }).click()
+    await page.getByRole('button', { name: /new process/i }).click()
     const workflowName = `Smoke Workflow ${Date.now()}`
-    await page.getByRole('button', { name: /edit workflow name/i }).click()
-    const nameInput = page.getByLabel('Workflow name')
+    await page.getByRole('button', { name: /edit process name/i }).click()
+    const nameInput = page.getByLabel('Process name')
 
     await expect(nameInput).toBeVisible()
     await nameInput.fill(workflowName)
     await page.getByRole('button', { name: /^save$/i }).click()
 
     await expect(page.getByRole('button', { name: /history/i })).toBeVisible()
-    await expect(page.getByRole('button', { name: /edit workflow name/i })).toContainText(workflowName)
+    await expect(page.getByRole('button', { name: /edit process name/i })).toContainText(workflowName)
   })
 
   test('monitoring page opens the execution drawer for a real run', async ({ page, request }) => {
@@ -153,11 +153,12 @@ test.describe('Core product smoke', () => {
     await createMonitoringFixture(request, auth.accessToken, auth.orgId)
 
     await page.goto('/monitoring')
-    await expect(page.getByRole('heading', { name: 'Monitoring' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Runs' })).toBeVisible()
 
     await page.locator('[data-testid="execution-row"]').first().click()
     await expect(page.locator('[data-testid="monitoring-drawer"]')).toBeVisible()
     await expect(page.locator('[data-testid="execution-step"]').first()).toBeVisible()
+    await expect(page.getByText('Live standup controls are read-only right now.')).toHaveCount(0)
   })
 
   test('messages inbox route opens inbox and drills into a thread', async ({ page, request }) => {

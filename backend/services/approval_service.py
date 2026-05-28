@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import AsyncSessionLocal
 from database.models import AgentApprovalRequest
+from services.approval_notification_service import approval_notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,15 @@ class ApprovalService:
             self._notify_ceo(str(approval.id), org_id, title, risk_level, approval_type)
         )
         asyncio.create_task(
-            self._send_approval_email(org_id, requesting_agent_id, title, description, risk_level)
+            approval_notification_service.notify_agent_approval_requested(
+                org_id=org_id,
+                approval_id=str(approval.id),
+                requesting_agent_id=requesting_agent_id,
+                title=title,
+                description=description,
+                risk_level=risk_level,
+                approval_type=approval_type,
+            )
         )
         return approval
 
@@ -134,27 +143,5 @@ class ApprovalService:
             )
         except Exception as exc:
             logger.warning("Approval CEO notification failed: %s", exc)
-
-    async def _send_approval_email(
-        self,
-        org_id: str,
-        requesting_agent_id: str,
-        title: str,
-        description: str,
-        risk_level: str,
-    ) -> None:
-        try:
-            from services.notification_email_service import notification_email_service
-
-            await notification_email_service.send_approval_needed(
-                org_id=org_id,
-                agent_id=requesting_agent_id,
-                title=title,
-                description=description,
-                risk_level=risk_level,
-            )
-        except Exception as exc:
-            logger.warning("Approval email notification failed: %s", exc)
-
 
 approval_service = ApprovalService()

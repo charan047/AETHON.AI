@@ -105,29 +105,32 @@ export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose?: (
 
           <div className="space-y-5 p-5">
             {!memoryStatus?.mem0_configured ? (
-              <div className="glass-card glass-card-amber px-4 py-4 text-sm text-amber-100">
-                <div className="mb-1 font-semibold text-amber-200">Memory not active.</div>
-                <div>Add MEM0_API_KEY to `.env` to enable learning.</div>
+              <div className="card card-amber px-4 py-4 text-sm text-amber-100">
+                <div className="mb-1 font-semibold text-amber-200">mem0 is not configured.</div>
+                <div>Agent memories will stay limited until MEM0_API_KEY is configured.</div>
               </div>
             ) : null}
 
             <div className="grid gap-3 md:grid-cols-3">
-              <div className="glass-card p-4">
+              <div className="card p-4">
                 <div className="font-mono text-2xl font-bold text-white"><AnimatedNumber value={stats?.total_memories ?? 0} /></div>
                 <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-[var(--t3)]">Memories</div>
               </div>
-              <div className="glass-card p-4">
+              <div className="card p-4">
                 <div className="font-mono text-2xl font-bold text-white"><AnimatedNumber value={tasksCount} /></div>
                 <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-[var(--t3)]">Tasks</div>
               </div>
-              <div className="glass-card p-4">
+              <div className="card p-4">
                 <div className="font-mono text-2xl font-bold text-white"><AnimatedNumber value={preferencesCount} /></div>
                 <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-[var(--t3)]">Preferences</div>
               </div>
             </div>
 
-            <div className="glass-card p-4">
-              <div className="section-title">ALWAYS APPLIED</div>
+            <div className="card p-4">
+              <div className="section-title">CEO Preferences</div>
+              <p className="mb-3 text-xs text-[var(--t2)]">
+                Instructions this agent should always follow in future runs.
+              </p>
               <div className="flex flex-wrap gap-2">
                 {preferences.length ? preferences.map(preference => (
                   <span
@@ -145,7 +148,7 @@ export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose?: (
                   </span>
                 )) : (
                   <div className="w-full rounded-2xl border border-dashed border-[var(--border)] px-4 py-5 text-center text-xs text-[var(--t3)]">
-                    Approve executions with notes to auto-add
+                    No standing preferences yet. Add one below or approve a run with feedback.
                   </div>
                 )}
               </div>
@@ -167,7 +170,7 @@ export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose?: (
                         setManualPreference('')
                       }
                     }}
-                    placeholder="e.g. Always use bullet points"
+                    placeholder="The CTO should know that..."
                     className="input"
                   />
                 ) : null}
@@ -177,7 +180,7 @@ export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose?: (
                       className="btn-secondary text-xs"
                       onClick={() => setShowAddPreference(true)}
                     >
-                      + Add preference
+                      + Add
                     </button>
                   ) : (
                     <>
@@ -186,7 +189,7 @@ export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose?: (
                         disabled={manualPreference.trim().length < 5 || addPreference.isPending}
                         onClick={() => addPreference.mutate()}
                       >
-                        {addPreference.isPending ? 'Saving…' : 'Save preference'}
+                        {addPreference.isPending ? 'Saving…' : 'Save'}
                       </button>
                       <button
                         className="btn-ghost text-xs"
@@ -203,9 +206,14 @@ export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose?: (
               </div>
             </div>
 
-            <div className="glass-card p-4">
+            <div className="card p-4">
               <div className="mb-4 flex items-center justify-between gap-3">
-                <div className="section-title mb-0">RECENT MEMORIES</div>
+                <div>
+                  <div className="section-title mb-0">Recent Memories</div>
+                  <p className="mt-1 text-xs text-[var(--t2)]">
+                    What this agent has learned recently while working.
+                  </p>
+                </div>
                 <button
                   className="btn-danger btn-sm"
                   onClick={() => setConfirmClearOpen(true)}
@@ -216,7 +224,7 @@ export function AgentMemoryPanel({ agent, onClose }: { agent: Agent; onClose?: (
 
               <div className="space-y-3">
                 {history.length ? history.map((memory, index) => (
-                  <div key={index} className="glass-card p-3">
+                  <div key={index} className="card p-3">
                     <div className="whitespace-pre-wrap break-words text-sm leading-6 text-[var(--t1)]">
                       {memory.content}
                     </div>

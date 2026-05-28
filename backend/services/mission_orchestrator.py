@@ -293,29 +293,32 @@ class MissionOrchestrator:
                 return
 
             if not current_task.agent_id:
-                fallback_agent = await exec_db.scalar(
-                    select(Agent)
-                    .where(
-                        Agent.org_id == mission.org_id,
-                        Agent.is_active == True,  # noqa: E712
+                async with AsyncSessionLocal() as fallback_db:
+                    fallback_agent = await fallback_db.scalar(
+                        select(Agent)
+                        .where(
+                            Agent.org_id == mission.org_id,
+                            Agent.is_active == True,  # noqa: E712
+                        )
+                        .limit(1)
                     )
-                    .order_by(Agent.trust_score.desc(), Agent.created_at.asc())
-                    .limit(1)
-                )
-
                 if fallback_agent:
+                    async with AsyncSessionLocal() as upd:
+                        stored_task = await upd.scalar(
+                            select(MissionTask).where(MissionTask.id == task.id)
+                        )
+                        if stored_task:
+                            stored_task.agent_id = str(fallback_agent.id)
+                            await upd.commit()
                     current_task.agent_id = str(fallback_agent.id)
-                    await exec_db.commit()
                     task.agent_id = str(fallback_agent.id)
                     logger.info(
-                        "Mission task '%s' — no match for '%s', using fallback agent %s",
-                        current_task.title,
+                        "Mission task '%s' — no match for assigned agent, using fallback agent %s",
                         current_task.title,
                         fallback_agent.persona_name or fallback_agent.name,
                     )
                 else:
-                    await exec_db.rollback()
-                    await self._mark_task_skipped(task.id, "No active agents in this agency.")
+                    await self._mark_task_skipped(task.id, "No active agents")
                     return
 
             agent = await exec_db.scalar(

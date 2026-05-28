@@ -6,7 +6,7 @@ const STATUS_CONFIG = {
   blocked: { color: '#FF4D6D', pulse: true, label: 'Blocked' },
   in_meeting: { color: '#FFB800', pulse: false, label: 'In Meeting' },
   reviewing: { color: '#818CF8', pulse: false, label: 'Reviewing' },
-  waiting_approval: { color: '#F59E0B', pulse: true, label: 'Needs Approval' },
+  waiting_approval: { color: '#F59E0B', pulse: true, label: 'Needs Review' },
   queued: { color: '#9CA3AF', pulse: false, label: 'Queued' },
 } as const
 

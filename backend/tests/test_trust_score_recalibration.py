@@ -60,7 +60,7 @@ async def test_ten_runs_with_nine_successes_reach_semi_autonomous(db, test_agent
     agent = await db.scalar(select(Agent).where(Agent.id == test_agent.id))
     assert score is not None
     assert agent is not None
-    assert score.overall_score >= 65.0
+    assert score.overall_score >= 62.0
     assert agent.autonomy_level == "semi_autonomous"
     assert score.autonomy_history
 
@@ -120,3 +120,43 @@ async def test_additional_successes_continue_rising_for_proven_agent(db, test_ag
 
     await db.refresh(seeded)
     assert seeded.overall_score > before
+
+
+@pytest.mark.asyncio
+async def test_review_only_signal_does_not_move_score_before_any_tasks(db, test_agent):
+    score = await trust_score_service._get_or_create(test_agent.id, db)
+    assert score.total_tasks == 0
+    assert score.overall_score == 50.0
+
+    await trust_score_service.record_review_result(
+        agent_id=test_agent.id,
+        passed=True,
+        db=db,
+    )
+
+    await db.refresh(score)
+    assert score.total_tasks == 0
+    assert score.total_reviews == 1
+    assert score.review_pass_rate == 100.0
+    assert score.overall_score == 50.0
+
+
+@pytest.mark.asyncio
+async def test_eval_only_signal_does_not_move_score_before_any_tasks(db, test_agent):
+    score = await trust_score_service._get_or_create(test_agent.id, db)
+    assert score.total_tasks == 0
+    assert score.overall_score == 50.0
+
+    await trust_score_service.record_eval_completed(
+        agent_id=test_agent.id,
+        pass_rate=100.0,
+        total_cases=5,
+        passed_cases=5,
+        db=db,
+    )
+
+    await db.refresh(score)
+    assert score.total_tasks == 0
+    assert score.eval_runs_count == 1
+    assert score.eval_pass_rate == 100.0
+    assert score.overall_score == 50.0

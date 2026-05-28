@@ -1,13 +1,13 @@
 import { DragEvent, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Building2, ImageUp, Trash2 } from 'lucide-react'
-import { extractApiError, organizationsApi } from '../api/client'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, Building2, ImageUp, Plus, Save, Trash2 } from 'lucide-react'
+import { extractApiError, organizationsApi, orgVariablesApi } from '../api/client'
 import { FloatingField } from '../components/AuthShell'
 import { AgentAvatar } from '../components/ui/AgentAvatar'
-import { GlassCard } from '../components/ui/GlassCard'
 import { useAuth } from '../contexts/AuthContext'
 import { toast } from '../lib/toast'
+import type { OrgVariableRecord } from '../types'
 
 const TIMEZONES = ['UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Europe/Berlin', 'Asia/Kolkata', 'Asia/Singapore', 'Australia/Sydney']
 
@@ -25,6 +25,10 @@ export function OrgSettings() {
   const [localLogoObjectUrl, setLocalLogoObjectUrl] = useState<string | null>(null)
   const [deleteStarted, setDeleteStarted] = useState(false)
   const [deleteName, setDeleteName] = useState('')
+  const [newVariableKey, setNewVariableKey] = useState('')
+  const [newVariableValue, setNewVariableValue] = useState('')
+  const [newVariableDescription, setNewVariableDescription] = useState('')
+  const [variableDrafts, setVariableDrafts] = useState<Record<string, { value: string; description: string }>>({})
 
   useEffect(() => {
     if (!org) return
@@ -48,6 +52,25 @@ export function OrgSettings() {
       }
     }
   }, [localLogoObjectUrl])
+
+  const orgVariablesQuery = useQuery({
+    queryKey: ['org-variables'],
+    queryFn: orgVariablesApi.list,
+    enabled: Boolean(org),
+  })
+
+  useEffect(() => {
+    if (!orgVariablesQuery.data) return
+    setVariableDrafts(
+      orgVariablesQuery.data.reduce<Record<string, { value: string; description: string }>>((acc, item) => {
+        acc[item.id] = {
+          value: item.value,
+          description: item.description || '',
+        }
+        return acc
+      }, {}),
+    )
+  }, [orgVariablesQuery.data])
 
   const updateOrg = useMutation({
     mutationFn: () => {
@@ -81,6 +104,45 @@ export function OrgSettings() {
     onError: error => toast.error(extractApiError(error)),
   })
 
+  const createVariable = useMutation({
+    mutationFn: () =>
+      orgVariablesApi.create({
+        key: newVariableKey.trim(),
+        value: newVariableValue,
+        description: newVariableDescription || undefined,
+      }),
+    onSuccess: async () => {
+      toast.success('Template variable added')
+      setNewVariableKey('')
+      setNewVariableValue('')
+      setNewVariableDescription('')
+      await queryClient.invalidateQueries({ queryKey: ['org-variables'] })
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
+
+  const updateVariable = useMutation({
+    mutationFn: ({ id, value, description }: { id: string; value: string; description?: string }) =>
+      orgVariablesApi.update(id, { value, description }),
+    onSuccess: async () => {
+      toast.success('Template variable updated')
+      await queryClient.invalidateQueries({ queryKey: ['org-variables'] })
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
+
+  const deleteVariable = useMutation({
+    mutationFn: (id: string) => orgVariablesApi.delete(id),
+    onSuccess: async () => {
+      toast.success('Template variable removed')
+      await queryClient.invalidateQueries({ queryKey: ['org-variables'] })
+    },
+    onError: error => toast.error(extractApiError(error)),
+  })
+
+  const variableDraft = (variable: OrgVariableRecord) =>
+    variableDrafts[variable.id] || { value: variable.value, description: variable.description || '' }
+
   const handleLogoDrop = (event: DragEvent<HTMLLabelElement>) => {
     event.preventDefault()
     const file = event.dataTransfer.files?.[0]
@@ -106,7 +168,7 @@ export function OrgSettings() {
   if (!org) {
     return (
       <div className="grid min-h-full place-items-center p-6 text-center">
-        <div className="glass-card max-w-md p-8">
+        <div className="card max-w-md p-8">
           <Building2 className="mx-auto text-[#4B5A73]" size={44} />
           <h1 className="mt-4 text-2xl font-semibold text-white">No organization selected</h1>
           <p className="mt-2 text-sm text-[#8B9DBE]">Create or switch into an organization before changing settings.</p>
@@ -120,11 +182,11 @@ export function OrgSettings() {
       <div className="page-header rounded-[24px] border border-white/[0.06] bg-white/[0.02]">
         <div>
           <h1 className="page-title">Organization Settings</h1>
-          <p className="page-subtitle">Manage identity, branding, and destructive controls for {org.name}.</p>
+          <p className="page-sub">Manage identity, branding, and destructive controls for {org.name}.</p>
         </div>
       </div>
 
-      <GlassCard padding="lg" className="rounded-[28px] border-white/[0.08] bg-white/[0.03]">
+      <section className="card rounded-[28px] p-6">
         <div className="section-title">Organization</div>
         <div className="mb-6 flex items-center gap-4">
           <AgentAvatar name={org.name} imageUrl={logoPreview || undefined} size="lg" />
@@ -178,9 +240,9 @@ export function OrgSettings() {
             {updateOrg.isPending ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
-      </GlassCard>
+      </section>
 
-      <GlassCard padding="lg" className="rounded-[28px] border-white/[0.08] bg-white/[0.03]">
+      <section className="card rounded-[28px] p-6">
         <div className="section-title">Branding</div>
         <label
           onDrop={handleLogoDrop}
@@ -191,10 +253,117 @@ export function OrgSettings() {
           <p className="mt-2 text-sm text-white">Drag a logo here for preview</p>
           <p className="mt-1 text-xs text-[#8B9DBE]">Maximum 200x200px. Saving still uses the logo URL field above.</p>
         </label>
-      </GlassCard>
+      </section>
+
+      <section className="card rounded-[28px] p-6">
+        <div className="section-title">Template Variables</div>
+        <p className="mb-5 text-sm text-[#8B9DBE]">
+          Define agency-wide variables once, then use them in any agent system prompt like <span className="font-mono text-xs text-white">{'{{agency_name}}'}</span>.
+        </p>
+
+        <div className="space-y-3">
+          {orgVariablesQuery.isLoading && (
+            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-5 text-sm text-[#8B9DBE]">
+              Loading template variables…
+            </div>
+          )}
+          {orgVariablesQuery.isError && (
+            <div className="rounded-2xl border border-red-400/20 bg-red-950/20 px-4 py-5 text-sm text-red-200">
+              {extractApiError(orgVariablesQuery.error)}
+            </div>
+          )}
+          {orgVariablesQuery.data?.map(variable => {
+            const draft = variableDraft(variable)
+            return (
+              <div key={variable.id} className="row flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 md:flex-row md:items-start">
+                <div className="min-w-0 flex-1 space-y-3">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-indigo-300">{variable.key}</div>
+                  <textarea
+                    className="min-h-[92px] w-full rounded-2xl border border-white/[0.08] bg-black/20 px-3.5 py-3 text-sm text-white outline-none transition focus:border-indigo-400/50 focus:ring-2 focus:ring-indigo-500/20"
+                    value={draft.value}
+                    onChange={event =>
+                      setVariableDrafts(current => ({
+                        ...current,
+                        [variable.id]: {
+                          ...draft,
+                          value: event.target.value,
+                        },
+                      }))
+                    }
+                  />
+                  <input
+                    className="input h-11"
+                    placeholder="Description (optional)"
+                    value={draft.description}
+                    onChange={event =>
+                      setVariableDrafts(current => ({
+                        ...current,
+                        [variable.id]: {
+                          ...draft,
+                          description: event.target.value,
+                        },
+                      }))
+                    }
+                  />
+                </div>
+                <div className="flex gap-2 md:flex-col">
+                  <button
+                    className="btn-primary btn-sm"
+                    disabled={updateVariable.isPending}
+                    onClick={() => updateVariable.mutate({ id: variable.id, value: draft.value, description: draft.description })}
+                  >
+                    <Save size={14} /> Save
+                  </button>
+                  <button
+                    className="btn-danger btn-sm"
+                    disabled={deleteVariable.isPending}
+                    onClick={() => deleteVariable.mutate(variable.id)}
+                  >
+                    <Trash2 size={14} /> Delete
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+
+          {!orgVariablesQuery.isLoading && !orgVariablesQuery.data?.length && (
+            <div className="rounded-2xl border border-dashed border-white/[0.10] bg-white/[0.02] px-4 py-8 text-center text-sm text-[#8B9DBE]">
+              No template variables yet. Add your agency name, standard voice, or signature once and reuse them everywhere.
+            </div>
+          )}
+        </div>
+
+        <div className="mt-5 grid gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 md:grid-cols-[1.1fr,1.2fr,1fr,auto] md:items-end">
+          <input
+            className="input h-11"
+            placeholder="agency_name"
+            value={newVariableKey}
+            onChange={event => setNewVariableKey(event.target.value)}
+          />
+          <input
+            className="input h-11"
+            placeholder="Aethon Labs"
+            value={newVariableValue}
+            onChange={event => setNewVariableValue(event.target.value)}
+          />
+          <input
+            className="input h-11"
+            placeholder="Description (optional)"
+            value={newVariableDescription}
+            onChange={event => setNewVariableDescription(event.target.value)}
+          />
+          <button
+            className="btn-primary h-11"
+            disabled={createVariable.isPending || !newVariableKey.trim() || !newVariableValue.trim()}
+            onClick={() => createVariable.mutate()}
+          >
+            <Plus size={14} /> Add Variable
+          </button>
+        </div>
+      </section>
 
       {isOwner && (
-        <section className="glass-card-red rounded-[28px] border border-red-400/20 bg-red-950/20 p-6">
+        <section className="card-red rounded-[28px] border border-red-400/20 bg-red-950/20 p-6">
           <div className="section-title mb-4 border-red-400/20 text-red-200">Danger Zone</div>
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-1 text-red-300" />

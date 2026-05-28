@@ -1,4 +1,4 @@
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import {
   BarChart3,
   Bell,
@@ -7,10 +7,12 @@ import {
   Briefcase,
   Building2,
   CheckCircle2,
+  FolderOpen,
   FlaskConical,
   LayoutDashboard,
   Link2,
   MessageCircle,
+  PanelLeftClose,
   Settings,
   ShoppingBag,
   Target,
@@ -46,6 +48,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/clients', icon: Briefcase, label: 'Clients', activePrefixes: ['/clients'] },
       { to: '/', icon: LayoutDashboard, label: 'Dashboard', activePrefixes: ['/', '/dashboard'] },
       { to: '/company-chat', icon: Building2, label: 'Agency Chat', activePrefixes: ['/company-chat'] },
+      { to: '/files', icon: FolderOpen, label: 'Files', activePrefixes: ['/files'] },
     ],
   },
   {
@@ -53,9 +56,9 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/agents', icon: Bot, label: 'Agents', activePrefixes: ['/agents'] },
       { to: '/messages', icon: MessageCircle, label: 'Agent Messages', activePrefixes: ['/messages'], badge: 'messages' },
-      { to: '/workflows', icon: Workflow, label: 'Workflows', activePrefixes: ['/workflows'] },
-      { to: '/missions', icon: Target, label: 'Missions', activePrefixes: ['/missions'], badge: 'missions' },
-      { to: '/monitoring', icon: BarChart3, label: 'Executions', activePrefixes: ['/monitoring', '/executions'] },
+      { to: '/workflows', icon: Workflow, label: 'Processes', activePrefixes: ['/workflows'] },
+      { to: '/missions', icon: Target, label: 'Projects', activePrefixes: ['/missions'], badge: 'missions' },
+      { to: '/monitoring', icon: BarChart3, label: 'Runs', activePrefixes: ['/monitoring', '/executions'] },
       { to: '/approvals', icon: CheckCircle2, label: 'Approvals', activePrefixes: ['/approvals'], badge: 'approvals' },
     ],
   },
@@ -84,35 +87,32 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ]
 
-function Badge({
-  count,
-  tone = 'red',
-  compact = false,
-}: {
-  count?: number
-  tone?: 'red' | 'blue' | 'amber'
-  compact?: boolean
-}) {
-  if (!count) return null
-
-  const tones = {
-    red: 'bg-red-500/15 text-red-300 border-red-500/20',
-    blue: 'bg-blue-500/15 text-blue-300 border-blue-500/20',
-    amber: 'bg-amber-500/15 text-amber-300 border-amber-500/20',
-  }
-
-  return <span className={clsx('inline-flex items-center justify-center text-[10px] font-semibold', tones[tone], compact ? 'h-5 min-w-5 px-1.5 rounded-full border' : 'min-w-5 px-1.5 py-0.5 rounded-full border')}>{count}</span>
+function badgeCount(
+  item: NavItem,
+  counts: {
+    approvals: number
+    unreadMessages: number
+    activeMissions: number
+    hasFailedModels: boolean
+  },
+) {
+  if (item.badge === 'approvals') return counts.approvals
+  if (item.badge === 'messages') return counts.unreadMessages
+  if (item.badge === 'missions') return counts.activeMissions
+  if (item.badge === 'models') return counts.hasFailedModels ? 1 : 0
+  return 0
 }
 
 export function Sidebar({
   mobileOpen = false,
   onCloseMobile,
+  onToggleCollapsed,
 }: {
   mobileOpen?: boolean
   onCloseMobile?: () => void
+  onToggleCollapsed: () => void
 }) {
   const auth = useAuth()
-  const navigate = useNavigate()
   const location = useLocation()
   const canLoadOrgScopedSidebarData = auth.isAuthenticated && !auth.isLoading && Boolean(auth.activeOrg?.id)
 
@@ -159,6 +159,13 @@ export function Sidebar({
   const activeMissionsCount = (missionsQuery.data || []).filter(mission => mission.status === 'active' || mission.status === 'planning').length
   const a2aEnabled = a2aTasksQuery.data?.enabled !== false
 
+  const counts = {
+    approvals: combinedApprovals,
+    unreadMessages,
+    activeMissions: activeMissionsCount,
+    hasFailedModels,
+  }
+
   const isActive = (item: NavItem) => {
     const prefixes = item.activePrefixes || [item.to]
     if (item.to === '/') {
@@ -173,145 +180,107 @@ export function Sidebar({
 
   const profileName = auth.email
     ? auth.email
-      .split('@')[0]
-      .split(/[._-]+/)
-      .filter(Boolean)
-      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' ')
+        .split('@')[0]
+        .split(/[._-]+/)
+        .filter(Boolean)
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ')
     : auth.activeOrg?.name || 'Agency Owner'
-  const profileMeta = auth.email || auth.activeOrg?.name || 'Open settings'
-  const userInitials = profileName
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map(part => part[0]?.toUpperCase())
-    .join('') || 'AO'
+  const userInitials =
+    profileName
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map(part => part[0]?.toUpperCase())
+      .join('') || 'AO'
+  const userRole = auth.activeOrg?.role ? `${auth.activeOrg.role}` : 'Owner'
 
   return (
     <aside
       className={clsx(
-        'fixed inset-y-0 left-0 z-30 flex h-full w-[220px] shrink-0 flex-col overflow-visible',
-        'shadow-none',
-        'transition-transform duration-300 ease-out lg:static',
-        mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
+        'sidebar-nav fixed inset-y-0 left-0 z-30 flex h-full w-[248px] flex-col transition-transform duration-200 ease-out lg:relative lg:translate-x-0',
+        mobileOpen ? 'translate-x-0' : '-translate-x-full',
       )}
-      style={{
-        background: 'rgba(5,9,20,0.88)',
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-        borderRight: '1px solid rgba(255,255,255,0.07)',
-      }}
     >
-      <div className="relative z-10 flex h-full flex-col overflow-visible">
-        <div className="flex min-h-14 items-center gap-3 px-4 py-3">
-          <div
-            className="flex h-8 w-8 items-center justify-center rounded-xl"
-            style={{
-              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-              boxShadow: '0 0 18px rgba(99,102,241,0.28)',
-            }}
-          >
-            <Zap size={16} className="text-white" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-bold tracking-tight text-white">Aethon</div>
-            <span className="badge-indigo mt-1 inline-flex rounded-md px-1.5 py-0.5 text-[10px] leading-none">Agency OS</span>
-          </div>
-          <div className="shrink-0">
-            <ThemeToggle />
-          </div>
+      <div className="flex h-14 items-center gap-2.5 px-4">
+        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500 shadow-[0_0_18px_rgba(99,102,241,0.3)]">
+          <Zap size={16} className="text-white" />
         </div>
+        <div className="text-sm font-bold tracking-tight text-white">Aethon</div>
+        <div className="flex-1" />
+        <ThemeToggle />
+      </div>
 
-        <div className="px-4 pt-2">
-          <OrgSwitcher collapsed={false} />
-        </div>
+      <div className="px-3 pb-2">
+        <OrgSwitcher collapsed={false} />
+      </div>
 
-        <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <nav className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
           {NAV_GROUPS.map(group => (
-            <div key={group.title} className="pb-3">
-              <p
-                className="px-3 pb-1 pt-4 font-mono text-[9px] font-semibold uppercase tracking-[0.22em]"
-                style={{ color: 'rgba(255,255,255,0.18)' }}
-              >
-                {group.title}
-              </p>
+            <div key={group.title} className="pt-2">
+              <div className="nav-group">{group.title}</div>
               <div className="space-y-1">
                 {group.items.filter(item => !item.requiresA2A || a2aEnabled).map(item => {
                   const active = isActive(item)
                   const Icon = item.icon
+                  const count = badgeCount(item, counts)
 
                   return (
                     <Link
                       key={item.to}
                       to={item.to}
                       onClick={handleNavClick}
-                      className={clsx(
-                        'group relative flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150',
-                        'focus:outline-none focus:ring-2 focus:ring-indigo-500/25',
-                        active
-                          ? 'border border-indigo-500/15 bg-indigo-500/10 text-indigo-300'
-                          : 'border border-transparent text-ink-muted hover:bg-white/[0.04] hover:text-ink-secondary',
-                      )}
+                      className={`nav-item ${active ? 'active' : ''}`}
                     >
-                      {active && <div className="absolute left-0 h-5 w-0.5 rounded-r-full bg-indigo-400" />}
                       <Icon size={16} className="shrink-0" />
                       <span className="truncate">{item.label}</span>
-                      {item.badge === 'approvals' && (
-                        <span className="ml-auto rounded-md bg-red-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-red-400">
-                          {combinedApprovals}
+                      {count > 0 ? (
+                        <span className="ml-auto rounded px-1.5 py-0.5 font-mono text-[10px] bg-red-500/15 text-red-400">
+                          {count}
                         </span>
-                      )}
-                      {item.badge === 'messages' && unreadMessages > 0 && (
-                        <span className="ml-auto rounded-md bg-red-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-red-400">
-                          {unreadMessages}
-                        </span>
-                      )}
-                      {item.badge === 'missions' && activeMissionsCount > 0 && (
-                        <span className="ml-auto rounded-md bg-red-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-red-400">
-                          {activeMissionsCount}
-                        </span>
-                      )}
-                      {item.badge === 'models' && hasFailedModels && (
-                        <span className="ml-auto rounded-md bg-red-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-red-400">
-                          1
-                        </span>
-                      )}
+                      ) : null}
                     </Link>
                   )
                 })}
               </div>
             </div>
           ))}
+
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="group mx-2 mb-1 mt-auto flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-all duration-150 hover:bg-white/[0.04]"
+          >
+            <PanelLeftClose size={16} className="text-t3 transition-colors group-hover:text-white" />
+            <span className="text-xs text-t3 transition-colors group-hover:text-white">Hide sidebar</span>
+            <span className="ml-auto rounded-md border border-white/[0.06] bg-white/[0.02] px-1.5 py-0.5 font-mono text-[10px] text-t3 transition-colors group-hover:text-white">
+              ⌘\
+            </span>
+          </button>
         </nav>
 
-        <div className="border-t border-white/[0.08] p-3">
-          <div className="grid grid-cols-[auto,1fr,auto] items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] px-3 py-3">
-            <div
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white"
-              style={{
-                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-              }}
-            >
+        <div className="mt-auto border-t border-white/[0.07] p-3">
+          <div className="group flex items-center gap-3 rounded-xl px-1">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/20 text-xs font-bold text-indigo-300">
               {userInitials}
             </div>
-            <Link
-              to="/settings/org"
-              onClick={handleNavClick}
-              className="min-w-0 cursor-pointer focus:outline-none"
-            >
-              <div className="break-words text-sm font-semibold leading-5 text-white">{profileName}</div>
-              <div className="mt-1 break-all text-[11px] leading-4 text-white/35">{profileMeta}</div>
-            </Link>
-            <div className="flex flex-col gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-semibold text-white">{profileName}</div>
+              <div className="truncate text-[11px] text-t3">{userRole}</div>
+            </div>
+            <div className="flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              <span className="rounded-md border border-white/[0.06] bg-white/[0.02] px-1.5 py-0.5 font-mono text-[10px] text-t3">
+                ⌘K
+              </span>
               <Link
                 to="/settings/org"
-                aria-label="Open settings"
-                className="btn-icon text-white/45 hover:text-white"
                 onClick={handleNavClick}
+                aria-label="Open settings"
+                className="btn-icon"
               >
                 <Settings size={16} />
               </Link>
-              <ThemeToggle />
             </div>
           </div>
         </div>

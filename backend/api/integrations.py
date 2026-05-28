@@ -21,6 +21,10 @@ from config import settings
 from database import get_db
 from database.models import IntegrationType, User, UserIntegration
 from services.integration_crypto import decrypt_config, encrypt_config
+from services.integration_support import (
+    is_supported_integration_type,
+    unsupported_integration_note,
+)
 from tools.registry import tool_registry
 
 
@@ -32,6 +36,8 @@ class IntegrationResponse(BaseModel):
     integration_type: str
     name: str
     connected_account: str | None = None
+    is_supported: bool = True
+    support_note: str | None = None
     needs_reauth: bool = False
     reauth_reason: str | None = None
     is_active: bool
@@ -58,6 +64,12 @@ class EmailIntegrationCreate(BaseModel):
     from_name: str = ""
 
 
+class SearchIntegrationCreate(BaseModel):
+    name: str = Field("Agency Search", min_length=1, max_length=100)
+    provider: str = Field(..., min_length=1, max_length=20)
+    api_key: str = Field(..., min_length=1)
+
+
 class OAuthCallbackRequest(BaseModel):
     code: str = Field(..., min_length=1)
     state: str = Field(..., min_length=1)
@@ -70,6 +82,7 @@ _GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/spreadsheets",
 ]
 _SLACK_SCOPES = ["chat:write", "channels:read", "im:read", "im:write"]
 
@@ -79,6 +92,8 @@ def _safe_response(integration: UserIntegration) -> IntegrationResponse:
     connected_account = None
     needs_reauth = False
     reauth_reason = None
+    is_supported = is_supported_integration_type(integration.integration_type)
+    support_note = None if is_supported else unsupported_integration_note(integration.integration_type)
     if integration.integration_type == IntegrationType.github:
         try:
             default_repo = decrypt_config(integration.config).get("default_repo")
@@ -94,9 +109,19 @@ def _safe_response(integration: UserIntegration) -> IntegrationResponse:
                     granted_scopes = config.get("scopes")
                 if isinstance(granted_scopes, str):
                     granted_scopes = granted_scopes.split()
-                if not granted_scopes or "https://www.googleapis.com/auth/drive.file" not in granted_scopes:
+                required_scopes = {
+                    "https://www.googleapis.com/auth/drive.file",
+                    "https://www.googleapis.com/auth/spreadsheets",
+                }
+                if not granted_scopes or not required_scopes.issubset(set(granted_scopes)):
                     needs_reauth = True
-                    reauth_reason = "Google Docs delivery requires updated permissions"
+                    reauth_reason = "Google Docs and Sheets require updated permissions"
+        except Exception:
+            connected_account = None
+    elif integration.integration_type == IntegrationType.search_api:
+        try:
+            config = decrypt_config(integration.config)
+            connected_account = config.get("provider")
         except Exception:
             connected_account = None
     return IntegrationResponse(
@@ -104,6 +129,8 @@ def _safe_response(integration: UserIntegration) -> IntegrationResponse:
         integration_type=integration.integration_type.value,
         name=integration.name,
         connected_account=connected_account,
+        is_supported=is_supported,
+        support_note=support_note,
         needs_reauth=needs_reauth,
         reauth_reason=reauth_reason,
         is_active=integration.is_active,
@@ -642,6 +669,44 @@ async def create_email_integration(
     return _safe_response(integration)
 
 
+@router.post("/search", response_model=IntegrationResponse, status_code=201)
+async def create_search_integration(
+    data: SearchIntegrationCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    from tools.research.search_backend import search_backend
+
+    existing = await db.scalar(
+        select(UserIntegration.id).where(
+            UserIntegration.user_id == current_user.id,
+            UserIntegration.org_id == ctx.org.id,
+            UserIntegration.integration_type == IntegrationType.search_api,
+            UserIntegration.is_active == True,  # noqa: E712
+        )
+    )
+    if not existing:
+        await check_plan_limit("integrations", ctx.org, db)
+
+    provider = data.provider.strip().lower()
+    ok, result = await search_backend.validate_provider_config(provider, data.api_key)
+    if not ok:
+        raise HTTPException(status_code=400, detail=result)
+
+    integration = await _upsert_oauth_integration(
+        db,
+        current_user.id,
+        ctx.org.id,
+        IntegrationType.search_api,
+        data.name,
+        {"provider": provider, "api_key": data.api_key},
+        result,
+    )
+    await tool_registry.clear_user_cache(current_user.id)
+    return _safe_response(integration)
+
+
 @router.post("/{integration_id}/test", response_model=IntegrationResponse)
 async def test_integration(
     integration_id: str,
@@ -662,6 +727,11 @@ async def test_integration(
         raise HTTPException(status_code=404, detail="Integration not found")
 
     config = decrypt_config(integration.config)
+    if not is_supported_integration_type(integration.integration_type):
+        raise HTTPException(
+            status_code=400,
+            detail=unsupported_integration_note(integration.integration_type),
+        )
     if integration.integration_type == IntegrationType.github:
         ok, test_result = await _validate_github_token(config["access_token"])
     elif integration.integration_type == IntegrationType.gmail:
@@ -686,10 +756,15 @@ async def test_integration(
             payload = response.json()
             ok = response.status_code < 400 and payload.get("ok", False)
             test_result = "success" if ok else payload.get("error", "Slack auth test failed")
+    elif integration.integration_type == IntegrationType.search_api:
+        from tools.research.search_backend import search_backend
+
+        ok, test_result = await search_backend.validate_provider_config(
+            str(config.get("provider", "")),
+            str(config.get("api_key", "")),
+        )
     elif integration.integration_type == IntegrationType.email_smtp:
         ok, test_result = _test_email_config(config)
-    else:
-        ok, test_result = False, "Testing for this integration is coming soon"
 
     integration.last_tested_at = datetime.now(timezone.utc)
     integration.last_test_result = "success" if ok else test_result[:50]

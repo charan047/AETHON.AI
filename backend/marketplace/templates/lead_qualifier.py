@@ -15,16 +15,16 @@ TEMPLATE: MarketplaceTemplate = {
             "• Checks their LinkedIn and website\n"
             "• Scores the lead against your ideal customer profile\n"
             "• Drafts a personalised first-touch email\n"
-            "• Saves a lead summary to Google Sheets\n\n"
+            "• Saves a lead summary into the workflow output for export or email\n\n"
             "Setup time: 5 minutes."
         ),
         "category": "sales",
         "tags": ["lead generation", "sales", "qualification", "crm"],
         "icon": "🎯",
         "required_tools": ["web_search", "web_scrape"],
-        "optional_tools": ["google_sheets", "gmail_send"],
+        "optional_tools": ["gmail_send"],
         "required_integrations": [],
-        "recommended_integrations": ["gmail", "google_sheets"],
+        "recommended_integrations": ["gmail"],
         "estimated_minutes_saved_per_week": 90,
         "difficulty": "beginner",
         "version": "1.0.0",
@@ -41,7 +41,7 @@ TEMPLATE: MarketplaceTemplate = {
         "model": "llama-3.1-8b-instant",
         "temperature": 0.2,
         "max_iterations": 12,
-        "tools": ["web_search", "web_scrape", "google_sheets", "gmail_send"],
+        "tools": ["web_search", "web_scrape", "gmail_send"],
         "role_slug": "customer_support",
         "seniority_level": 1,
         "autonomy_level": "supervised",

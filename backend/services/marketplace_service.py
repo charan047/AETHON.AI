@@ -410,7 +410,7 @@ class MarketplaceService:
         tool = CustomTool(
             id=str(uuid.uuid4()),
             org_id=org_id,
-            name=await self._unique_tool_name(template.get("name", "marketplace_tool"), db),
+            name=await self._unique_tool_name(template.get("name", "marketplace_tool"), org_id, db),
             description=template.get("description", ""),
             code=template.get("code", ""),
             is_active=template.get("is_active", True),
@@ -529,14 +529,14 @@ class MarketplaceService:
             suffix += 1
         return candidate
 
-    async def _unique_tool_name(self, name: str, db: AsyncSession) -> str:
+    async def _unique_tool_name(self, name: str, org_id: str, db: AsyncSession) -> str:
         base = re.sub(r"[^a-zA-Z0-9_]+", "_", (name or "marketplace_tool").strip().lower()).strip("_")
         if not base or not re.match(r"^[a-zA-Z_]", base):
             base = f"tool_{base}" if base else "marketplace_tool"
         base = base[:45]
         candidate = base
         suffix = 2
-        while await db.scalar(select(CustomTool.id).where(CustomTool.name == candidate)):
+        while await db.scalar(select(CustomTool.id).where(CustomTool.org_id == org_id, CustomTool.name == candidate)):
             candidate = f"{base[:42]}_{suffix}"
             suffix += 1
         return candidate

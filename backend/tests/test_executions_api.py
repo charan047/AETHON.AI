@@ -9,6 +9,7 @@ from database.models import (
     AgentMemoryEntry,
     AgentTrustScore,
     Client,
+    ClientKnowledge,
     Execution,
     ExecutionStatus,
     IntegrationType,
@@ -233,6 +234,73 @@ async def test_run_workflow_assigns_explicit_client_id(authed_client, db, test_o
 
 
 @pytest.mark.asyncio
+async def test_approve_execution_extracts_client_knowledge(
+    authed_client,
+    db,
+    test_org,
+    test_workflow,
+    monkeypatch,
+):
+    client = Client(
+        org_id=test_org.id,
+        name="Acme Corp",
+        company_name="Acme Corp",
+    )
+    db.add(client)
+    await db.commit()
+    await db.refresh(client)
+
+    execution = Execution(
+        org_id=test_org.id,
+        workflow_id=test_workflow.id,
+        client_id=client.id,
+        status=ExecutionStatus.pending_review,
+        input_message="Research Acme positioning",
+        output_message=(
+            "Acme prefers short executive summaries, focuses on mid-market buyers, "
+            "and consistently compares itself to Nimbus."
+        ),
+        started_at=datetime.utcnow(),
+    )
+    db.add(execution)
+    await db.commit()
+    await db.refresh(execution)
+
+    async def fake_extract_preferences(*_args, **_kwargs):
+        return None
+
+    async def fake_extract_client_learnings(*_args, **_kwargs):
+        return [
+            {"content": "Prefers short executive summaries.", "category": "preference", "confidence": 0.94},
+            {"content": "Targets mid-market buyers.", "category": "product", "confidence": 0.86},
+        ]
+
+    monkeypatch.setattr(executions_api, "_extract_preferences", fake_extract_preferences)
+    monkeypatch.setattr(executions_api, "_extract_client_learnings", fake_extract_client_learnings)
+
+    response = await authed_client.post(
+        f"/api/executions/{execution.id}/approve",
+        json={"note": "Looks right"},
+    )
+
+    assert response.status_code == 200
+    facts = (
+        await db.execute(
+            select(ClientKnowledge)
+            .where(
+                ClientKnowledge.org_id == test_org.id,
+                ClientKnowledge.client_id == client.id,
+            )
+            .order_by(ClientKnowledge.created_at.asc())
+        )
+    ).scalars().all()
+    assert [fact.content for fact in facts] == [
+        "Prefers short executive summaries.",
+        "Targets mid-market buyers.",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_run_workflow_rejects_client_from_another_org(authed_client, db, test_workflow, test_user):
     other_org = Organization(
         id="foreign-org",
@@ -363,6 +431,51 @@ async def test_approve_execution_marks_pending_review_completed(authed_client, d
     assert pref.always_inject is True
     assert pref.source == "ceo_feedback"
     assert pref.content_preview == "Keep responses under 300 words. Use informal tone."
+
+
+@pytest.mark.asyncio
+async def test_execution_api_exposes_normalized_review_state(authed_client, db, test_org, test_workflow):
+    pending_review_execution = Execution(
+        id="exec-review-state-final",
+        org_id=test_org.id,
+        workflow_id=test_workflow.id,
+        trigger="manual",
+        status=ExecutionStatus.pending_review,
+        input_message="Review the final output",
+        started_at=datetime.utcnow(),
+    )
+    waiting_approval_execution = Execution(
+        id="exec-review-state-step",
+        org_id=test_org.id,
+        workflow_id=test_workflow.id,
+        trigger="manual",
+        status=ExecutionStatus.waiting_approval,
+        input_message="Review the approval step",
+        started_at=datetime.utcnow(),
+    )
+    db.add_all([pending_review_execution, waiting_approval_execution])
+    await db.commit()
+
+    list_response = await authed_client.get("/api/executions")
+    assert list_response.status_code == 200
+    payload_by_id = {item["id"]: item for item in list_response.json()}
+
+    assert payload_by_id["exec-review-state-final"]["review_state"] == "needs_review"
+    assert payload_by_id["exec-review-state-final"]["review_stage"] == "final_review"
+    assert payload_by_id["exec-review-state-final"]["requires_ceo_action"] is True
+    assert payload_by_id["exec-review-state-final"]["status_label"] == "needs review"
+
+    assert payload_by_id["exec-review-state-step"]["review_state"] == "needs_review"
+    assert payload_by_id["exec-review-state-step"]["review_stage"] == "workflow_pause"
+    assert payload_by_id["exec-review-state-step"]["requires_ceo_action"] is True
+    assert payload_by_id["exec-review-state-step"]["status_label"] == "needs review"
+
+    detail_response = await authed_client.get("/api/executions/exec-review-state-step")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["review_state"] == "needs_review"
+    assert detail["review_stage"] == "workflow_pause"
+    assert detail["status_label"] == "needs review"
 
 
 @pytest.mark.asyncio

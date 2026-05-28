@@ -60,7 +60,9 @@ TOOL_TRUST_THRESHOLDS = {
     "external_agent_call": 55,
     "gmail_read": 30,
     "code_executor": 50,
+    "google_docs": 40,
     "google_docs_create": 40,
+    "google_sheets": 40,
     "google_sheets_create": 40,
     "gmail_send": 65,
     "slack_post": 65,
@@ -70,7 +72,9 @@ BLAST_RADIUS_MAP = {
     "gmail_send": "Medium — email sent cannot be recalled",
     "slack_post": "Low — message visible to channel members",
     "code_executor": "Low-Medium — sandboxed, but code runs on server",
+    "google_docs": "Low — creates new document only",
     "google_docs_create": "Low — creates new document only",
+    "google_sheets": "Low — creates or appends spreadsheet rows only",
     "external_agent_call": "Medium — sends data to an external agent system",
     "database_migration": "High — affects all users",
     "production_deploy": "High — service disruption possible",
@@ -84,7 +88,23 @@ class PermissionEngine:
     def _canonical_tool_name(tool_name: str) -> str:
         if tool_name.startswith("agent:"):
             return "external_agent_call"
+        aliases = {
+            "google_docs_create": "google_docs",
+            "google_sheets_create": "google_sheets",
+        }
+        if tool_name in aliases:
+            return aliases[tool_name]
         return tool_name
+
+    @staticmethod
+    def _tool_name_variants(tool_name: str) -> set[str]:
+        canonical = PermissionEngine._canonical_tool_name(tool_name)
+        variants = {tool_name, canonical}
+        if canonical == "google_docs":
+            variants.add("google_docs_create")
+        if canonical == "google_sheets":
+            variants.add("google_sheets_create")
+        return variants
 
     async def check(
         self,
@@ -146,10 +166,10 @@ class PermissionEngine:
 
     def _check_tool(self, agent, contract, trust, tool_name) -> PermissionCheck:
         canonical_tool_name = self._canonical_tool_name(tool_name)
+        variants = self._tool_name_variants(tool_name)
 
         if contract and (
-            tool_name in (contract.forbidden_tools or [])
-            or canonical_tool_name in (contract.forbidden_tools or [])
+            variants & set(contract.forbidden_tools or [])
         ):
             return PermissionCheck(
                 result=PermissionResult.FORBIDDEN,
@@ -161,7 +181,7 @@ class PermissionEngine:
             contract
             and contract.allowed_tools is not None
             and not tool_name.startswith("agent:")
-            and tool_name not in contract.allowed_tools
+            and not (variants & set(contract.allowed_tools or []))
         ):
             return PermissionCheck(
                 result=PermissionResult.FORBIDDEN,

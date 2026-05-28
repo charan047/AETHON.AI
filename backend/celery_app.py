@@ -20,6 +20,7 @@ celery_app = Celery(
         "tasks.eval_tasks",
         "tasks.long_running_tasks",
         "tasks.mission_tasks",
+        "tasks.file_tasks",
     ],
 )
 celery_app.conf.update(

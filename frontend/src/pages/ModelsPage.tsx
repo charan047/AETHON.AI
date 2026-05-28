@@ -192,7 +192,7 @@ function TemplateCard({ template, onSelect }: { template: ModelTemplate; onSelec
     <button
       type="button"
       onClick={onSelect}
-      className="glass-card cursor-pointer rounded-2xl p-4 text-left transition-all duration-150 hover:border-blue-500/30 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+      className="card cursor-pointer rounded-2xl p-4 text-left transition-all duration-150 hover:border-blue-500/30 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
     >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
@@ -741,7 +741,7 @@ export function ModelsPage() {
         <div className="flex items-end justify-between gap-4">
           <div>
             <h1 className="page-title">AI Models</h1>
-            <p className="page-subtitle">Test, assign, and monitor the models your agency relies on across every agent.</p>
+            <p className="page-sub">Test, assign, and monitor the models your agency relies on across every agent.</p>
           </div>
           <button className="btn-primary" onClick={() => setAddOpen(true)}>
             <Plus size={16} /> Add Model

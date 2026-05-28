@@ -21,7 +21,9 @@ TOOL_SKILL_MAP = {
     "gmail_send": "communication",
     "slack_post": "communication",
     "slack_read": "communication",
+    "google_docs": "productivity",
     "google_docs_create": "productivity",
+    "google_sheets": "productivity",
     "google_sheets_create": "productivity",
     "code_executor": "code",
 }
@@ -204,13 +206,9 @@ class TrustScoreService:
         db: AsyncSession,
         learning_rate_override: float | None = None,
     ) -> None:
-        evidence_count = max(
-            int(score.total_tasks or 0),
-            int(score.total_reviews or 0),
-            int(score.eval_runs_count or 0),
-        )
+        total_tasks = int(score.total_tasks or 0)
 
-        if evidence_count == 0:
+        if total_tasks == 0:
             score.overall_score = 50.0
         else:
             raw_score = (
@@ -225,7 +223,7 @@ class TrustScoreService:
             learning_rate = (
                 learning_rate_override
                 if learning_rate_override is not None
-                else (0.15 if (score.total_tasks or 0) <= 20 else 0.05)
+                else (0.15 if total_tasks <= 20 else 0.05)
             )
             score.overall_score = round(
                 min(

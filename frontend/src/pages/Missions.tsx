@@ -102,10 +102,10 @@ function MissionCard({
       className={clsx(
         'overflow-hidden p-5 transition-all',
         mission.status === 'completed'
-          ? 'glass-card'
+          ? 'card'
           : mission.status === 'failed'
-            ? 'glass-card glass-card-red'
-            : 'glass-card glass-card-amber',
+            ? 'card card-red'
+            : 'card card-amber',
       )}
       style={{
         borderLeftWidth: mission.status === 'failed' ? '3px' : '2px',
@@ -251,7 +251,7 @@ function NewMissionComposer({
 
   return (
     open ? (
-      <div className="glass-card p-5">
+      <div className="card p-5">
         <div className="space-y-5">
           <textarea
             className="textarea min-h-36 resize-y text-base"
@@ -303,7 +303,7 @@ function NewMissionComposer({
               className="btn-primary btn-runner"
             >
               {creating ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-              Create Mission
+              Create Project
             </button>
           </div>
         </div>
@@ -361,7 +361,7 @@ export function Missions() {
     onSuccess: mission => {
       queryClient.setQueryData<Mission[]>(['missions'], previous => [mission, ...(previous || [])])
       setShowModal(false)
-      toast.success('Mission started — your agents are working')
+      toast.success('Project started — your agents are working')
     },
     onError: error => toast.error(extractApiError(error)),
   })
@@ -371,7 +371,7 @@ export function Missions() {
     onSuccess: mission => {
       queryClient.setQueryData<Mission[]>(['missions'], previous => [mission, ...(previous || [])])
       void queryClient.invalidateQueries({ queryKey: ['missions'] })
-      toast.success('Mission retried — your agents are working')
+      toast.success('Project retried — your agents are working')
     },
     onError: error => toast.error(extractApiError(error)),
   })
@@ -404,12 +404,12 @@ export function Missions() {
 
   return (
     <PageShell
-      title="Missions"
+      title="Projects"
       subtitle="Goals your agency is executing."
       actions={
         <button type="button" className="btn-primary btn-runner" onClick={() => setShowModal(value => !value)}>
           <Plus size={15} />
-          New Mission
+          New Project
         </button>
       }
       contentClassName="space-y-6 p-6"
@@ -427,7 +427,7 @@ export function Missions() {
           <div className="flex items-start gap-3 text-red-100">
             <AlertTriangle size={18} className="mt-0.5 text-red-300" />
             <div>
-              <div className="font-medium">Could not load missions</div>
+              <div className="font-medium">Could not load projects</div>
               <div className="mt-1 text-sm text-red-100/80">{extractApiError(missionsQuery.error)}</div>
             </div>
           </div>
@@ -436,9 +436,9 @@ export function Missions() {
         <div className="surface-card">
           <EmptyState
             icon={<Target size={22} />}
-            title="No missions yet. Start your first mission."
-            description="Give your agency a multi-step goal and it will break the work into coordinated tasks."
-            action={{ label: 'Start Mission', onClick: () => setShowModal(true) }}
+            title="Multi-step projects"
+            description="Describe a goal in plain language. Your agents coordinate, execute, and report back."
+            action={{ label: 'Start a project', onClick: () => setShowModal(true) }}
           />
         </div>
       ) : (

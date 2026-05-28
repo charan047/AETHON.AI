@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from auth.security import create_access_token, hash_password
-from database.models import Agent, Client, Execution, ExecutionStatus, Mission, MissionStatus, OrgMember, OrgMemberRole, Organization, User, UserRole, Workflow
+from database.models import Agent, Client, ClientKnowledge, Execution, ExecutionStatus, FileStatus, FileType, Mission, MissionStatus, OrgFile, OrgMember, OrgMemberRole, Organization, User, UserRole, Workflow
 
 
 async def _create_user_with_org(db, *, email: str, org_name: str, org_slug: str):
@@ -176,6 +176,41 @@ async def test_portal_excludes_unapproved_mission_reports(authed_client, db, tes
 
 
 @pytest.mark.asyncio
+async def test_portal_includes_ready_deliverable_files(authed_client, db, test_org):
+    create_response = await authed_client.post("/api/clients", json={"name": "Portal Files", "company_name": "Atlas Corp"})
+    client_id = create_response.json()["id"]
+
+    portal_response = await authed_client.post(f"/api/clients/{client_id}/portal/enable")
+    portal_token = portal_response.json()["portal_token"]
+
+    db.add(
+        OrgFile(
+            org_id=test_org.id,
+            client_id=client_id,
+            name="atlas-brief.pdf",
+            file_type=FileType.pdf,
+            status=FileStatus.ready,
+            storage_key="orgs/test/clients/atlas/documents/atlas-brief.pdf",
+            size_bytes=2048,
+            content_type="application/pdf",
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+    )
+    await db.commit()
+
+    response = await authed_client.get(f"/api/portal/{portal_token}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["files"]) == 1
+    assert payload["files"][0]["name"] == "atlas-brief.pdf"
+    assert payload["files"][0]["file_type"] == "pdf"
+    assert payload["files"][0]["download_url"]
+    assert "storage_key" not in payload["files"][0]
+
+
+@pytest.mark.asyncio
 async def test_assign_agent_to_invalid_or_other_org_client_returns_400(authed_client, db, test_agent):
     missing_response = await authed_client.post(
         f"/api/agents/{test_agent.id}/assign-client",
@@ -222,6 +257,56 @@ async def test_get_other_org_client_returns_404(client, db, test_org, test_user)
     )
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_client_knowledge_crud_is_org_scoped(authed_client, client, db, test_org, test_user):
+    create_response = await authed_client.post(
+        "/api/clients",
+        json={"name": "Knowledge Client", "company_name": "Acme Corp"},
+    )
+    client_id = create_response.json()["id"]
+
+    add_response = await authed_client.post(
+        f"/api/clients/{client_id}/knowledge",
+        json={
+            "content": "Prefers concise executive summaries.",
+            "category": "preference",
+            "confidence": 0.92,
+        },
+    )
+    assert add_response.status_code == 201
+    knowledge_id = add_response.json()["id"]
+
+    listing = await authed_client.get(f"/api/clients/{client_id}/knowledge")
+    assert listing.status_code == 200
+    assert len(listing.json()) == 1
+    assert listing.json()[0]["content"] == "Prefers concise executive summaries."
+
+    other_user, other_org = await _create_user_with_org(
+        db,
+        email=f"knowledge-{uuid4().hex[:8]}@example.com",
+        org_name="Other Knowledge Org",
+        org_slug=f"other-knowledge-org-{uuid4().hex[:8]}",
+    )
+    cross_response = await client.get(
+        f"/api/clients/{client_id}/knowledge",
+        headers=_headers_for(other_user, other_org),
+    )
+    assert cross_response.status_code == 404
+
+    delete_response = await authed_client.delete(
+        f"/api/clients/{client_id}/knowledge/{knowledge_id}",
+    )
+    assert delete_response.status_code == 204
+
+    remaining = await db.scalar(
+        select(ClientKnowledge).where(
+            ClientKnowledge.id == knowledge_id,
+            ClientKnowledge.org_id == test_org.id,
+        )
+    )
+    assert remaining is None
 
 
 @pytest.mark.asyncio

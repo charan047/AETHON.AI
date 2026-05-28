@@ -45,6 +45,7 @@ import { MentionTextarea } from '../components/ui/MentionTextarea'
 import { GoalCard } from '../components/mission/GoalCard'
 import { ExecutionLiveView } from '../components/execution/ExecutionLiveView'
 import { MarkdownContent, cleanMarkdownContent } from '../components/ui/MarkdownContent'
+import { AnimatedList, AnimatedListItem } from '../components/ui/magicui/AnimatedList'
 import { useAuth } from '../contexts/AuthContext'
 import { useWebSocket } from '../contexts/WebSocketContext'
 import { toast } from '../lib/toast'
@@ -72,6 +73,7 @@ type ChatMessage = {
   isProactive?: boolean
   streaming?: boolean
   pending?: boolean
+  syncing?: boolean
   failed?: boolean
 }
 
@@ -167,6 +169,34 @@ function normalizeOutboundMessage(raw: string) {
   if (trimmed.startsWith('/report ')) return `Generate a report about: ${trimmed.replace('/report', '').trim()}`
   if (trimmed === '/insights') return 'What should I focus on this week?'
   return raw
+}
+
+function historyMatchesLocalState(
+  historyItems: CompanyConversationMessage[],
+  localMessages: ChatMessage[],
+) {
+  const localConversation = localMessages.filter(message => message.role !== 'system')
+  if (historyItems.length < localConversation.length) return false
+
+  const lastLocal = [...localConversation].reverse()[0]
+  const lastHistory = [...historyItems].reverse()[0]
+  if (!lastLocal || !lastHistory) return true
+  if (lastLocal.role !== lastHistory.role) return false
+
+  const localContent = lastLocal.content.trim()
+  const historyContent = (lastHistory.content || '').trim()
+  const localActionCount = lastLocal.actions?.length || 0
+  const historyActionCount = lastHistory.actions?.length || 0
+
+  if (localActionCount > historyActionCount) return false
+
+  if (lastLocal.role === 'assistant') {
+    if (localContent) return localContent === historyContent
+    if (localActionCount > 0) return historyActionCount >= localActionCount
+    return true
+  }
+
+  return localContent === historyContent
 }
 
 function MarkdownMessage({ content }: { content: string }) {
@@ -487,13 +517,21 @@ function MessageBubble({
 }) {
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
+  const visibleAssistantContent = !isUser && !isSystem ? cleanMarkdownContent(message.content) : message.content.trim()
   const actionOnlyAssistant =
     !isUser &&
     !isSystem &&
     !message.failed &&
     !message.streaming &&
-    !message.content.trim() &&
+    !visibleAssistantContent &&
     Boolean(message.actions?.length)
+  const emptyAssistantFallback =
+    !isUser &&
+    !isSystem &&
+    !message.failed &&
+    !message.streaming &&
+    !visibleAssistantContent &&
+    !message.actions?.length
 
   if (message.isProactive) {
     return <ProactiveMessage message={message} />
@@ -513,15 +551,15 @@ function MessageBubble({
     <div className={clsx('flex w-full gap-3', isUser ? 'justify-end' : 'justify-start')}>
       <div className={clsx(isUser ? 'max-w-[72%] flex flex-col items-end' : 'max-w-[80%]')}>
         <motion.div
-          initial={isUser ? { opacity: 0, x: 18, scale: 0.96 } : { opacity: 0, y: 12 }}
+          initial={isUser ? { opacity: 0, y: 8, scale: 0.95 } : { opacity: 0, x: -12 }}
           animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
           transition={{ duration: 0.22, ease: 'easeOut' }}
           className={clsx(
-            'relative px-4 py-3 text-sm leading-6',
+            'relative px-4 py-3 text-[13px] leading-6',
             isUser ? 'rounded-[18px] rounded-br-[4px] text-white' : 'rounded-[18px] rounded-bl-[4px] text-[#F0F6FF]',
             message.pending && 'opacity-80',
-            !isUser && !message.failed && 'glass-card',
-            message.failed && 'glass-card glass-card-red',
+            !isUser && !message.failed && 'card',
+            message.failed && 'card card-red',
           )}
           style={
             isUser
@@ -532,13 +570,7 @@ function MessageBubble({
               : undefined
           }
         >
-          {!isUser && !message.failed ? (
-            <div className="absolute left-3 top-3 flex h-4 w-4 items-center justify-center rounded-full bg-indigo-500/15">
-              <div className="h-1.5 w-1.5 rounded-full bg-indigo-300" />
-            </div>
-          ) : null}
-
-          <div className={clsx(!isUser && !message.failed && 'pt-3')}>
+          <div>
             {message.failed ? (
               <div className="flex items-start gap-2">
                 <AlertCircle size={15} className="mt-0.5 shrink-0 text-red-400" />
@@ -560,6 +592,11 @@ function MessageBubble({
                 <Sparkles size={14} className="text-indigo-300" />
                 <span>Handled below</span>
               </div>
+            ) : emptyAssistantFallback ? (
+              <div className="flex items-center gap-2 text-sm text-[#D7E3F4]">
+                <Sparkles size={14} className="text-indigo-300" />
+                <span>Got it.</span>
+              </div>
             ) : isUser ? (
               <p className="whitespace-pre-wrap">{message.content}</p>
             ) : (
@@ -567,9 +604,7 @@ function MessageBubble({
             )}
           </div>
 
-          {message.streaming && (
-            <span className="ml-1 inline-block h-4 w-2 animate-blink rounded-[2px] bg-indigo-300 align-middle" />
-          )}
+          {message.streaming && <span className="ml-2 inline-block h-2 w-2 animate-blink rounded-full bg-indigo-300 align-middle" />}
           {!isUser && message.actions?.map((action, index) => (
             <ActionCard
               key={`${message.id}_${action.type}_${action.execution_id || action.workflow_id || action.agent_id || index}`}
@@ -653,7 +688,7 @@ function EmptyPromptCard({ icon, title, prompt, onPick }: { icon: ReactNode; tit
     <button
       type="button"
       onClick={() => onPick(prompt)}
-      className="glass-card group cursor-pointer rounded-2xl p-4 text-left transition duration-150 hover:-translate-y-0.5 hover:border-indigo-500/25 hover:shadow-glow-md focus:outline-none focus:ring-2 focus:ring-indigo-500/30 motion-reduce:hover:translate-y-0"
+      className="card group cursor-pointer rounded-2xl p-4 text-left transition duration-150 hover:-translate-y-0.5 hover:border-indigo-500/25 hover:shadow-glow-md focus:outline-none focus:ring-2 focus:ring-indigo-500/30 motion-reduce:hover:translate-y-0"
     >
       <div className="mb-4 grid h-10 w-10 place-items-center rounded-xl bg-white/[0.05] text-indigo-300 group-hover:bg-indigo-500/12">
         {icon}
@@ -674,8 +709,10 @@ export function CompanyChat() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  const messagesRef = useRef<ChatMessage[]>([])
   const seenEventRef = useRef<string | null>(null)
   const streamingConversationRef = useRef<string | null>(null)
+  const pendingHistorySyncConversationRef = useRef<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [conversationId, setConversationId] = useState<string | null>(routeConversationId || null)
@@ -701,6 +738,8 @@ export function CompanyChat() {
       return []
     }
   })
+
+  messagesRef.current = messages
 
   const founderName = initialsFromEmail(auth.email)
   const conversationStorageKey = auth.userId ? `company_chat_conversation:${auth.userId}` : null
@@ -756,18 +795,21 @@ export function CompanyChat() {
   useEffect(() => {
     if (historyQuery.data?.messages) {
       const historyConversationId = historyQuery.data.conversation?.id || conversationId
-      const hasOptimisticStream = messages.some(message => message.streaming || message.pending)
-      if (
-        sending &&
-        streamingConversationRef.current &&
-        historyConversationId === streamingConversationRef.current &&
-        hasOptimisticStream
-      ) {
-        return
+      const localMessages = messagesRef.current
+      const isPendingHistorySync =
+        pendingHistorySyncConversationRef.current &&
+        historyConversationId === pendingHistorySyncConversationRef.current
+
+      if (isPendingHistorySync) {
+        if (!historyMatchesLocalState(historyQuery.data.messages, localMessages)) {
+          return
+        }
+        pendingHistorySyncConversationRef.current = null
       }
+
       setMessages(toChatMessages(historyQuery.data.messages))
     }
-  }, [conversationId, historyQuery.data, messages, sending])
+  }, [conversationId, historyQuery.data])
 
   useEffect(() => {
     const handleResize = () => {
@@ -1037,6 +1079,8 @@ export function CompanyChat() {
     setInput('')
     setSending(true)
     streamingConversationRef.current = conversationId
+    pendingHistorySyncConversationRef.current = conversationId
+    let resolvedConversationId = conversationId
 
     try {
       const response = await companyChatApi.send({
@@ -1056,7 +1100,6 @@ export function CompanyChat() {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      let resolvedConversationId = conversationId
 
       while (true) {
         const { done, value } = await reader.read()
@@ -1071,6 +1114,7 @@ export function CompanyChat() {
           if (event.type === 'meta' && event.conversation_id) {
             resolvedConversationId = event.conversation_id
             streamingConversationRef.current = event.conversation_id
+            pendingHistorySyncConversationRef.current = event.conversation_id
             setConversationId(event.conversation_id)
             if (conversationStorageKey) {
               window.sessionStorage.setItem(conversationStorageKey, event.conversation_id)
@@ -1091,7 +1135,11 @@ export function CompanyChat() {
           }
           if (event.type === 'done') {
             setMessages(prev => prev.map(item =>
-              item.id === userId ? { ...item, pending: false } : item.id === assistantId ? { ...item, streaming: false } : item,
+              item.id === userId
+                ? { ...item, pending: false }
+                : item.id === assistantId
+                  ? { ...item, streaming: false, syncing: true }
+                  : item,
             ))
           }
         }
@@ -1112,6 +1160,7 @@ export function CompanyChat() {
           ? {
               ...item,
               streaming: false,
+              syncing: false,
               failed: true,
               content: `I could not reach the company command layer: ${messageText}`,
             }
@@ -1120,6 +1169,9 @@ export function CompanyChat() {
       toast.error(messageText)
     } finally {
       streamingConversationRef.current = null
+      if (!resolvedConversationId) {
+        pendingHistorySyncConversationRef.current = null
+      }
       setSending(false)
     }
   }
@@ -1189,13 +1241,7 @@ export function CompanyChat() {
 
   const conversationSidebar = (
     <aside
-      className="flex h-full w-[260px] shrink-0 flex-col"
-      style={{
-        background: 'rgba(5,9,20,0.88)',
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-        borderRight: '1px solid rgba(255,255,255,0.07)',
-      }}
+      className="flex h-full w-[260px] shrink-0 flex-col border-r border-white/[0.07] bg-transparent"
     >
       <div className="flex h-14 items-center justify-between px-4">
         <div className="flex items-center gap-2.5">
@@ -1240,7 +1286,7 @@ export function CompanyChat() {
                 type="button"
                 onClick={() => void loadConversation(conversation.id)}
                 className={clsx(
-                  'data-row relative min-h-[44px] w-full rounded-xl border border-transparent px-3 py-2.5 text-left transition-all',
+                  'row relative min-h-[44px] w-full rounded-xl border border-transparent px-3 py-2.5 text-left transition-all',
                   conversationId === conversation.id
                     ? 'bg-indigo-500/[0.08] border-l-2 border-indigo-500'
                     : 'hover:bg-white/[0.04]',
@@ -1306,7 +1352,7 @@ export function CompanyChat() {
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
-              className="glass-elevated group flex cursor-pointer flex-col items-center gap-1.5 rounded-2xl px-2 py-4 transition-all duration-200 hover:-translate-x-0.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+              className="card group fixed left-2 top-1/2 z-20 flex -translate-y-1/2 cursor-pointer flex-col items-center gap-1.5 rounded-2xl border border-[#2A2A2A] bg-[#111111] px-2 py-4 transition-all duration-200 hover:-translate-x-0.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
               title="Open sidebar"
             >
               <PanelLeftOpen size={15} className="text-[#4B5A73] transition-colors duration-150 group-hover:text-indigo-300" />
@@ -1435,12 +1481,12 @@ export function CompanyChat() {
                   </div>
                 </div>
               ) : (
-                <div className="mx-auto flex max-w-5xl flex-col gap-5 pb-4">
+                <AnimatedList className="mx-auto flex max-w-5xl flex-col gap-5 pb-4">
                   {messages.map((message, index) => {
                     const previous = messages[index - 1]
                     const showDaySeparator = !previous || previous.createdAt.slice(0, 10) !== message.createdAt.slice(0, 10)
                     return (
-                      <div key={message.id}>
+                      <AnimatedListItem key={message.id}>
                         {showDaySeparator && (
                           <div className="my-4 flex items-center gap-3">
                             <div className="h-px flex-1 bg-white/[0.06]" />
@@ -1465,10 +1511,10 @@ export function CompanyChat() {
                             toast.success('Conversation snippet copied')
                           }}
                         />
-                      </div>
+                      </AnimatedListItem>
                     )
                   })}
-                </div>
+                </AnimatedList>
               )}
             </div>
 
@@ -1487,7 +1533,7 @@ export function CompanyChat() {
                   ))}
                 </div>
 
-                <form onSubmit={onSubmit} className="glass-elevated relative rounded-2xl px-4 py-3 shadow-glow-sm focus-within:border-indigo-500/40">
+                <form onSubmit={onSubmit} className="card relative rounded-2xl px-4 py-3 shadow-glow-sm focus-within:border-indigo-500/40">
                   {showCommandMenu && (
                     <CommandMenu
                       query={slashQuery}
@@ -1568,7 +1614,7 @@ export function CompanyChat() {
           {contextOpen && (
             <aside className="hidden w-[320px] shrink-0 border-l border-white/[0.06] bg-[rgba(8,13,26,0.78)] p-4 backdrop-blur-xl lg:block">
               <div className="space-y-3">
-                <div className="glass-card p-3 space-y-2">
+                <div className="card p-3 space-y-2">
                   <div className="flex items-center justify-between">
                     <p className="section-title mb-0 border-0 pb-0">CTO Tasks</p>
                     {ctoTasks.length > 0 && (
@@ -1625,14 +1671,14 @@ export function CompanyChat() {
                   )}
                 </div>
 
-                <div className="glass-card rounded-2xl p-3">
+                <div className="card rounded-2xl p-3">
                   <div className="section-title mb-3 border-0 pb-0">Team Status</div>
                   <div className="space-y-2.5">
                     {(summary?.team_status || []).slice(0, 6).map(agent => {
                       const agentName = agent.name?.trim() || 'Agent'
                       return (
                         <div key={agent.agent_id} className="flex items-center gap-2.5">
-                          <div className={clsx('status-dot', agent.status === 'working' ? 'dot-live dot-green' : 'dot-muted')} />
+                          <div className={clsx('status-dot', agent.status === 'working' ? 'dot-live dot-green' : agent.requires_ceo_action ? 'dot-amber' : 'dot-muted')} />
                           <div className={clsx('flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-[10px] font-bold text-white', roleColorTone(agent.role || agentName))}>
                             {agentName.charAt(0)}
                           </div>
@@ -1641,7 +1687,7 @@ export function CompanyChat() {
                             <p className="truncate text-[11px] text-[#8B9DBE]">{agent.role || agent.current_task || 'Idle'}</p>
                           </div>
                           <div className="text-right text-[11px] text-[#8B9DBE]">
-                            {agent.status}
+                            {agent.status_label || agent.status}
                           </div>
                         </div>
                       )
@@ -1652,7 +1698,7 @@ export function CompanyChat() {
                   </div>
                 </div>
 
-                <div className="glass-card rounded-2xl p-3">
+                <div className="card rounded-2xl p-3">
                   <div className="section-title mb-3 border-0 pb-0">Recent Activity</div>
                   <div className="space-y-2">
                     {(summary?.recent_artifacts || []).slice(0, 4).map((artifact, index) => (
@@ -1676,7 +1722,7 @@ export function CompanyChat() {
                   <button
                     type="button"
                     onClick={() => navigate('/approvals')}
-                    className="glass-card glass-card-amber w-full rounded-2xl p-3 text-left transition duration-150 hover:border-amber-500/35"
+                    className="card card-amber w-full rounded-2xl p-3 text-left transition duration-150 hover:border-amber-500/35"
                   >
                     <div className="flex items-center gap-2">
                       <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/15 ring-1 ring-amber-500/25">
@@ -1690,7 +1736,7 @@ export function CompanyChat() {
                     </div>
                   </button>
                 ) : (
-                  <div className="glass-card rounded-2xl p-3">
+                  <div className="card rounded-2xl p-3">
                     <div className="flex items-center gap-2">
                       <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/10 ring-1 ring-emerald-500/20">
                         <CheckCircle2 size={13} className="text-emerald-400" />

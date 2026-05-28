@@ -13,14 +13,14 @@ test('task 9 command palette, toasts, and empty states work live', async ({ page
   await loginHelper(page, request, email)
 
   await page.goto('/agents')
-  await expect(page.getByText('Your first agent is waiting')).toBeVisible()
-  await expect(page.getByRole('button', { name: /browse marketplace/i })).toBeVisible()
+  await expect(page.getByText('Your AI team members')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add team member' })).toBeVisible()
 
   await page.goto('/workflows')
-  await expect(page.getByText('Automate your first task')).toBeVisible()
+  await expect(page.getByText('Recurring work, automated')).toBeVisible()
 
   await page.goto('/monitoring')
-  await expect(page.getByText('Recent Executions')).toBeVisible()
+  await expect(page.getByText('Recent Runs')).toBeVisible()
   await expect(page.getByText(/^Live ·/i)).toBeVisible()
 
   await page.goto('/')

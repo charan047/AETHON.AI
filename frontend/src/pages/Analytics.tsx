@@ -31,8 +31,6 @@ import { GlowCard } from '../components/ui/GlowCard'
 import { Skeleton, SkeletonCard } from '../components/ui/Skeleton'
 import { useAnalytics } from '../hooks/useAnalytics'
 import { toast } from '../lib/toast'
-import type { AgentReputation } from '../types'
-
 const PERIODS = [
   { value: 1, label: 'Today' },
   { value: 7, label: '7d' },
@@ -50,10 +48,6 @@ const CHART_TOOLTIP_STYLE = {
 
 function money(value = 0, digits = 2) {
   return `$${value.toFixed(digits)}`
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value))
 }
 
 function successTone(rate: number) {
@@ -102,7 +96,7 @@ function AnalyticsEmptyState({
   ctaLabel?: string
 }) {
   return (
-    <div className="glass-card flex flex-col items-center justify-center rounded-2xl p-12 text-center">
+    <div className="card flex flex-col items-center justify-center rounded-2xl p-12 text-center">
       <BarChart3 size={32} className="mb-4 text-[#2D3748]" />
       <p className="text-sm font-semibold text-[#8B9DBE]">{message}</p>
       <p className="mt-1 text-xs text-[#4B5A73]">{detail}</p>
@@ -211,7 +205,7 @@ export function Analytics() {
   const costPerRun = totalCost / Math.max(workflowRuns, 1)
   const budgetPct = (totalCost / Math.max(budget, 1)) * 100
   const budgetTone = budgetPct >= 100 ? 'bg-red-500' : budgetPct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'
-  const pendingReviewCount = analytics.pendingApprovals.length
+  const pendingReviewCount = analytics.overview?.pending_review_count || 0
 
   const dailyExecutions = useMemo(
     () => normalizeExecutionData(analytics.overview?.daily_executions || [], period),
@@ -226,29 +220,9 @@ export function Analytics() {
   const hasExecutionData = dailyExecutions.some(point => point.count > 0)
   const hasCostByAgentData = costByAgent.some(row => row.cost > 0)
   const periodLabel = PERIODS.find(item => item.value === period)?.label || `${period}d`
-  const feedbackSignals = useMemo(() => {
-    const reputations = Object.values(analytics.reputations || {}).filter(Boolean) as AgentReputation[]
-    const totals = reputations.reduce(
-      (acc, reputation) => {
-        acc.totalTasks += reputation.total_tasks || 0
-        acc.approved += reputation.approved_count || 0
-        acc.edited += reputation.edited_count || 0
-        acc.rejected += reputation.rejected_count || 0
-        return acc
-      },
-      { totalTasks: 0, approved: 0, edited: 0, rejected: 0 },
-    )
-
-    if (!totals.totalTasks) {
-      return { firstDraftRate: null as number | null, avgRevisions: null as number | null }
-    }
-
-    return {
-      // Best-effort agency quality metrics from existing human review signals.
-      firstDraftRate: clamp((totals.approved / totals.totalTasks) * 100, 0, 100),
-      avgRevisions: (totals.edited + totals.rejected) / totals.totalTasks,
-    }
-  }, [analytics.reputations])
+  const firstDraftRate = analytics.overview?.first_draft_rate ?? 0
+  const avgRevisions = analytics.overview?.avg_revisions ?? 1
+  const hasReviewMetrics = (analytics.overview?.total_approved ?? 0) > 0
 
   const saveBudget = async () => {
     const next = Number(budgetDraft)
@@ -287,7 +261,7 @@ export function Analytics() {
           <h1 className="text-4xl font-extrabold tracking-tight text-white">Analytics</h1>
           <p className="mt-2 text-sm text-[#8B9DBE]">Cost, performance, reliability, and operating signals for your agency.</p>
         </div>
-        <div className="glass-card flex rounded-2xl p-1">
+        <div className="card flex rounded-2xl p-1">
           {PERIODS.map(item => (
             <button
               key={item.value}
@@ -304,12 +278,12 @@ export function Analytics() {
       </div>
 
       {pendingReviewCount > 0 ? (
-        <div className="glass-card glass-card-amber flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="card card-amber flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <AlertTriangle size={18} className="text-amber-300" />
             <div className="text-sm text-amber-100">
               <span className="font-semibold text-amber-200">{pendingReviewCount}</span>{' '}
-              execution{pendingReviewCount === 1 ? '' : 's'} waiting for review
+              execution{pendingReviewCount === 1 ? '' : 's'} waiting for your review
             </div>
           </div>
           <button
@@ -328,7 +302,7 @@ export function Analytics() {
             value={money(totalCost, 4)}
             icon={Coins}
             tone="text-emerald-300"
-            detail={`${workflowRuns} workflow run${workflowRuns === 1 ? '' : 's'} tracked`}
+            detail={`${workflowRuns} process run${workflowRuns === 1 ? '' : 's'} tracked`}
           />
           <MetricCard
             label="Projected Month-End"
@@ -374,34 +348,34 @@ export function Analytics() {
             value={money(costPerRun, 4)}
             icon={GitBranch}
             tone="text-blue-300"
-            detail={workflowRuns ? 'Average spend per run in the selected window' : 'Waiting for first workflow run'}
+            detail={workflowRuns ? 'Average spend per run in the selected window' : 'Waiting for first process run'}
           />
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
           <MetricCard
             label="First-Draft Rate"
-            value={feedbackSignals.firstDraftRate === null ? '—' : `${feedbackSignals.firstDraftRate.toFixed(1)}%`}
+            value={hasReviewMetrics ? `${firstDraftRate}%` : '—'}
             icon={ShieldAlert}
-            tone={performanceTone(feedbackSignals.firstDraftRate, 70, 40)}
+            tone={hasReviewMetrics ? performanceTone(firstDraftRate, 70, 40) : 'text-[#8B9DBE]'}
             detail={
-              feedbackSignals.firstDraftRate === null
-                ? 'Waiting for human review data'
-                : 'Derived from approval signals already collected'
+              hasReviewMetrics
+                ? 'Approved on the first version without extra revision passes'
+                : 'Waiting for approved executions in this period'
             }
-            detailTone={feedbackSignals.firstDraftRate === null ? 'text-[#4B5A73]' : performanceTone(feedbackSignals.firstDraftRate, 70, 40)}
+            detailTone={hasReviewMetrics ? performanceTone(firstDraftRate, 70, 40) : 'text-[#4B5A73]'}
           />
           <MetricCard
             label="Avg Revisions"
-            value={feedbackSignals.avgRevisions === null ? '—' : feedbackSignals.avgRevisions.toFixed(2)}
+            value={hasReviewMetrics ? avgRevisions.toFixed(1) : '—'}
             icon={RefreshCcw}
-            tone={inversePerformanceTone(feedbackSignals.avgRevisions, 1.3, 2)}
+            tone={hasReviewMetrics ? inversePerformanceTone(avgRevisions, 1.3, 2) : 'text-[#8B9DBE]'}
             detail={
-              feedbackSignals.avgRevisions === null
-                ? 'Waiting for edit/reject signals'
-                : 'Best-effort average from existing edit and rejection feedback'
+              hasReviewMetrics
+                ? 'Average approved version number across completed review loops'
+                : 'Waiting for approved executions in this period'
             }
-            detailTone={feedbackSignals.avgRevisions === null ? 'text-[#4B5A73]' : inversePerformanceTone(feedbackSignals.avgRevisions, 1.3, 2)}
+            detailTone={hasReviewMetrics ? inversePerformanceTone(avgRevisions, 1.3, 2) : 'text-[#4B5A73]'}
           />
         </div>
 
@@ -506,7 +480,7 @@ export function Analytics() {
                 </tr>
               ))}
               {!analytics.performance?.workflows.length && (
-                <tr><td colSpan={6} className="px-5 py-12 text-center text-[#4B5A73]">No workflow runs yet.</td></tr>
+                <tr><td colSpan={6} className="px-5 py-12 text-center text-[#4B5A73]">No process runs yet.</td></tr>
               )}
             </tbody>
           </table>

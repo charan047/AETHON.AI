@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import ReactFlow, {
-  Background, Controls, MiniMap, addEdge,
+  Controls, MiniMap, addEdge,
   useNodesState, useEdgesState, MarkerType,
   type Connection, type Edge, type Node,
 } from 'reactflow'
@@ -20,6 +20,7 @@ import { clsx } from 'clsx'
 import type { Workflow, Agent, AutomationTemplate, ScheduledWorkflow, WorkflowInputVariable } from '../types'
 import { SkeletonCard } from '../components/ui/Skeleton'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
+import { DotGrid } from '../components/reactbits/DotGrid'
 import { toast } from '../lib/toast'
 
 const nodeTypes = {
@@ -73,7 +74,7 @@ function canActivateWorkflow(workflow: Workflow) {
 
 function createWorkflowDraft(): Partial<Workflow> {
   return {
-    name: 'New Workflow',
+    name: 'New Process',
     description: 'Describe the operating loop this workflow should run for your agency.',
     trigger: 'manual',
     execution_mode: 'sequential',
@@ -113,7 +114,7 @@ function normalizeWorkflowInputVariables(inputVariables?: WorkflowInputVariable[
   return (inputVariables || []).map((variable, index) => ({
     name: String(variable.name || `input_${index + 1}`),
     label: String(variable.label || variable.name || `Input ${index + 1}`),
-    type: variable.type === 'select' || variable.type === 'number' ? variable.type : 'text',
+    type: variable.type === 'select' || variable.type === 'textarea' ? variable.type : 'text',
     required: Boolean(variable.required),
     default: String(variable.default || ''),
     options: Array.isArray(variable.options)
@@ -316,7 +317,7 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
   }
 
   const save = () => {
-    if (!name) { toast.error('Please enter a workflow name'); return }
+    if (!name) { toast.error('Please enter a process name'); return }
     const cleanNodes = nodes.map(({ id, type, position, data }, index) => ({
       id,
       type: normalizeNodeType(type),
@@ -351,7 +352,7 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
   }
 
   const run = async () => {
-    if (!workflow.id) { toast.error('Save the workflow first'); return }
+    if (!workflow.id) { toast.error('Save the process first'); return }
     if (!runInput) { toast.error('Enter an input message'); return }
     setRunning(true)
     setRunningId(null)
@@ -370,14 +371,14 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
   }
 
   const openRunPanel = () => {
-    if (!workflow.id) { toast.error('Save the workflow first'); return }
+    if (!workflow.id) { toast.error('Save the process first'); return }
     setRunVariableValues(buildVariableRunDefaults(inputVariables))
     setRunValidationError(null)
     setRunPanelOpen(true)
   }
 
   const runWithVariables = async () => {
-    if (!workflow.id) { toast.error('Save the workflow first'); return }
+    if (!workflow.id) { toast.error('Save the process first'); return }
 
     const missing = inputVariables
       .filter(variable => variable.required && !(runVariableValues[variable.name] || variable.default || '').trim())
@@ -421,10 +422,10 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
             {isEditingName ? (
               <input
                 autoFocus
-                aria-label="Workflow name"
+                aria-label="Process name"
                 className="w-full rounded-lg border border-[var(--border)] bg-transparent px-2 py-1 text-xl font-semibold tracking-[-0.03em] text-[var(--t1)] outline-none focus:border-indigo-400"
                 value={name}
-                placeholder="Workflow name"
+                placeholder="Process name"
                 onChange={event => setName(event.target.value)}
                 onBlur={() => {
                   setIsEditingName(false)
@@ -439,8 +440,8 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
                 }}
               />
             ) : (
-              <button type="button" className="text-left" aria-label="Edit workflow name" onClick={() => setIsEditingName(true)}>
-                <div className="truncate text-xl font-semibold tracking-[-0.03em] text-[var(--t1)]">{name || workflow.name || 'Untitled workflow'}</div>
+              <button type="button" className="text-left" aria-label="Edit process name" onClick={() => setIsEditingName(true)}>
+                <div className="truncate text-xl font-semibold tracking-[-0.03em] text-[var(--t1)]">{name || workflow.name || 'Untitled process'}</div>
                 <div className="mt-1 truncate text-xs text-[var(--t2)]">{desc || 'Click the title to rename. Save persists nodes, review rules, variables, and schedule.'}</div>
               </button>
             )}
@@ -463,6 +464,8 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
                     </button>
                     {runPanelOpen && (
                       <div className="glass-elevated absolute right-0 top-[calc(100%+0.75rem)] z-30 w-[360px] p-4">
+                        <div className="mb-1 text-sm font-semibold text-white">Run {name || workflow.name || 'Process'}</div>
+                        <p className="mb-3 text-xs text-[var(--t2)]">Fill in the inputs for this run.</p>
                         <div className="mb-3 flex flex-wrap gap-2">
                           {inputVariables.map(variable => (
                             <span key={variable.name} className="badge badge-indigo">
@@ -488,9 +491,16 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
                                     <option key={option} value={option}>{option}</option>
                                   ))}
                                 </select>
+                              ) : variable.type === 'textarea' ? (
+                                <textarea
+                                  className="input min-h-[104px] w-full resize-y py-2"
+                                  placeholder={variable.default || `Enter ${variable.label || variable.name}`}
+                                  value={runVariableValues[variable.name] ?? variable.default ?? ''}
+                                  onChange={event => setRunVariableValues(current => ({ ...current, [variable.name]: event.target.value }))}
+                                />
                               ) : (
                                 <input
-                                  type={variable.type === 'number' ? 'number' : 'text'}
+                                  type="text"
                                   className="input w-full"
                                   placeholder={variable.default || `Enter ${variable.label || variable.name}`}
                                   value={runVariableValues[variable.name] ?? variable.default ?? ''}
@@ -533,7 +543,7 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
                         await executionsApi.cancel(runningId)
                         setRunning(false)
                         setRunningId(null)
-                        toast.success('Execution stopped')
+                        toast.success('Run stopped')
                       } catch (e) {
                         toast.error(extractApiError(e))
                       }
@@ -570,7 +580,7 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
 
       {mode === 'orchestrator' && (
         <div className="border-b border-[var(--border)] bg-white/[0.02] px-4 py-3">
-          <div className="glass-card p-3">
+          <div className="card p-3">
             <div className="mb-2 inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--t3)]">
               <Cpu size={12} /> Orchestration Prompt
             </div>
@@ -586,6 +596,7 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="wf-canvas relative flex-1" data-testid="workflow-builder">
+          <DotGrid dotColor="rgba(255,255,255,0.07)" gap={20} />
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -602,7 +613,6 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
               markerEnd: { type: MarkerType.ArrowClosed, color: 'rgba(99,102,241,0.82)' },
             }}
           >
-            <Background color="rgba(99,102,241,0.16)" gap={22} />
             <Controls />
             <MiniMap nodeColor="rgba(255,255,255,0.6)" maskColor="rgba(5,9,20,0.82)" />
           </ReactFlow>
@@ -611,7 +621,7 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div className="rounded-2xl border border-dashed border-white/[0.10] bg-black/15 px-6 py-8 text-center backdrop-blur-sm">
                 <GitBranch size={32} className="mx-auto mb-3 text-[var(--t3)]" />
-                <div className="text-sm text-[var(--t2)]">Add nodes to build your workflow</div>
+                <div className="text-sm text-[var(--t2)]">Add nodes to build your process</div>
                 <div className="mt-1 text-xs text-[var(--t3)]">Compose agents, approvals, conditions, and parallel phases.</div>
               </div>
             </div>
@@ -619,13 +629,13 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
         </div>
 
         {workflow.id ? (
-          <aside className="glass-elevated min-h-0 w-[380px] overflow-y-auto border-l border-white/[0.07] p-4">
+          <aside className="card min-h-0 w-[380px] overflow-y-auto border-l border-white/[0.07] p-4">
             <div className="space-y-4">
-              <div className="glass-card p-4">
+              <div className="card p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-white">Require my review</div>
-                    <div className="mt-1 text-xs text-[var(--t2)]">Outputs pause for approval before the run completes.</div>
+                    <div className="mt-1 text-xs text-[var(--t2)]">Every output waits for your approval before completing.</div>
                   </div>
                   <button
                     type="button"
@@ -642,7 +652,7 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
                 </div>
               </div>
 
-              <div className="glass-card p-4">
+              <div className="card p-4">
                 <div className="section-title">Schedule</div>
                 <div className="flex flex-wrap gap-2">
                   {SCHEDULE_PRESETS.map(preset => (
@@ -695,7 +705,7 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
                 </div>
               </div>
 
-              <div className="glass-card p-4">
+              <div className="card p-4">
                 <div className="section-title">Webhook</div>
                 {webhookInfo ? (
                   <>
@@ -719,14 +729,17 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
                   </>
                 ) : (
                   <div className="rounded-xl border border-dashed border-white/[0.10] px-3 py-4 text-xs text-[var(--t3)]">
-                    Save this workflow to generate a signed webhook URL.
+                    Save this process to generate a signed webhook URL.
                   </div>
                 )}
               </div>
 
-              <div className="glass-card p-4">
+              <div className="card p-4">
                 <div className="mb-3 flex items-center justify-between gap-2">
-                  <div className="section-title !mb-0 !border-0 !pb-0">Input Variables</div>
+                  <div>
+                    <div className="section-title !mb-0 !border-0 !pb-0">Input Variables</div>
+                    <p className="mt-1 text-xs text-[var(--t2)]">Define inputs filled in each time this runs.</p>
+                  </div>
                   <button type="button" className="btn-secondary btn-sm" onClick={() => setInputVariables(current => [...current, createWorkflowInputVariable(current.length)])}>
                     <Plus size={14} /> Add Variable
                   </button>
@@ -736,25 +749,25 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
                     <div key={`${variable.name}-${index}`} className="rounded-xl border border-white/[0.08] bg-black/15 p-3">
                       <div className="grid gap-2 md:grid-cols-[1fr_1fr_120px_auto]">
                         <input
-                          className="input"
+                          className="input text-xs"
                           placeholder="name"
                           value={variable.name}
                           onChange={event => setInputVariables(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value.replace(/\s+/g, '_') } : item))}
                         />
                         <input
-                          className="input"
+                          className="input text-xs"
                           placeholder="Label"
                           value={variable.label}
                           onChange={event => setInputVariables(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))}
                         />
                         <select
-                          className="input"
+                          className="input text-xs"
                           value={variable.type}
                           onChange={event => setInputVariables(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, type: event.target.value as WorkflowInputVariable['type'] } : item))}
                         >
                           <option value="text">Text</option>
+                          <option value="textarea">Textarea</option>
                           <option value="select">Select</option>
-                          <option value="number">Number</option>
                         </select>
                         <button type="button" className="btn-ghost h-10 px-3 text-red-300" onClick={() => setInputVariables(current => current.filter((_, itemIndex) => itemIndex !== index))}>
                           <Trash2 size={14} />
@@ -762,29 +775,37 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
                       </div>
                       <div className="mt-2 grid gap-2 md:grid-cols-[1fr_1fr]">
                         <input
-                          className="input"
+                          className="input text-xs"
                           placeholder={variable.type === 'select' ? 'Default option' : 'Default value'}
                           value={variable.default || ''}
                           onChange={event => setInputVariables(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, default: event.target.value } : item))}
                         />
                         {variable.type === 'select' ? (
                           <input
-                            className="input"
+                            className="input text-xs"
                             placeholder="Options: formal, casual, friendly"
                             value={(variable.options || []).join(', ')}
                             onChange={event => setInputVariables(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, options: event.target.value.split(',').map(option => option.trim()).filter(Boolean) } : item))}
                           />
                         ) : (
                           <div className="rounded-xl border border-dashed border-white/[0.10] px-3 py-2 text-xs text-[var(--t3)]">
-                            {variable.type === 'number' ? 'Numbers are sent as plain text values.' : 'Text inputs support free-form values.'}
+                            {variable.type === 'textarea' ? 'Textarea inputs are best for longer briefs or notes.' : 'Text inputs support short free-form values.'}
                           </div>
                         )}
                       </div>
+                      <label className="mt-3 flex items-center gap-2 text-xs text-[var(--t2)]">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(variable.required)}
+                          onChange={event => setInputVariables(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, required: event.target.checked } : item))}
+                        />
+                        Required for every run
+                      </label>
                     </div>
                   ))}
                   {!inputVariables.length ? (
                     <div className="rounded-xl border border-dashed border-white/[0.10] px-4 py-5 text-sm text-[var(--t3)]">
-                      No inputs yet. Add variables to turn this workflow into a reusable run template.
+                      No inputs yet. Add variables to turn this process into a reusable run template.
                     </div>
                   ) : null}
                   <div className="flex justify-end">
@@ -794,7 +815,7 @@ function WorkflowBuilder({ workflow, agents, onSave, onClose }: {
               </div>
 
               {selectedNode && selectedNode.type === 'agentNode' ? (
-                <div className="glass-card p-4">
+                <div className="card p-4">
                   <div className="mb-3 flex items-center justify-between">
                     <div className="section-title !mb-0 !border-0 !pb-0">Assign Agent</div>
                     <button onClick={() => setSelectedNode(null)} className="btn-ghost p-1"><X size={14} /></button>
@@ -884,7 +905,7 @@ export function Workflows() {
       setEditing(wf)
       toast.success('Workflow created!')
     },
-    onError: () => toast.error('Failed to create workflow'),
+    onError: () => toast.error('Failed to create process'),
   })
   const updateMut = useMutation({
     mutationFn: ({ id, ...data }: Partial<Workflow>) => workflowsApi.update(id!, data),
@@ -894,11 +915,11 @@ export function Workflows() {
       setEditing(wf)
       toast.success('Saved!')
     },
-    onError: () => toast.error('Failed to save workflow'),
+    onError: () => toast.error('Failed to save process'),
   })
   const deleteMut = useMutation({
     mutationFn: workflowsApi.delete,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['workflows'] }); setWorkflowToDelete(null); toast.success('Workflow deleted') },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['workflows'] }); setWorkflowToDelete(null); toast.success('Process deleted') },
   })
   const enableAutomationMut = useMutation({
     mutationFn: workflowsApi.enableAutomationTemplate,
@@ -978,9 +999,9 @@ export function Workflows() {
 
   return (
     <PageShell
-      title="Workflows"
+      title="Processes"
       subtitle="Design the operating loops your AI company runs every day."
-      actions={<button className="btn-primary" onClick={() => setEditing(createWorkflowDraft())}><Plus size={16} /> New Workflow</button>}
+      actions={<button className="btn-primary" onClick={() => setEditing(createWorkflowDraft())}><Plus size={16} /> New Process</button>}
       contentClassName="space-y-6 p-6"
     >
       <section className="space-y-4">
@@ -1054,10 +1075,10 @@ export function Workflows() {
         <div className="surface-card">
           <EmptyState
             icon="⚡"
-            title="Automate your first task"
-            description="Workflows let your agents run automatically — on a schedule, triggered by an email, or on demand."
-            action={{ label: 'Install from marketplace →', onClick: () => navigate('/marketplace') }}
-            secondaryAction={{ label: 'Create from scratch', onClick: () => setEditing(createWorkflowDraft()) }}
+            title="Recurring work, automated"
+            description="Set up a process once. It runs on schedule, pauses for your approval on anything important, logs everything."
+            action={{ label: 'Create first process', onClick: () => setEditing(createWorkflowDraft()) }}
+            secondaryAction={{ label: 'Browse templates', onClick: () => navigate('/marketplace') }}
           />
         </div>
       ) : (
@@ -1070,7 +1091,7 @@ export function Workflows() {
                   className="input pl-9"
                   value={search}
                   onChange={event => setSearch(event.target.value)}
-                  placeholder="Search workflows"
+                  placeholder="Search processes"
                 />
               </div>
             </div>
@@ -1086,7 +1107,7 @@ export function Workflows() {
                   type="button"
                   onClick={() => setSelectedWorkflowId(wf.id)}
                   className={clsx(
-                    'data-row grid w-full grid-cols-[minmax(0,1fr)_max-content_max-content] items-center gap-3 text-left',
+                    'row grid w-full grid-cols-[minmax(0,1fr)_max-content_max-content] items-center gap-3 text-left',
                     selectedWorkflow?.id === wf.id && 'bg-indigo-500/[0.08] border-l-2 border-indigo-400',
                   )}
                 >
@@ -1099,7 +1120,7 @@ export function Workflows() {
                 </button>
               )
             }) : (
-              <div className="data-row cursor-default text-xs text-[var(--t3)]">No live workflows yet.</div>
+              <div className="row cursor-default text-xs text-[var(--t3)]">No live processes yet.</div>
             )}
             {draftWorkflows.length ? (
               <>
@@ -1115,7 +1136,7 @@ export function Workflows() {
                       type="button"
                       onClick={() => setSelectedWorkflowId(wf.id)}
                       className={clsx(
-                        'data-row grid w-full grid-cols-[minmax(0,1fr)_max-content_max-content] items-center gap-3 text-left',
+                        'row grid w-full grid-cols-[minmax(0,1fr)_max-content_max-content] items-center gap-3 text-left',
                         selectedWorkflow?.id === wf.id && 'bg-indigo-500/[0.08] border-l-2 border-indigo-400',
                       )}
                     >
@@ -1147,7 +1168,7 @@ export function Workflows() {
                     <p className="mt-2 max-w-3xl text-sm text-[var(--t2)]">{selectedWorkflow.description || 'No description yet.'}</p>
                     {selectedWorkflow.status === 'draft' ? (
                       <p className="mt-3 text-xs text-[var(--t3)]">
-                        Drafts do not run yet. Activate this workflow once the steps look right.
+                        Drafts do not run yet. Activate this process once the steps look right.
                       </p>
                     ) : null}
                   </div>
@@ -1171,7 +1192,7 @@ export function Workflows() {
                     <Link
                       to={`/chat/${selectedWorkflow.id}`}
                       className="btn-secondary btn-sm flex items-center gap-1.5"
-                      title="Chat with this workflow"
+                      title="Chat with this process"
                     >
                       <MessageSquare size={13} /> Chat
                     </Link>
@@ -1203,7 +1224,7 @@ export function Workflows() {
             ) : null}
 
             <div className="space-y-3">
-              <div className="section-title mb-0 border-0 pb-0">DRAFT WORKFLOWS</div>
+              <div className="section-title mb-0 border-0 pb-0">DRAFT PROCESSES</div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {draftWorkflows.length ? draftWorkflows.map(wf => (
                 <div key={wf.id} className="surface-card flex flex-col gap-3 p-5">
@@ -1239,7 +1260,7 @@ export function Workflows() {
                 </div>
               )) : (
                 <div className="surface-card p-5 text-sm text-[var(--t3)]">
-                  No drafts hanging around. New workflows you create from scratch will show up here until you activate them.
+                  No drafts hanging around. New processes you create from scratch will show up here until you activate them.
                 </div>
               )}
               </div>
@@ -1249,9 +1270,9 @@ export function Workflows() {
       )}
       <ConfirmDialog
         open={Boolean(workflowToDelete)}
-        title={`Delete ${workflowToDelete?.name || 'workflow'}?`}
-        description="This removes the workflow definition. Past executions remain available, but scheduled or webhook triggers for this workflow will stop working."
-        confirmLabel="Delete workflow"
+        title={`Delete ${workflowToDelete?.name || 'process'}?`}
+        description="This removes the process definition. Past runs remain available, but scheduled or webhook triggers for this process will stop working."
+        confirmLabel="Delete process"
         loading={deleteMut.isPending}
         onClose={() => setWorkflowToDelete(null)}
         onConfirm={() => workflowToDelete && deleteMut.mutate(workflowToDelete.id)}

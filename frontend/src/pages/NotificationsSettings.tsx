@@ -74,7 +74,7 @@ export function NotificationsSettings() {
       <div className="page-header rounded-[24px] border border-white/[0.06] bg-white/[0.02]">
         <div>
           <h1 className="page-title">Notifications</h1>
-          <p className="page-subtitle">Alerts and digests</p>
+          <p className="page-sub">Alerts and digests</p>
         </div>
       </div>
 
@@ -110,7 +110,7 @@ export function NotificationsSettings() {
                 const enabled = Boolean(prefs[item.key])
 
                 return (
-                  <div key={item.key} className="data-row min-h-[48px]">
+                  <div key={item.key} className="row min-h-[48px]">
                     <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/[0.05] text-indigo-300">
                       <Icon size={15} />
                     </div>
@@ -175,7 +175,7 @@ export function NotificationsSettings() {
       </GlassCard>
 
       {!hasEmailIntegration && (
-        <section className="glass-card-amber rounded-[28px] border border-amber-400/20 bg-amber-950/20 p-6">
+        <section className="card-amber rounded-[28px] border border-amber-400/20 bg-amber-950/20 p-6">
           <div className="section-title mb-4 border-amber-400/20 text-amber-200">SMTP</div>
           <div className="mb-4 flex items-start gap-3 text-amber-100">
             <AlertTriangle className="mt-0.5 text-amber-300" size={18} />

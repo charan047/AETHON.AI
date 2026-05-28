@@ -30,6 +30,7 @@ function formatDuration(startedAt?: string | null, completedAt?: string | null) 
 export function MissionReport() {
   const { id } = useParams<{ id: string }>()
   const [timelineOpen, setTimelineOpen] = useState(true)
+  const [exportingFormat, setExportingFormat] = useState<'pdf' | 'docx' | null>(null)
   const queryClient = useQueryClient()
 
   const missionQuery = useQuery({
@@ -98,23 +99,24 @@ export function MissionReport() {
       !mission.report_delivered,
   )
 
-  const exportWord = () => {
-    const blob = new Blob(
-      [
-        `<html><head><meta charset="utf-8"><title>${mission.title || mission.goal}</title></head><body>${reportContent.replace(/\n/g, '<br/>')}</body></html>`,
-      ],
-      { type: 'application/msword' },
-    )
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `${(mission.title || 'mission-report').replace(/\s+/g, '-').toLowerCase()}.doc`
-    anchor.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const exportPdf = () => {
-    window.print()
+  const handleExport = async (format: 'pdf' | 'docx') => {
+    try {
+      setExportingFormat(format)
+      const { blob, filename } = await missionsApi.exportReport(id as string, format)
+      const href = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = href
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(href)
+      toast.success(format === 'pdf' ? 'PDF downloaded' : 'Word document downloaded')
+    } catch (error) {
+      toast.error(extractApiError(error))
+    } finally {
+      setExportingFormat(null)
+    }
   }
 
   return (
@@ -140,19 +142,21 @@ export function MissionReport() {
             )}
             <button
               type="button"
-              onClick={exportPdf}
+              onClick={() => void handleExport('pdf')}
+              disabled={exportingFormat !== null || !reportContent}
               className="btn-secondary btn-sm"
             >
               <FileText size={13} />
-              Export PDF
+              {exportingFormat === 'pdf' ? 'Exporting…' : 'Export PDF'}
             </button>
             <button
               type="button"
-              onClick={exportWord}
+              onClick={() => void handleExport('docx')}
+              disabled={exportingFormat !== null || !reportContent}
               className="btn-secondary btn-sm"
             >
               <FileUp size={13} />
-              Export Word
+              {exportingFormat === 'docx' ? 'Exporting…' : 'Export Word'}
             </button>
           </div>
         </div>

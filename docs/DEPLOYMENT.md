@@ -15,7 +15,9 @@ The local Docker Compose topology includes:
 - `celery_worker`
 - `flower`
 - `redis`
-- optional `postgres` profile
+- `postgres`
+- `garage`
+- `hocuspocus`
 
 ## Ports
 
@@ -25,6 +27,9 @@ The local Docker Compose topology includes:
 - `8002` backend instance 2
 - `5555` Flower
 - `6379` Redis
+- `3900` Garage S3 API
+- `3901` Garage admin / RPC
+- `1234` Hocuspocus WebSocket collaboration
 
 ## Required Environment Categories
 
@@ -42,6 +47,18 @@ Optional:
 - `MEM0_API_KEY`
 - Gmail / Google / Slack / Telegram integration credentials
 - provider-specific base URLs for Ollama or custom OpenAI-compatible backends
+- object storage settings:
+  - `STORAGE_PROVIDER`
+  - `STORAGE_ENDPOINT`
+  - `STORAGE_PUBLIC_URL`
+  - `STORAGE_ACCESS_KEY`
+  - `STORAGE_SECRET_KEY`
+  - `STORAGE_BUCKET`
+  - `STORAGE_REGION`
+- collaborative editing settings:
+  - `HOCUSPOCUS_URL`
+  - `HOCUSPOCUS_HTTP_URL`
+  - `HOCUSPOCUS_SECRET`
 
 ## Local Boot Sequence
 
@@ -93,11 +110,14 @@ Minimum checks:
 3. onboarding works for a new org
 4. dashboard loads
 5. `/clients` loads
-6. `/agents` loads
-7. `/settings/models` loads
-8. `/marketplace` loads
-9. a workflow can execute through the worker
-10. a WebSocket-backed page loads without console or auth errors
+6. `/files` loads
+7. `/agents` loads
+8. `/settings/models` loads
+9. `/marketplace` loads
+10. a workflow can execute through the worker
+11. a WebSocket-backed page loads without console or auth errors
+12. collaborative documents sync through Hocuspocus
+13. Garage bucket access works for upload/download URLs
 
 ## Operational Cautions
 
@@ -119,6 +139,16 @@ If workflows are part of the environment, verify:
 - Celery worker availability
 - task completion path
 - Flower visibility if you operate with it
+
+### Files And Collaboration
+
+If you operate the Files workspace, also verify:
+
+- Garage layout is initialized and healthy
+- the `aethon-files` bucket exists
+- backend upload URLs point to Garage, not the API
+- Celery activates uploaded files and broadcasts `file_ready`
+- Hocuspocus persists collaborative state and agent document writes
 
 ### Public Portal
 

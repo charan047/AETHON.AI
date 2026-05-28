@@ -27,8 +27,9 @@ import {
 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
-import { agentsApi, clientsApi, executionsApi, extractApiError, workflowsApi } from '../api/client'
+import { agentsApi, clientsApi, executionsApi, extractApiError, intakeApi, workflowsApi } from '../api/client'
 import { ConfirmDialog } from '../components/ui/ConfirmDialog'
+import { EmptyState } from '../components/ui/EmptyState'
 import { GlassCard } from '../components/ui/GlassCard'
 import { Skeleton, SkeletonCard } from '../components/ui/Skeleton'
 import { StatusDot } from '../components/ui/StatusDot'
@@ -122,7 +123,7 @@ function normalizeWorkflowInputVariables(inputVariables?: WorkflowInputVariable[
   return (inputVariables || []).map((variable, index) => ({
     name: String(variable.name || `input_${index + 1}`),
     label: String(variable.label || variable.name || `Input ${index + 1}`),
-    type: variable.type === 'select' || variable.type === 'number' ? variable.type : 'text',
+    type: variable.type === 'select' || variable.type === 'textarea' ? variable.type : 'text',
     required: Boolean(variable.required),
     default: String(variable.default || ''),
     options: Array.isArray(variable.options)
@@ -262,7 +263,7 @@ function QuickDispatchForm({
       qc.invalidateQueries({ queryKey: ['clients'] })
       qc.invalidateQueries({ queryKey: ['client', client.id] })
       qc.invalidateQueries({ queryKey: ['client-activity', client.id] })
-      toast.success('Started — watch it in Monitoring')
+      toast.success('Started — watch it in Runs')
       onStarted?.(execution.execution_id)
     },
     onError: error => {
@@ -326,9 +327,17 @@ function QuickDispatchForm({
                     </option>
                   ))}
                 </select>
+              ) : variable.type === 'textarea' ? (
+                <textarea
+                  value={inputValues[variable.name] ?? ''}
+                  onChange={event => setInputValues(current => ({ ...current, [variable.name]: event.target.value }))}
+                  className={clsx(inputClassName, 'min-h-[104px] resize-y py-2')}
+                  placeholder={variable.default || variable.label}
+                  disabled={runMutation.isPending}
+                />
               ) : (
                 <input
-                  type={variable.type === 'number' ? 'number' : 'text'}
+                  type="text"
                   value={inputValues[variable.name] ?? ''}
                   onChange={event => setInputValues(current => ({ ...current, [variable.name]: event.target.value }))}
                   className={inputClassName}
@@ -501,7 +510,7 @@ function ClientCard({
         }
       }}
       className={clsx(
-        'glass-card group cursor-pointer overflow-hidden rounded-2xl border border-white/[0.08] border-l-[3px] p-5 transition-all duration-200 ease-out hover:border-white/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60',
+        'card group cursor-pointer overflow-hidden rounded-2xl border border-white/[0.08] border-l-[3px] p-5 transition-all duration-200 ease-out hover:border-white/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60',
         animationClass,
       )}
       style={{
@@ -945,7 +954,7 @@ function ClientsList({
       <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="page-title">Clients</h1>
-          <p className="page-subtitle">{activeClients} active accounts</p>
+          <p className="page-sub">{activeClients} active accounts</p>
         </div>
         <button
           type="button"
@@ -972,22 +981,14 @@ function ClientsList({
           </button>
         </div>
       ) : !clients.length ? (
-        <div className="rounded-[28px] border border-white/[0.08] bg-base-surface p-10 text-center shadow-glow-sm">
-          <div className="mx-auto flex h-[72px] w-[72px] items-center justify-center rounded-3xl border border-blue-500/20 bg-blue-600/10 text-blue-300">
-            <Briefcase size={34} />
-          </div>
-          <h2 className="mt-6 text-2xl font-semibold tracking-tight text-white">Add your first client</h2>
-          <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-ink-muted">
-            Create a client workspace to deploy AI agents on their behalf.
-          </p>
-          <button
-            type="button"
-            onClick={() => onEditClient({ color: CLIENT_COLORS[0] })}
-            className="mt-6 inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-gradient-to-br from-blue-600 to-blue-700 px-5 py-3 text-sm font-semibold text-white transition-all duration-200 hover:shadow-glow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60"
-          >
-            <Plus size={16} />
-            Add Your First Client
-          </button>
+        <div className="rounded-[28px] border border-white/[0.08] bg-base-surface p-4 text-center shadow-glow-sm">
+          <EmptyState
+            icon={<Briefcase size={22} />}
+            title="Your client accounts"
+            description="Each client gets their own agents, processes, and a portal where they can see completed work."
+            action={() => onEditClient({ color: CLIENT_COLORS[0] })}
+            actionLabel="Add first client"
+          />
         </div>
       ) : (
         <>
@@ -1034,6 +1035,8 @@ function ClientDetailPage({
   const qc = useQueryClient()
   const [assignModalOpen, setAssignModalOpen] = useState(false)
   const [agentToRemove, setAgentToRemove] = useState<Agent | null>(null)
+  const [intakeTitle, setIntakeTitle] = useState('')
+  const [intakeWorkflowId, setIntakeWorkflowId] = useState('')
   const [detailsDraft, setDetailsDraft] = useState({
     contact_email: '',
     service_type: '',
@@ -1061,6 +1064,11 @@ function ClientDetailPage({
     queryFn: workflowsApi.list,
     enabled: Boolean(clientId),
   })
+  const intakeFormsQuery = useQuery({
+    queryKey: ['intake-forms'],
+    queryFn: intakeApi.listForms,
+    enabled: Boolean(clientId),
+  })
 
   useEffect(() => {
     if (clientQuery.data) {
@@ -1071,6 +1079,11 @@ function ClientDetailPage({
         notes: clientQuery.data.notes || '',
       })
     }
+  }, [clientQuery.data])
+
+  useEffect(() => {
+    if (!clientQuery.data) return
+    setIntakeTitle(`${clientQuery.data.name} Brief Intake`)
   }, [clientQuery.data])
 
   const agents = agentsQuery.data || []
@@ -1089,6 +1102,10 @@ function ClientDetailPage({
       return new Date(item.started_at).getTime() >= cutoff
     })
   }, [activityQuery.data?.activity])
+  const intakeForms = useMemo(
+    () => (intakeFormsQuery.data || []).filter(form => form.client_id === clientId),
+    [clientId, intakeFormsQuery.data],
+  )
 
   const assignMutation = useMutation({
     mutationFn: ({ agentId, nextClientId }: { agentId: string; nextClientId: string | null }) =>
@@ -1120,6 +1137,44 @@ function ClientDetailPage({
       }
       toast.success(variables.nextClientId ? 'Agent assigned' : 'Agent removed')
     },
+  })
+
+  const createIntakeFormMutation = useMutation({
+    mutationFn: async () => {
+      const selectedWorkflow = (workflowsQuery.data || []).find(workflow => workflow.id === intakeWorkflowId) || null
+      const normalizedFields = normalizeWorkflowInputVariables(selectedWorkflow?.input_variables)
+      const fields = normalizedFields.length
+        ? normalizedFields.map(variable => ({
+            name: variable.name,
+            label: variable.label,
+            type: variable.type === 'select' ? 'text' : variable.type,
+            required: variable.required,
+            options: variable.options,
+          }))
+        : [{ name: 'brief', label: 'Brief', type: 'textarea', required: true }]
+
+      return intakeApi.createForm({
+        client_id: clientId,
+        title: intakeTitle.trim(),
+        workflow_id: intakeWorkflowId || undefined,
+        fields,
+      })
+    },
+    onSuccess: async form => {
+      await qc.invalidateQueries({ queryKey: ['intake-forms'] })
+      setIntakeWorkflowId('')
+      if (clientQuery.data) {
+        setIntakeTitle(`${clientQuery.data.name} Brief Intake`)
+      }
+      const shareUrl = `${window.location.origin}${form.public_url}`
+      try {
+        await navigator.clipboard.writeText(shareUrl)
+        toast.success('Intake form created and link copied')
+      } catch {
+        toast.success('Intake form created')
+      }
+    },
+    onError: error => toast.error(extractApiError(error)),
   })
 
   const portalToggleMutation = useMutation({
@@ -1256,12 +1311,12 @@ function ClientDetailPage({
           <div className="mt-6 flex-1 space-y-6 overflow-y-auto pr-1">
             <section>
               <div className="section-title">Overview</div>
-              <div className="glass-card space-y-3 rounded-2xl p-4">
-                <div className="data-row cursor-default rounded-xl border-none bg-transparent px-0 py-0">
+              <div className="card space-y-3 rounded-2xl p-4">
+                <div className="row cursor-default rounded-xl border-none bg-transparent px-0 py-0">
                   <div className="min-w-0 flex-1 text-sm text-white">Contact</div>
                   <div className="truncate font-mono text-xs text-[#8B9DBE]">{client.contact_email || 'Not set'}</div>
                 </div>
-                <div className="data-row cursor-default rounded-xl border-none bg-transparent px-0 py-0">
+                <div className="row cursor-default rounded-xl border-none bg-transparent px-0 py-0">
                   <div className="min-w-0 flex-1 text-sm text-white">Service</div>
                   <div className="truncate font-mono text-xs text-[#8B9DBE]">{client.service_type || 'Not set'}</div>
                 </div>
@@ -1286,7 +1341,7 @@ function ClientDetailPage({
 
             <section>
               <div className="section-title">Agents</div>
-              <div className="glass-card rounded-2xl p-4">
+              <div className="card rounded-2xl p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div className="text-sm text-[#8B9DBE]">{assignedAgents.length} assigned</div>
                   <button type="button" onClick={() => setAssignModalOpen(true)} className="btn-primary btn-sm">
@@ -1301,7 +1356,7 @@ function ClientDetailPage({
                         key={agent.id}
                         type="button"
                         onClick={() => navigate('/agents')}
-                        className="data-row w-full rounded-2xl border border-white/[0.08] bg-white/[0.03] text-left"
+                        className="row w-full rounded-2xl border border-white/[0.08] bg-white/[0.03] text-left"
                       >
                         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/[0.08] bg-blue-600/12 text-xs font-semibold text-white">
                           {agentInitials(agent)}
@@ -1324,7 +1379,7 @@ function ClientDetailPage({
 
             <section>
               <div className="section-title">Activity</div>
-              <div className="glass-card rounded-2xl p-4">
+              <div className="card rounded-2xl p-4">
                 {activityQuery.isLoading ? (
                   <div className="space-y-3">
                     {Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-14 rounded-2xl" />)}
@@ -1344,7 +1399,7 @@ function ClientDetailPage({
                         key={item.execution_id}
                         type="button"
                         onClick={() => navigate(`/executions/${item.execution_id}`)}
-                        className="data-row w-full rounded-2xl border border-white/[0.08] bg-white/[0.03] text-left"
+                        className="row w-full rounded-2xl border border-white/[0.08] bg-white/[0.03] text-left"
                       >
                         <span className={clsx('status-dot', executionStatusColor(item.status))} />
                         <div className="min-w-0 flex-1">
@@ -1360,8 +1415,78 @@ function ClientDetailPage({
             </section>
 
             <section>
+              <div className="section-title">Client Intake</div>
+              <div className="card rounded-2xl p-4">
+                <div className="space-y-3">
+                  <input
+                    className="input h-11"
+                    placeholder="Intake form title"
+                    value={intakeTitle}
+                    onChange={event => setIntakeTitle(event.target.value)}
+                  />
+                  <select
+                    className="input h-11"
+                    value={intakeWorkflowId}
+                    onChange={event => setIntakeWorkflowId(event.target.value)}
+                  >
+                    <option value="">Choose a workflow to trigger</option>
+                    {(workflowsQuery.data || []).map(workflow => (
+                      <option key={workflow.id} value={workflow.id}>
+                        {workflow.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      className="btn-primary btn-sm"
+                      disabled={createIntakeFormMutation.isPending || !intakeTitle.trim() || !intakeWorkflowId}
+                      onClick={() => createIntakeFormMutation.mutate()}
+                    >
+                      {createIntakeFormMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                      Create intake link
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-4 space-y-3">
+                  {intakeForms.map(form => {
+                    const shareUrl = `${window.location.origin}${form.public_url}`
+                    return (
+                      <div key={form.id} className="row rounded-2xl border border-white/[0.08] bg-white/[0.03]">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-semibold text-white">{form.title}</div>
+                          <div className="truncate font-mono text-[11px] text-[#8B9DBE]">{shareUrl}</div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-secondary btn-sm"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(shareUrl)
+                              toast.success('Intake link copied')
+                            } catch {
+                              toast.info(shareUrl)
+                            }
+                          }}
+                        >
+                          <Copy size={14} />
+                          Copy
+                        </button>
+                      </div>
+                    )
+                  })}
+                  {!intakeForms.length && !intakeFormsQuery.isLoading && (
+                    <div className="rounded-2xl border border-dashed border-white/[0.08] bg-white/[0.02] p-4 text-sm text-[#8B9DBE]">
+                      No intake form yet. Create one and share the link with this client.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            <section>
               <div className="section-title">Portal</div>
-              <div className="glass-card rounded-2xl p-4">
+              <div className="card rounded-2xl p-4">
                 {!client.portal_enabled ? (
                   <div className="space-y-4">
                     <div className="text-sm leading-6 text-[#8B9DBE]">

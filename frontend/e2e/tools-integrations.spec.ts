@@ -3,6 +3,54 @@ import { expect, test } from '@playwright/test'
 import { loginHelper, uniqueEmail } from './helpers'
 
 test.describe('Tools and Integrations', () => {
+  test('tools page does not retry starter-pack creation in a loop when the seed request fails', async ({ page, request }) => {
+    await loginHelper(page, request, uniqueEmail('tools-seed-failure'))
+
+    let starterPackPostCount = 0
+
+    await page.route('**/api/tools/catalog*', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([]),
+      })
+    })
+
+    await page.route('**/api/tools/provider-health*', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({}),
+      })
+    })
+
+    await page.route('**/api/tools', async route => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([]),
+        })
+        return
+      }
+
+      starterPackPostCount += 1
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Database error' }),
+      })
+    })
+
+    await page.goto('/tools')
+
+    await expect(page.getByText('Add your first custom tool')).toBeVisible()
+    await expect(page.getByRole('button', { name: /Install starter tools/i })).toBeVisible()
+    await expect.poll(() => starterPackPostCount).toBe(1)
+    await page.waitForTimeout(900)
+    await expect.poll(() => starterPackPostCount).toBe(1)
+  })
+
   test('tools page supports built-in details and creating a custom tool', async ({ page, request }) => {
     await page.addInitScript(() => {
       window.localStorage.setItem('aethon-custom-tools-starter-pack-seeded', '1')
@@ -131,7 +179,20 @@ test.describe('Tools and Integrations', () => {
           name: 'Agency Gmail',
           integration_type: 'gmail',
           connected_account: 'ops@agency.test',
+          is_supported: true,
           needs_reauth: true,
+          is_active: true,
+          last_tested_at: null,
+          last_test_result: null,
+        },
+        {
+          id: 'notion-1',
+          name: 'Legacy Notion',
+          integration_type: 'notion',
+          connected_account: null,
+          is_supported: false,
+          support_note: 'notion exists in stored data, but it is not yet supported as a first-class Aethon integration.',
+          needs_reauth: false,
           is_active: true,
           last_tested_at: null,
           last_test_result: null,
@@ -166,6 +227,7 @@ test.describe('Tools and Integrations', () => {
         integration_type: 'github',
         connected_account: 'octo-org/platform',
         default_repo: body.default_repo,
+        is_supported: true,
         is_active: true,
         needs_reauth: false,
         last_tested_at: null,
@@ -184,6 +246,10 @@ test.describe('Tools and Integrations', () => {
     await expect(page.getByRole('heading', { name: 'Integrations' })).toBeVisible()
     await expect(page.getByText('TOOL STATUS')).toBeVisible()
     await expect(page.getByText('Gmail needs updated permissions for Google Docs')).toBeVisible()
+    await expect(page.getByText('LEGACY / UNSUPPORTED')).toBeVisible()
+    await expect(page.getByText('Legacy Notion')).toBeVisible()
+    await expect(page.getByText('Unsupported', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText('Coming soon', { exact: true })).toBeVisible()
 
     const githubCard = page.locator('.glass-card, .glow-card').filter({ has: page.getByRole('heading', { name: 'GitHub' }) }).first()
     await githubCard.getByRole('button', { name: /Connect/i }).click()

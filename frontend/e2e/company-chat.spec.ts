@@ -220,6 +220,71 @@ test.describe('Company Chat', () => {
     await expect(page.getByText('CTO Tasks')).toBeVisible()
   })
 
+  test('does not blink away a streamed reply when persisted history lags behind', async ({ page, request }) => {
+    const mock = companyChatMocks()
+    let historyCalls = 0
+
+    await loginHelper(page, request, uniqueEmail('company-chat-no-blink'))
+
+    await page.route('**/api/dashboard/summary', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mock.dashboard) })
+    })
+    await page.route('**/api/company/profile', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mock.companyProfile) })
+    })
+    await page.route('**/api/agents', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mock.agents) })
+    })
+    await page.route('**/api/approvals/pending', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mock.approvals) })
+    })
+    await page.route('**/api/company/conversations', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mock.conversations) })
+    })
+    await page.route('**/api/company/company-chat/cto/tasks', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ tasks: [] }) })
+    })
+    await page.route(`**/api/company/conversations/${mock.conversationId}/messages`, async route => {
+      historyCalls += 1
+      const payload = historyCalls === 1
+        ? mock.history
+        : {
+            ...mock.history,
+            conversation: {
+              ...mock.history.conversation,
+              message_count: mock.history.messages.length,
+            },
+            messages: mock.history.messages,
+          }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payload) })
+    })
+    await page.route('**/api/company/chat', async route => {
+      const body = [
+        JSON.stringify({ type: 'meta', conversation_id: mock.conversationId }),
+        JSON.stringify({ type: 'text', content: 'I pulled the latest Acme highlights for you.' }),
+        JSON.stringify({ type: 'done' }),
+        '',
+      ].join('\n')
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/x-ndjson',
+        body,
+      })
+    })
+
+    await page.goto('/company-chat')
+    await page.getByText('Acme weekly thread', { exact: true }).click()
+
+    const composer = page.getByPlaceholder('Type a command or @mention an agent...')
+    await composer.fill('What changed for Acme this week?')
+    await page.getByTitle('Send').click()
+
+    const streamedReply = page.getByText('I pulled the latest Acme highlights for you.')
+    await expect(streamedReply).toBeVisible()
+    await page.waitForTimeout(800)
+    await expect(streamedReply).toBeVisible()
+  })
+
   test('keeps action-only replies visible in a brand-new conversation after stream handoff', async ({ page, request }) => {
     const mock = companyChatMocks()
     const freshConversationId = 'conv-company-fresh'
@@ -321,6 +386,78 @@ test.describe('Company Chat', () => {
     await expect(page.getByText('Handled below')).toBeVisible()
     await expect(page.getByText('Company insight: risks')).toBeVisible()
     await expect(page.getByText('The biggest risk right now is delivery concentration in one client.')).toBeVisible()
+  })
+
+  test('shows a fallback acknowledgment instead of an empty assistant card', async ({ page, request }) => {
+    const mock = companyChatMocks()
+    const freshConversationId = 'conv-company-empty'
+
+    await loginHelper(page, request, uniqueEmail('company-chat-empty-reply'))
+
+    await page.route('**/api/dashboard/summary', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mock.dashboard) })
+    })
+    await page.route('**/api/company/profile', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mock.companyProfile) })
+    })
+    await page.route('**/api/agents', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mock.agents) })
+    })
+    await page.route('**/api/approvals/pending', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mock.approvals) })
+    })
+    await page.route('**/api/company/conversations', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ conversations: [] }) })
+    })
+    await page.route('**/api/company/company-chat/cto/tasks', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ tasks: [] }) })
+    })
+    await page.route(`**/api/company/conversations/${freshConversationId}/messages`, async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          conversation: {
+            id: freshConversationId,
+            title: 'Nice thread',
+            created_at: new Date().toISOString(),
+            last_message_at: new Date().toISOString(),
+            message_count: 2,
+            pinned: false,
+          },
+          messages: [
+            {
+              role: 'assistant',
+              content: '',
+              created_at: new Date().toISOString(),
+              actions: [],
+              attachments: [],
+            },
+          ],
+        }),
+      })
+    })
+    await page.route('**/api/company/chat', async route => {
+      const body = [
+        JSON.stringify({ type: 'meta', conversation_id: freshConversationId }),
+        JSON.stringify({ type: 'done' }),
+        '',
+      ].join('\n')
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/x-ndjson',
+        body,
+      })
+    })
+
+    await page.goto('/company-chat')
+
+    const composer = page.getByPlaceholder('Type a command or @mention an agent...')
+    await composer.fill('nice')
+    await page.getByTitle('Send').click()
+
+    await expect(page).toHaveURL(new RegExp(`/company-chat/${freshConversationId}$`))
+    await expect(page.getByText('Got it.')).toBeVisible()
   })
 
   test('conversation actions menu opens above the chat layout without clipping', async ({ page, request }) => {

@@ -13,7 +13,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import AsyncSessionLocal
-from database.models import Agent, AgentContract, AgentMemoryEntry, AgentRole, CompanyProfile, Execution, ExecutionStep, ExternalAgent, IntegrationType, Organization, UserIntegration, Workflow
+from database.models import Agent, AgentContract, AgentMemoryEntry, AgentRole, ClientKnowledge, CompanyProfile, Execution, ExecutionStep, ExternalAgent, IntegrationType, Organization, OrgVariable, UserIntegration, Workflow
 from runtime.tools import make_custom_tool
 from services.agent_memory_service import agent_memory_service
 from services.agent_messenger import agent_messenger
@@ -1014,6 +1014,8 @@ class AgentRunner:
         identity_block = ""
         living_memory_context = ""
         ceo_preferences_block = ""
+        client_knowledge = ""
+        var_block = ""
 
         try:
             async with AsyncSessionLocal() as db:
@@ -1040,9 +1042,48 @@ class AgentRunner:
                         "CEO PREFERENCES — ALWAYS FOLLOW THESE:\n"
                         f"{pref_lines}\n"
                     )
+
+                org_vars = (
+                    await db.execute(
+                        select(OrgVariable).where(OrgVariable.org_id == str(self.config.org_id))
+                    )
+                ).scalars().all()
+                org_vars = [
+                    variable
+                    for variable in org_vars
+                    if getattr(variable, "key", None) and getattr(variable, "value", None) is not None
+                ]
+                if org_vars:
+                    for variable in org_vars:
+                        original_system_prompt = original_system_prompt.replace(
+                            f"{{{{{variable.key}}}}}",
+                            variable.value,
+                        )
+                    var_lines = "\n".join(f"{variable.key}: {variable.value}" for variable in org_vars)
+                    var_block = f"ORG CONTEXT (use these in your responses):\n{var_lines}\n"
+
+                execution_client_id = self._context.get("execution_client_id")
+                if execution_client_id:
+                    facts = (
+                        await db.execute(
+                            select(ClientKnowledge)
+                            .where(
+                                ClientKnowledge.client_id == execution_client_id,
+                                ClientKnowledge.org_id == str(self.config.org_id),
+                            )
+                            .order_by(ClientKnowledge.confidence.desc())
+                            .limit(10)
+                        )
+                    ).scalars().all()
+                    facts = [fact for fact in facts if getattr(fact, "content", None)]
+                    if facts:
+                        lines = "\n".join(f"- {fact.content}" for fact in facts)
+                        client_knowledge = f"WHAT WE KNOW ABOUT THIS CLIENT:\n{lines}\n"
         except Exception as exc:
-            logger.warning("CEO preference retrieval failed for agent %s: %s", self.config.id, exc)
+            logger.warning("Prompt context retrieval failed for agent %s: %s", self.config.id, exc)
             ceo_preferences_block = ""
+            client_knowledge = ""
+            var_block = ""
 
         if getattr(self.config, "persona_name", None):
             company_name = await self._get_company_name(user_id)
@@ -1074,6 +1115,8 @@ class AgentRunner:
             for part in (
                 ceo_preferences_block,
                 identity_block,
+                client_knowledge,
+                var_block,
                 business_context,
                 living_memory_context,
                 learning_context,
@@ -1584,6 +1627,17 @@ class AgentRunner:
         )
         self._context["workflow_id"] = workflow_id
         self._context["execution_id"] = execution_id
+        if db is not None and execution_id:
+            try:
+                client_id = await db.scalar(
+                    select(Execution.client_id).where(
+                        Execution.id == execution_id,
+                        Execution.org_id == resolved_org_id,
+                    )
+                )
+                self._context["execution_client_id"] = str(client_id) if client_id else None
+            except Exception as exc:
+                logger.warning("Execution client lookup failed for %s: %s", execution_id, exc)
         enhanced_system_prompt = await self._build_enhanced_system_prompt(message, user_id=user_id)
         config = {
             "configurable": {"thread_id": thread_id},

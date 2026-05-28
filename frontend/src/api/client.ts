@@ -64,6 +64,7 @@ import type {
   OrgInvite,
   OrgMember,
   OrgMemberRole,
+  OrgVariableRecord,
   ScoringMethod,
   CEOInboxResponse,
   InboxMessage,
@@ -78,6 +79,9 @@ import type {
   ClientActivityResponse,
   ClientCreateInput,
   ClientDetail,
+  ClientIntakeFormRecord,
+  ClientIntakeSubmissionRecord,
+  ClientKnowledgeRecord,
   ClientListResponse,
   CTOAuthoritySettings,
   CTOMemoryRecord,
@@ -88,6 +92,8 @@ import type {
   A2ATasksResponse,
   ExternalAgentRecord,
   ExternalAgentsResponse,
+  OrgFileListResponse,
+  OrgFileRecord,
 } from '../types'
 
 export const api = axios.create({ baseURL: '/api', withCredentials: true })
@@ -233,6 +239,12 @@ export const clientsApi = {
       .then(r => r.data),
   getActivity: (id: string) =>
     api.get<ClientActivityResponse>(`/clients/${id}/activity`).then(r => r.data),
+  knowledge: (id: string) =>
+    api.get<ClientKnowledgeRecord[]>(`/clients/${id}/knowledge`).then(r => r.data),
+  addKnowledge: (id: string, data: { content: string; category?: string | null; confidence?: number }) =>
+    api.post<ClientKnowledgeRecord>(`/clients/${id}/knowledge`, data).then(r => r.data),
+  deleteKnowledge: (id: string, knowledgeId: string) =>
+    api.delete(`/clients/${id}/knowledge/${knowledgeId}`).then(r => r.data),
   assignAgent: (agentId: string, clientId: string | null) =>
     api.post(`/agents/${agentId}/assign-client`, { client_id: clientId })
       .then(r => r.data),
@@ -240,6 +252,38 @@ export const clientsApi = {
 
 export const portalApi = {
   get: (token: string) => api.get(`/portal/${token}`).then(r => r.data),
+}
+
+export const filesApi = {
+  list: (params?: { client_id?: string; file_type?: string; search?: string; limit?: number; offset?: number }) =>
+    api.get<OrgFileListResponse>('/files', { params }).then(r => r.data),
+  get: (fileId: string) => api.get<OrgFileRecord>(`/files/${fileId}`).then(r => r.data),
+  versions: (fileId: string) => api.get<OrgFileRecord[]>(`/files/${fileId}/versions`).then(r => r.data),
+  delete: (fileId: string) => api.delete<{ file_id: string; status: string }>(`/files/${fileId}`).then(r => r.data),
+  downloadUrl: (fileId: string) =>
+    api.get<{ file_id: string; download_url: string; expires_in: number }>(`/files/${fileId}/download-url`).then(r => r.data),
+  uploadUrl: (data: { filename: string; content_type: string; client_id?: string; description?: string }) =>
+    api.post<{ file_id: string; upload_url: string; storage_key: string; expires_in: number }>('/files/upload-url', data).then(r => r.data),
+  uploadComplete: (data: { file_id: string; size_bytes: number; checksum_sha256?: string }) =>
+    api.post<{ file_id: string; status: string }>('/files/upload-complete', data).then(r => r.data),
+  createDocument: (data: { name: string; client_id?: string | null; description?: string | null }) =>
+    api.post<{ file_id: string; collab_room: string; name: string; download_url?: string | null }>('/files/document', data).then(r => r.data),
+  createVersion: (fileId: string, data: { filename: string; content_type: string; description?: string | null }) =>
+    api.post<{ file_id: string; version: number; upload_url: string; storage_key: string; expires_in: number }>(`/files/${fileId}/version`, data).then(r => r.data),
+  update: (fileId: string, data: Partial<Pick<OrgFileRecord, 'name' | 'description' | 'tags'>> & { extracted_text?: string }) =>
+    api.patch<OrgFileRecord>(`/files/${fileId}`, data).then(r => r.data),
+  export: (fileId: string, format: 'markdown' | 'pdf' | 'docx') =>
+    api.get<Blob>(`/files/${fileId}/export`, {
+      params: { format },
+      responseType: 'blob',
+    }).then(response => ({
+      blob: response.data,
+      filename:
+        parseAttachmentFilename(response.headers['content-disposition']) ||
+        `document.${format === 'markdown' ? 'md' : format}`,
+    })),
+  agentWrite: (fileId: string, data: { content: string; agent_name?: string }) =>
+    api.post<{ file_id: string; status: string; room: string }>(`/files/${fileId}/agent-write`, data).then(r => r.data),
 }
 
 export const a2aApi = {
@@ -264,6 +308,16 @@ export const missionsApi = {
     api.post<Mission>('/missions', data).then(r => r.data),
   retry: (id: string) => api.post<Mission>(`/missions/${id}/retry`).then(r => r.data),
   getReport: (id: string) => api.get<MissionReportResponse>(`/missions/${id}/report`).then(r => r.data),
+  exportReport: (id: string, format: 'pdf' | 'docx') =>
+    api.get<Blob>(`/missions/${id}/export`, {
+      params: { format },
+      responseType: 'blob',
+    }).then(response => ({
+      blob: response.data,
+      filename:
+        parseAttachmentFilename(response.headers['content-disposition']) ||
+        `mission-report.${format}`,
+    })),
   approveReport: (id: string) => api.post<Mission>(`/missions/${id}/approve-report`).then(r => r.data),
   remove: (id: string) => api.delete(`/missions/${id}`).then(r => r.data),
 }
@@ -572,6 +626,8 @@ export const integrationsApi = {
     imap_port: number
     from_name?: string
   }) => api.post<UserIntegration>('/integrations/email', data).then(r => r.data),
+  createSearch: (data: { name?: string; provider: 'brave' | 'serper'; api_key: string }) =>
+    api.post<UserIntegration>('/integrations/search', data).then(r => r.data),
   test: (id: string) => api.post<UserIntegration>(`/integrations/${id}/test`).then(r => r.data),
   delete: (id: string) => api.delete(`/integrations/${id}`),
 }
@@ -687,6 +743,31 @@ export const organizationsApi = {
   removeMember: (orgId: string, userId: string) => api.delete(`/organizations/${orgId}/members/${userId}`),
   inviteDetails: (token: string) => api.get<InviteDetails>(`/invites/${token}`).then(r => r.data),
   acceptInvite: (token: string) => api.post<{ accepted: boolean; org_id: string; org_name?: string | null }>(`/invites/${token}/accept`).then(r => r.data),
+}
+
+export const orgVariablesApi = {
+  list: () => api.get<OrgVariableRecord[]>('/org/variables').then(r => r.data),
+  create: (data: { key: string; value: string; description?: string | null }) =>
+    api.post<OrgVariableRecord>('/org/variables', data).then(r => r.data),
+  update: (id: string, data: { value?: string; description?: string | null }) =>
+    api.patch<OrgVariableRecord>(`/org/variables/${id}`, data).then(r => r.data),
+  delete: (id: string) => api.delete(`/org/variables/${id}`),
+}
+
+export const intakeApi = {
+  listForms: () => api.get<ClientIntakeFormRecord[]>('/intake/forms').then(r => r.data),
+  createForm: (data: {
+    client_id: string
+    title: string
+    workflow_id?: string | null
+    fields: Array<{ name: string; label: string; type?: string; required?: boolean; options?: string[] }>
+  }) => api.post<ClientIntakeFormRecord>('/intake/forms', data).then(r => r.data),
+  listSubmissions: (formId: string) =>
+    api.get<ClientIntakeSubmissionRecord[]>(`/intake/forms/${formId}/submissions`).then(r => r.data),
+  getPublicForm: (token: string) =>
+    api.get<ClientIntakeFormRecord>(`/intake/${token}`).then(r => r.data),
+  submitPublicForm: (token: string, data: Record<string, string>) =>
+    api.post<{ status: string; execution_id?: string; submission_id?: string }>(`/intake/${token}`, data).then(r => r.data),
 }
 
 export const messagesApi = {

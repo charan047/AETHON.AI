@@ -128,7 +128,7 @@ export function GoalCard({
     <div
       className={`
         mt-3 overflow-hidden text-left
-        ${isComplete ? 'glass-card glass-card-emerald' : isRunning ? 'glass-card glass-card-indigo' : 'glass-card glass-card-amber'}
+        ${isComplete ? 'card card-emerald' : isRunning ? 'card card-indigo' : 'card card-amber'}
       `}
       style={{
         borderLeftWidth: '2px',

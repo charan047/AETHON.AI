@@ -89,6 +89,19 @@ class NotificationEmailService:
         )
         await self._send(recipients, subject, body)
 
+    async def send_human_approval_needed(self, org_id: str, workflow_name: str, title: str, description: str) -> None:
+        if not self._configured():
+            return
+        async with AsyncSessionLocal() as db:
+            recipients = await self._recipients(org_id, db, require_field="email_on_approval_needed")
+        subject = f"[Aethon] Workflow approval needed: {title}"
+        body = (
+            f"Workflow: {workflow_name}\n\n"
+            f"{description}\n\n"
+            "Open Aethon and review the request in /approvals."
+        )
+        await self._send(recipients, subject, body)
+
     async def send_autonomy_changed(self, org_id: str, agent_name: str, old_level: str, new_level: str, score: float) -> None:
         if not self._configured():
             return

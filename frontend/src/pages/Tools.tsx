@@ -455,8 +455,9 @@ export function Tools() {
   const [toolToDelete, setToolToDelete] = useState<CustomTool | null>(null)
   const [selectedBuiltIn, setSelectedBuiltIn] = useState<any | null>(null)
   const builtInDetailsRef = useRef<HTMLDivElement | null>(null)
+  const starterPackAutoAttemptedRef = useRef(false)
 
-  const { data: tools = [], isLoading } = useQuery({
+  const { data: tools = [], isLoading, isSuccess } = useQuery({
     queryKey: ['custom-tools'],
     queryFn: customToolsApi.list,
   })
@@ -535,10 +536,12 @@ export function Tools() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (isLoading || tools.length > 0 || starterPackMut.isPending) return
+    if (!isSuccess || isLoading || tools.length > 0 || starterPackMut.isPending) return
     if (window.localStorage.getItem(STARTER_TOOLS_SEED_KEY) === '1') return
+    if (starterPackAutoAttemptedRef.current) return
+    starterPackAutoAttemptedRef.current = true
     starterPackMut.mutate()
-  }, [isLoading, starterPackMut, tools.length])
+  }, [isLoading, isSuccess, starterPackMut, tools.length])
 
   useEffect(() => {
     if (!selectedBuiltIn || !builtInDetailsRef.current) return
@@ -551,7 +554,7 @@ export function Tools() {
 
   const builtIns = catalog.filter((tool: any) => tool.category !== 'custom')
 
-  const isComingSoonTool = (name: string) => {
+  const isGoogleSheetsTool = (name: string) => {
     const value = name.toLowerCase()
     return value.includes('google_sheets') || value.includes('sheet')
   }
@@ -562,7 +565,7 @@ export function Tools() {
     if (value.includes('gmail') || value.includes('email')) return Mail
     if (value.includes('slack')) return Slack
     if (value.includes('github')) return Github
-    if (isComingSoonTool(value)) return Table2
+    if (isGoogleSheetsTool(value)) return Table2
     if (value.includes('google') || value.includes('docs')) return FileText
     return Table2
   }
@@ -583,7 +586,7 @@ export function Tools() {
     const githubProvider = healthMap.github
 
     if (value.includes('search') || value.includes('brave') || value.includes('serper')) return searchProvider
-    if (isComingSoonTool(value)) return null
+    if (isGoogleSheetsTool(value)) return gmailProvider
     if (value.includes('gmail') || value.includes('email') || value.includes('google')) return gmailProvider
     if (value.includes('slack')) return slackProvider
     if (value.includes('github')) return githubProvider
@@ -594,31 +597,27 @@ export function Tools() {
     const name = String(tool.name || tool.display_name || 'tool').toLowerCase()
     const provider = healthForTool(tool.name || tool.display_name || 'tool')
 
-    if (isComingSoonTool(name)) {
-      return {
-        title: 'Coming soon',
-        detail:
-          'Google Sheets is not available in this release yet. It stays visible here for roadmap continuity, but agents cannot use it until the backend implementation ships.',
-        actionLabel: null,
-        action: null,
-      }
-    }
-
     if (name.includes('search') || name.includes('brave') || name.includes('serper') || name.includes('news')) {
       return {
         title: 'Search provider',
         detail:
           provider?.note ||
-          'Web search is configured through environment variables like BRAVE_SEARCH_API_KEY or SERPER_API_KEY, not an OAuth connection.',
+          'Web search is configured per org in Integrations with Brave or Serper, with an optional platform fallback if your workspace has no connected search provider.',
         actionLabel: null,
         action: null,
       }
     }
 
     if (name.includes('gmail') || name.includes('google')) {
+      const isSheets = name.includes('sheet')
       return {
-        title: 'Google integration',
-        detail: provider?.note || 'Connect or reconnect Google in Integrations to enable this tool.',
+        title: isSheets ? 'Google Sheets integration' : 'Google integration',
+        detail: isSheets
+          ? (
+              provider?.note ||
+              'Connect Google in Integrations to let agents create spreadsheets, append rows to an existing sheet, or overwrite a tabular range using a spreadsheet ID or full Sheets URL.'
+            )
+          : (provider?.note || 'Connect or reconnect Google in Integrations to enable this tool.'),
         actionLabel: 'Open Integrations',
         action: () => navigate('/integrations'),
       }
@@ -652,15 +651,6 @@ export function Tools() {
 
   const builtInAvailability = (tool: any) => {
     const toolName = String(tool.name || tool.display_name || 'tool')
-    if (isComingSoonTool(toolName)) {
-      return {
-        configured: false,
-        dotClass: 'dot-muted',
-        textClass: 'text-white/45',
-        label: 'coming soon',
-      }
-    }
-
     const provider = healthForTool(toolName)
     const configured = provider ? provider.status !== 'not_configured' : !tool.requires_auth
     return {
@@ -676,7 +666,7 @@ export function Tools() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="page-title">Tools</h1>
-          <p className="page-subtitle">Custom integrations</p>
+          <p className="page-sub">Custom integrations</p>
         </div>
         <div className="flex gap-2">
           <button
@@ -704,7 +694,7 @@ export function Tools() {
               <div
                 key={tool.name}
                 className={clsx(
-                  'data-row w-full text-left transition hover:bg-white/[0.05]',
+                  'row w-full text-left transition hover:bg-white/[0.05]',
                   isSelected && 'bg-white/[0.05]',
                 )}
               >
@@ -741,7 +731,7 @@ export function Tools() {
         </div>
 
         {selectedBuiltIn ? (
-          <div ref={builtInDetailsRef} className="glass-card mt-4 rounded-[24px] p-5">
+          <div ref={builtInDetailsRef} className="card mt-4 rounded-[24px] p-5">
             {(() => {
               const Icon = iconForTool(selectedBuiltIn.name || selectedBuiltIn.display_name || 'tool')
               const availability = builtInAvailability(selectedBuiltIn)
@@ -762,7 +752,7 @@ export function Tools() {
                     </div>
                     <p className="mt-4 text-sm text-[#8B9DBE]">{details.detail}</p>
                     <div className="mt-4 flex flex-wrap items-center gap-2">
-                      <span className={clsx('badge', availability.label === 'coming soon' ? 'badge-glass' : availability.configured ? 'badge-emerald' : 'badge-amber')}>
+                      <span className={clsx('badge', availability.configured ? 'badge-emerald' : 'badge-amber')}>
                         {availability.label}
                       </span>
                       <span className="badge-glass">{selectedBuiltIn.category}</span>
@@ -791,10 +781,10 @@ export function Tools() {
         <div className="section-title">Custom</div>
         {isLoading ? (
           <div className="grid gap-4 md:grid-cols-2">
-            {[...Array(2)].map((_, i) => <div key={i} className="glass-card h-40 animate-pulse" />)}
+            {[...Array(2)].map((_, i) => <div key={i} className="card h-40 animate-pulse" />)}
           </div>
         ) : !tools.length ? (
-          <div className="glass-card rounded-[24px] border border-dashed border-white/[0.10] px-6 py-20 text-center">
+          <div className="card rounded-[24px] border border-dashed border-white/[0.10] px-6 py-20 text-center">
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-white/[0.04]">
               <Wrench size={28} className="text-indigo-300" />
             </div>
@@ -872,7 +862,7 @@ function ToolRow({
   }, [tool.code])
 
   return (
-    <div className="glass-card group overflow-hidden p-5 transition duration-150 hover:-translate-y-0.5 hover:border-white/[0.12]">
+    <div className="card group overflow-hidden p-5 transition duration-150 hover:-translate-y-0.5 hover:border-white/[0.12]">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">

@@ -3,7 +3,7 @@ from datetime import datetime
 import pytest
 from sqlalchemy import select
 
-from database.models import Client, Mission, MissionStatus, MissionTask
+from database.models import Client, Mission, MissionStatus, MissionTask, MissionTaskStatus
 
 
 @pytest.mark.asyncio
@@ -178,7 +178,30 @@ async def test_create_mission_falls_back_to_best_available_agent_when_name_is_un
 
 
 @pytest.mark.asyncio
-async def test_create_mission_uses_fallback_matching_for_unknown_name(authed_client, db, test_org, test_agent, monkeypatch):
+async def test_create_mission_maps_invented_role_name_to_only_available_agent(
+    authed_client,
+    db,
+    test_org,
+    monkeypatch,
+):
+    from database.models import Agent, AgentTrustScore
+
+    market_researcher = Agent(
+        org_id=test_org.id,
+        name="Market Researcher",
+        role="Market Researcher",
+        role_slug="market_researcher",
+        system_prompt="Research markets and trends.",
+        trust_score=88,
+        is_active=True,
+    )
+    db.add(market_researcher)
+    await db.commit()
+    await db.refresh(market_researcher)
+
+    db.add(AgentTrustScore(agent_id=market_researcher.id, overall_score=88))
+    await db.commit()
+
     class FakeResponse:
         content = """
         {
@@ -218,7 +241,74 @@ async def test_create_mission_uses_fallback_matching_for_unknown_name(authed_cli
 
     assert response.status_code == 201
     payload = response.json()
-    assert payload["tasks"][0]["agent_id"] == test_agent.id
+    assert payload["tasks"][0]["agent_id"] == market_researcher.id
+
+
+@pytest.mark.asyncio
+async def test_create_mission_prompt_requires_exact_available_agent_names(
+    authed_client,
+    db,
+    test_org,
+    monkeypatch,
+):
+    from database.models import Agent
+
+    market_researcher = Agent(
+        org_id=test_org.id,
+        name="Market Researcher",
+        role="Market Researcher",
+        role_slug="market_researcher",
+        system_prompt="Research markets and trends.",
+        is_active=True,
+    )
+    db.add(market_researcher)
+    await db.commit()
+    await db.refresh(market_researcher)
+
+    captured = {}
+
+    class FakeResponse:
+        content = """
+        {
+          "mission_title": "Exact names check",
+          "tasks": [
+            {
+              "sequence": 1,
+              "title": "Research market",
+              "description": "Gather market data.",
+              "prompt": "Gather market data",
+              "agent_name": "Market Researcher",
+              "depends_on": [],
+              "estimated_minutes": 8
+            }
+          ]
+        }
+        """
+
+    class FakeLLM:
+        async def ainvoke(self, prompt: str):
+            captured["prompt"] = prompt
+            return FakeResponse()
+
+    from services import model_service as model_service_module
+    from api import missions as missions_module
+
+    monkeypatch.setattr(
+        model_service_module.model_service,
+        "_build_from_settings",
+        lambda temperature=0.3, max_tokens=2000: FakeLLM(),
+    )
+    monkeypatch.setattr(missions_module.run_mission_task, "delay", lambda mission_id: mission_id)
+
+    response = await authed_client.post(
+        "/api/missions",
+        json={"goal": "Research top selling Amazon products"},
+    )
+
+    assert response.status_code == 201
+    assert "CRITICAL: Use ONLY the exact agent names from this list." in captured["prompt"]
+    assert "Do NOT invent names. Assign the closest match if no perfect fit." in captured["prompt"]
+    assert "Available agents (use these names EXACTLY):" in captured["prompt"]
 
 
 @pytest.mark.asyncio
@@ -421,3 +511,83 @@ async def test_approve_mission_report_marks_it_delivered_and_enables_portal(auth
     assert mission.report_delivered is True
     assert client.portal_enabled is True
     assert client.portal_token is not None
+
+
+@pytest.mark.asyncio
+async def test_export_mission_report_returns_pdf_attachment(authed_client, db, test_org, monkeypatch):
+    from api import missions as missions_module
+
+    async def fake_render_pdf(**kwargs):
+        assert kwargs["mission_title"] == "Acme Launch Brief"
+        assert "## Summary" in kwargs["report"]
+        assert len(kwargs["tasks"]) == 1
+        return b"%PDF-mission-test"
+
+    monkeypatch.setattr(missions_module, "_render_mission_report_pdf", fake_render_pdf)
+
+    mission = Mission(
+        org_id=test_org.id,
+        goal="Create client-ready launch brief",
+        title="Acme Launch Brief",
+        status=MissionStatus.completed,
+        report="## Summary\n\nReady for review.",
+        report_delivered=False,
+        created_at=datetime.utcnow(),
+        completed_at=datetime(2026, 5, 27, 13, 0, 0),
+    )
+    db.add(mission)
+    await db.commit()
+    await db.refresh(mission)
+
+    task = MissionTask(
+        mission_id=mission.id,
+        org_id=test_org.id,
+        sequence=1,
+        title="Research",
+        status=MissionTaskStatus.completed,
+        output_summary="Found the strongest positioning points.",
+    )
+    db.add(task)
+    await db.commit()
+
+    response = await authed_client.get(f"/api/missions/{mission.id}/export?format=pdf")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert "acme-launch-brief-2026-05-27.pdf" in response.headers["content-disposition"]
+    assert response.content == b"%PDF-mission-test"
+
+
+@pytest.mark.asyncio
+async def test_export_mission_report_returns_docx_attachment(authed_client, db, test_org, monkeypatch):
+    from api import missions as missions_module
+
+    async def fake_render_docx(**kwargs):
+        assert kwargs["mission_title"] == "Acme Launch Brief"
+        assert kwargs["report"].startswith("## Summary")
+        return b"PK-mission-docx-test"
+
+    monkeypatch.setattr(missions_module, "_render_mission_report_docx", fake_render_docx)
+
+    mission = Mission(
+        org_id=test_org.id,
+        goal="Create client-ready launch brief",
+        title="Acme Launch Brief",
+        status=MissionStatus.completed,
+        report="## Summary\n\nReady for review.",
+        report_delivered=False,
+        created_at=datetime.utcnow(),
+        completed_at=datetime(2026, 5, 27, 13, 0, 0),
+    )
+    db.add(mission)
+    await db.commit()
+    await db.refresh(mission)
+
+    response = await authed_client.get(f"/api/missions/{mission.id}/export?format=docx")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert "acme-launch-brief-2026-05-27.docx" in response.headers["content-disposition"]
+    assert response.content == b"PK-mission-docx-test"

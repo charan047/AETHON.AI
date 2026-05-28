@@ -29,7 +29,7 @@ class NewsSearchTool(BaseTool):
             return ToolOutput(success=False, error="Query is required")
 
         try:
-            articles = await search_backend.search_news(query, max_results)
+            articles = await search_backend.search_news(query, max_results, org_id=org_id, user_id=user_id)
             return ToolOutput(
                 success=True,
                 result={
@@ -47,7 +47,7 @@ class NewsSearchTool(BaseTool):
                     "article_count": len(articles),
                     "period": f"Last {days_back} days",
                 },
-                metadata={"source": await search_backend.active_provider(), "query": query},
+                metadata={"source": await search_backend.active_provider(org_id=org_id, user_id=user_id), "query": query},
             )
         except Exception as exc:
             logger.error("News search failed: %s", exc)

@@ -222,8 +222,13 @@ class WebIntelligenceTool(BaseTool):
         cached = self._search_cache.get(cache_key)
         if cached:
             return cached
-
-        raw = await _search_backend.search(query, num_results)
+        context = self.config.get("_context", {})
+        raw = await _search_backend.search(
+            query,
+            num_results,
+            org_id=context.get("org_id"),
+            user_id=context.get("user_id") or self.user_id,
+        )
         lines = []
         for r in raw:
             if not r.get("url") and r.get("title") == "Search unavailable":
@@ -455,7 +460,11 @@ class WebIntelligenceTool(BaseTool):
 
     async def health_check(self) -> tuple[ToolHealth, str]:
         try:
-            provider = await _search_backend.active_provider()
+            context = self.config.get("_context", {})
+            provider = await _search_backend.active_provider(
+                org_id=context.get("org_id"),
+                user_id=context.get("user_id") or self.user_id,
+            )
             content = await self._fetch_webpage_impl("https://example.com", "text")
             if "Example Domain" in content:
                 return ToolHealth.healthy, f"Web fetch working; search provider: {provider}"

@@ -66,7 +66,7 @@ function eventContent(event: MonitoringEvent): string {
       const warn = unassigned?.length
         ? ` ⚠ ${unassigned.length} node(s) have no agent: [${unassigned.join(', ')}]`
         : ''
-      return `Workflow "${event.workflow}" started (${event.agent_count}/${event.node_count} nodes assigned)${warn} — ${String(event.input || '').slice(0, 60)}`
+      return `Process "${event.workflow}" started (${event.agent_count}/${event.node_count} nodes assigned)${warn} — ${String(event.input || '').slice(0, 60)}`
     }
     case 'workflow_plan':
       return `Plan: ${Array.isArray(event.plan) ? event.plan.join(' → ') : String(event.plan || '')}`
@@ -97,7 +97,7 @@ function eventContent(event: MonitoringEvent): string {
     case 'hitl_timed_out':
       return `Approval ${event.approval_id || ''} timed out`
     case 'execution_pending_review':
-      return `Needs review: ${event.workflow_name || event.execution_id || 'execution'}`
+      return `Needs Review: ${event.workflow_name || event.execution_id || 'execution'}`
     case 'agent_retry':
       return `${event.agent_name || event.agent || 'Agent'} retrying attempt ${event.attempt}/${event.max_retries}`
     case 'agent_retry_succeeded':
@@ -113,9 +113,9 @@ function eventContent(event: MonitoringEvent): string {
     case 'workflow_timed_out':
       return 'Workflow timed out waiting for approval'
     case 'workflow_scheduled_trigger':
-      return 'Scheduled workflow triggered'
+      return 'Scheduled process triggered'
     case 'workflow_webhook_trigger':
-      return `${event.source || 'Webhook'} triggered workflow`
+      return `${event.source || 'Webhook'} triggered process`
     case 'workflow_rolled_back':
       return `Workflow rolled back to v${event.target_version || 'previous'}`
     case 'parallel_group_started':
@@ -213,10 +213,18 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: 'stopped',
   running: 'running',
   pending: 'running',
-  pending_review: 'needs review',
-  waiting_approval: 'waiting approval',
+  pending_review: 'Needs Review',
+  waiting_approval: 'Needs Review',
   rejected: 'failed',
   timed_out: 'failed',
+}
+
+type ExecutionLike = {
+  status: string
+  status_label?: string | null
+  review_state?: 'needs_review' | null
+  review_stage?: 'final_review' | 'workflow_pause' | null
+  requires_ceo_action?: boolean
 }
 
 function formatDuration(durationSeconds?: number | null) {
@@ -236,26 +244,30 @@ function formatRelativeTime(timestamp?: string | null) {
   return `${Math.floor(deltaSeconds / 86400)}d ago`
 }
 
-function statusDotClass(status: string) {
-  if (status === 'running' || status === 'pending') return 'dot-blue dot-live'
-  if (status === 'pending_review' || status === 'waiting_approval') return 'dot-amber dot-live'
-  if (status === 'completed') return 'dot-emerald'
+function isNeedsReview(execution: ExecutionLike) {
+  return execution.review_state === 'needs_review' || execution.requires_ceo_action
+}
+
+function statusDotClass(execution: ExecutionLike) {
+  if (execution.status === 'running' || execution.status === 'pending') return 'dot-blue dot-live'
+  if (isNeedsReview(execution)) return 'dot-amber dot-live'
+  if (execution.status === 'completed') return 'dot-emerald'
   return 'dot-red'
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ execution }: { execution: ExecutionLike }) {
   const badgeClass =
-    status === 'completed'
+    execution.status === 'completed'
       ? 'badge-emerald'
-      : status === 'running' || status === 'pending'
+      : execution.status === 'running' || execution.status === 'pending'
         ? 'badge-indigo'
-        : status === 'pending_review' || status === 'waiting_approval'
+        : isNeedsReview(execution)
           ? 'badge-amber'
           : 'badge-red'
 
   return (
     <span className={clsx('badge font-mono text-[10px] uppercase tracking-[0.08em]', badgeClass)}>
-      {STATUS_LABELS[status] || status}
+      {execution.status_label || STATUS_LABELS[execution.status] || execution.status}
     </span>
   )
 }
@@ -319,7 +331,7 @@ export function Monitoring() {
     const executions = recentQuery.data || []
     if (statusFilter === 'all') return executions
     if (statusFilter === 'running') return executions.filter((execution: any) => ['running', 'pending'].includes(execution.status))
-    if (statusFilter === 'review') return executions.filter((execution: any) => ['pending_review', 'waiting_approval'].includes(execution.status))
+    if (statusFilter === 'review') return executions.filter((execution: any) => isNeedsReview(execution))
     if (statusFilter === 'done') return executions.filter((execution: any) => execution.status === 'completed')
     return executions.filter((execution: any) => ['failed', 'cancelled', 'timed_out', 'rejected'].includes(execution.status))
   }, [recentQuery.data, statusFilter])
@@ -329,7 +341,7 @@ export function Monitoring() {
     return {
       all: executions.length,
       running: executions.filter((execution: any) => ['running', 'pending'].includes(execution.status)).length,
-      review: executions.filter((execution: any) => ['pending_review', 'waiting_approval'].includes(execution.status)).length,
+      review: executions.filter((execution: any) => isNeedsReview(execution)).length,
       done: executions.filter((execution: any) => execution.status === 'completed').length,
       failed: executions.filter((execution: any) => ['failed', 'cancelled', 'timed_out', 'rejected'].includes(execution.status)).length,
     }
@@ -359,7 +371,7 @@ export function Monitoring() {
         queryClient.invalidateQueries({ queryKey: ['execution', executionId] }),
         queryClient.invalidateQueries({ queryKey: ['recent-executions'] }),
       ])
-      toast.success('Execution approved')
+      toast.success('Run approved')
     },
     onError: error => toast.error(extractApiError(error)),
   })
@@ -380,8 +392,8 @@ export function Monitoring() {
   return (
     <>
       <PageShell
-        title="Monitoring"
-        subtitle="Executions across the agency."
+      title="Runs"
+      subtitle="Runs across the agency."
         actions={
           <div className={clsx('inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs', connected ? 'border-green-500/20 bg-green-500/10 text-green-400' : 'border-white/[0.08] text-[var(--t3)]')}>
             {connected ? <Wifi size={13} /> : <WifiOff size={13} />}
@@ -424,14 +436,14 @@ export function Monitoring() {
           ))}
         </div>
 
-        <section className="glass-card overflow-hidden p-0">
+        <section className="card overflow-hidden p-0">
           {hasNoRuns ? (
             <div className="p-8">
               <EmptyState
                 icon="🎬"
                 title="No runs yet"
-                description="Run an agent to see executions appear here."
-                action={{ label: 'Run an agent →', onClick: () => navigate('/agents') }}
+                description="Your first run will appear here the moment an agent starts working."
+                action={{ label: 'Run a process', onClick: () => navigate('/workflows') }}
               />
             </div>
           ) : recentQuery.isLoading && !(recentQuery.data || []).length ? (
@@ -439,7 +451,7 @@ export function Monitoring() {
               {Array.from({ length: 6 }).map((_, index) => <ExecutionRowSkeleton key={index} />)}
             </div>
           ) : !filteredExecutions.length ? (
-            <div className="px-4 py-12 text-center text-sm text-[var(--t2)]">No executions match this filter.</div>
+            <div className="px-4 py-12 text-center text-sm text-[var(--t2)]">No runs match this filter.</div>
           ) : (
             <div>
               {filteredExecutions.map((execution: any) => (
@@ -447,23 +459,23 @@ export function Monitoring() {
                   key={execution.id}
                   type="button"
                   data-testid="execution-row"
-                  className="data-row w-full min-h-[44px] text-left"
+                  className="row w-full min-h-[44px] text-left"
                   onClick={() => handleExecutionClick(execution.id)}
                 >
-                  <span className={clsx('status-dot', statusDotClass(execution.status))} />
+                  <span className={clsx('status-dot', statusDotClass(execution))} />
                   <div className="min-w-0 w-[180px] flex-shrink-0">
                     <div className="truncate text-sm font-semibold text-white">
                       {execution.agent_name || execution.workflow_name || 'Agent'}
                     </div>
                   </div>
                   <div className="min-w-0 flex-1 truncate text-xs text-[var(--text-2)]">
-                    {execution.input_message || execution.input || execution.workflow_name || 'Execution in progress'}
+                    {execution.input_message || execution.input || execution.workflow_name || 'Run in progress'}
                   </div>
                   <div className="hidden max-w-[140px] truncate text-xs text-[var(--text-3)] md:block">
                     {execution.client_name || 'Internal'}
                   </div>
                   <div className="hidden font-mono text-[11px] text-[var(--text-3)] sm:block">{formatDuration(execution.duration_seconds)}</div>
-                  <StatusBadge status={execution.status} />
+                  <StatusBadge execution={execution} />
                 </button>
               ))}
             </div>
@@ -491,7 +503,7 @@ export function Monitoring() {
                   <h2 className="text-base font-semibold text-white">
                     {selectedExecutionQuery.data?.agent_name || 'Agent'}
                   </h2>
-                  {selectedExecutionQuery.data ? <StatusBadge status={selectedExecutionQuery.data.status} /> : null}
+                  {selectedExecutionQuery.data ? <StatusBadge execution={selectedExecutionQuery.data} /> : null}
                 </div>
                 <div className="mt-1 text-xs text-[var(--text-3)]">
                   {(selectedExecutionQuery.data?.workflow_name || 'Workflow')} · {(selectedExecutionQuery.data?.agent_name || 'Agent')}
@@ -526,7 +538,8 @@ export function Monitoring() {
               </div>
             </div>
             <div className="border-t border-white/[0.08] px-4 py-3">
-              {selectedExecutionQuery.data?.status === 'pending_review' ? (
+              {selectedExecutionQuery.data?.review_state === 'needs_review' &&
+              selectedExecutionQuery.data?.review_stage !== 'workflow_pause' ? (
                 <div className="flex gap-2">
                   <button
                     type="button"

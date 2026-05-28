@@ -16,6 +16,11 @@ services:
       DOCKER_EXECUTION_IMAGE: platform-executor:latest
       RUN_MIGRATIONS_ON_STARTUP: "true"
       ENABLE_TESTING_API: "true"
+      HOCUSPOCUS_URL: ws://hocuspocus:1234
+      HOCUSPOCUS_HTTP_URL: http://hocuspocus:1235
+      STORAGE_PROVIDER: garage
+      STORAGE_ENDPOINT: http://garage:3900
+      STORAGE_PUBLIC_URL: http://localhost:3900
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - chroma_data:/app/chroma_db
@@ -46,6 +51,11 @@ services:
       DOCKER_EXECUTION_IMAGE: platform-executor:latest
       RUN_MIGRATIONS_ON_STARTUP: "false"
       ENABLE_TESTING_API: "true"
+      HOCUSPOCUS_URL: ws://hocuspocus:1234
+      HOCUSPOCUS_HTTP_URL: http://hocuspocus:1235
+      STORAGE_PROVIDER: garage
+      STORAGE_ENDPOINT: http://garage:3900
+      STORAGE_PUBLIC_URL: http://localhost:3900
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - chroma_data:/app/chroma_db
@@ -82,6 +92,11 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       CORS_ORIGINS: '["http://localhost:5173","http://localhost"]'
+      HOCUSPOCUS_URL: ws://hocuspocus:1234
+      HOCUSPOCUS_HTTP_URL: http://hocuspocus:1235
+      STORAGE_PROVIDER: garage
+      STORAGE_ENDPOINT: http://garage:3900
+      STORAGE_PUBLIC_URL: http://localhost:3900
     volumes:
       - chroma_data:/app/chroma_db
     extra_hosts:
@@ -100,6 +115,42 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
     depends_on:
       - celery_worker
+
+  garage:
+    image: dxflrs/garage:v1.0.0
+    container_name: aethon_garage
+    ports:
+      - "3900:3900"
+      - "3901:3901"
+    environment:
+      GARAGE_METADATA_DIR: /meta
+      GARAGE_DATA_DIR: /data
+    volumes:
+      - garage_meta:/meta
+      - garage_data:/data
+      - ./garage.toml:/etc/garage.toml:ro
+    restart: unless-stopped
+
+  hocuspocus:
+    build:
+      context: ./hocuspocus
+      dockerfile: Dockerfile
+    container_name: aethon_hocuspocus
+    ports:
+      - "1234:1234"
+    expose:
+      - "1235"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://platform_user:platform_pass@postgres:5432/platform_db
+      REDIS_URL: redis://redis:6379/2
+      HOCUSPOCUS_API_PORT: 1235
+      HOCUSPOCUS_SECRET: ${HOCUSPOCUS_SECRET:-}
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
 
   frontend:
     build: ./frontend
@@ -141,3 +192,5 @@ volumes:
   postgres_data:
   redis_data:
   chroma_data:
+  garage_meta:
+  garage_data:

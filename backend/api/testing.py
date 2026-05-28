@@ -1,4 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import json
+import secrets
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -9,7 +12,22 @@ from auth.dependencies import get_current_user
 from auth.org_context import OrgContext, get_org_context
 from config import settings
 from database import get_db
-from database.models import Execution, ExecutionStatus, ExecutionStep, User, Workflow
+from database.models import (
+    Agent,
+    AgentApprovalRequest,
+    ApprovalStatus,
+    Client,
+    Execution,
+    ExecutionStatus,
+    ExecutionStep,
+    HumanApprovalRequest,
+    Mission,
+    MissionStatus,
+    MissionTask,
+    MissionTaskStatus,
+    User,
+    Workflow,
+)
 
 
 router = APIRouter(prefix="/testing", tags=["testing"])
@@ -46,6 +64,56 @@ class E2EExecutionCreateRequest(BaseModel):
     steps: list[E2EExecutionStepCreateRequest] = []
 
 
+class E2EWorkflowApprovalCreateRequest(BaseModel):
+    workflow_id: str
+    execution_id: str
+    node_id: str = "review_node"
+    title: str
+    description: str | None = None
+    context_data: dict | str | None = None
+    requested_by_agent_id: str | None = None
+    expires_in_minutes: int = 45
+
+
+class E2EAgentApprovalCreateRequest(BaseModel):
+    agent_id: str
+    execution_id: str | None = None
+    approval_type: str = "tool_access"
+    title: str
+    description: str
+    risk_level: str = "medium"
+    expires_in_minutes: int = 30
+
+
+class E2EMissionTaskCreateRequest(BaseModel):
+    title: str
+    description: str | None = None
+    status: MissionTaskStatus = MissionTaskStatus.completed
+    output_summary: str | None = None
+
+
+class E2EMissionCreateRequest(BaseModel):
+    goal: str
+    title: str | None = None
+    client_id: str | None = None
+    status: MissionStatus = MissionStatus.completed
+    report: str | None = None
+    report_delivered: bool = False
+    tasks: list[E2EMissionTaskCreateRequest] = []
+
+
+def _testing_enabled() -> bool:
+    return not (
+        settings.environment == "production"
+        or (settings.environment != "test" and not settings.enable_testing_api)
+    )
+
+
+def _ensure_testing_enabled() -> None:
+    if not _testing_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+
 @router.post("/e2e/org-plan")
 async def set_e2e_org_plan(
     data: OpenSourceOrgOverrideRequest,
@@ -53,10 +121,7 @@ async def set_e2e_org_plan(
     current_user: User = Depends(get_current_user),
     ctx: OrgContext = Depends(get_org_context),
 ):
-    if settings.environment == "production" or (
-        settings.environment != "test" and not settings.enable_testing_api
-    ):
-        raise HTTPException(status_code=404, detail="Not found")
+    _ensure_testing_enabled()
 
     ctx.org.plan = "open_source"
     ctx.org.updated_at = datetime.now(timezone.utc)
@@ -82,10 +147,7 @@ async def create_e2e_execution(
     current_user: User = Depends(get_current_user),
     ctx: OrgContext = Depends(get_org_context),
 ):
-    if settings.environment == "production" or (
-        settings.environment != "test" and not settings.enable_testing_api
-    ):
-        raise HTTPException(status_code=404, detail="Not found")
+    _ensure_testing_enabled()
 
     workflow = await db.scalar(
         select(Workflow).where(
@@ -159,10 +221,7 @@ async def set_e2e_execution_status(
     current_user: User = Depends(get_current_user),
     ctx: OrgContext = Depends(get_org_context),
 ):
-    if settings.environment == "production" or (
-        settings.environment != "test" and not settings.enable_testing_api
-    ):
-        raise HTTPException(status_code=404, detail="Not found")
+    _ensure_testing_enabled()
 
     execution = await db.scalar(
         select(Execution).where(
@@ -195,4 +254,181 @@ async def set_e2e_execution_status(
         "execution_id": execution.id,
         "status": execution.status.value,
         "updated_by": current_user.email,
+    }
+
+
+@router.post("/e2e/approvals/workflow")
+async def create_e2e_workflow_approval(
+    data: E2EWorkflowApprovalCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    _ensure_testing_enabled()
+
+    workflow = await db.scalar(
+        select(Workflow).where(Workflow.id == data.workflow_id, Workflow.org_id == ctx.org.id)
+    )
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    execution = await db.scalar(
+        select(Execution).where(
+            Execution.id == data.execution_id,
+            Execution.workflow_id == data.workflow_id,
+            Execution.org_id == ctx.org.id,
+        )
+    )
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    if data.requested_by_agent_id:
+        agent = await db.scalar(
+            select(Agent).where(
+                Agent.id == data.requested_by_agent_id,
+                Agent.org_id == ctx.org.id,
+            )
+        )
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+    approval = HumanApprovalRequest(
+        id=str(uuid4()),
+        workflow_id=data.workflow_id,
+        execution_id=data.execution_id,
+        node_id=data.node_id,
+        title=data.title,
+        description=data.description,
+        context_data=(
+            json.dumps(data.context_data)
+            if isinstance(data.context_data, dict)
+            else data.context_data
+        ),
+        status=ApprovalStatus.pending,
+        requested_by_agent_id=data.requested_by_agent_id,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=data.expires_in_minutes),
+        resume_token=secrets.token_urlsafe(24),
+    )
+    db.add(approval)
+    execution.status = ExecutionStatus.waiting_approval
+    await db.commit()
+    await db.refresh(approval)
+
+    return {
+        "approval_id": approval.id,
+        "execution_id": execution.id,
+        "workflow_id": workflow.id,
+    }
+
+
+@router.post("/e2e/approvals/agent-request")
+async def create_e2e_agent_approval(
+    data: E2EAgentApprovalCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    _ensure_testing_enabled()
+
+    agent = await db.scalar(
+        select(Agent).where(
+            Agent.id == data.agent_id,
+            Agent.org_id == ctx.org.id,
+        )
+    )
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if data.execution_id:
+        execution = await db.scalar(
+            select(Execution).where(
+                Execution.id == data.execution_id,
+                Execution.org_id == ctx.org.id,
+            )
+        )
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found")
+
+    approval = AgentApprovalRequest(
+        id=str(uuid4()),
+        org_id=ctx.org.id,
+        requesting_agent_id=data.agent_id,
+        execution_id=data.execution_id,
+        approval_type=data.approval_type,
+        title=data.title,
+        description=data.description,
+        risk_level=data.risk_level,
+        status="pending",
+        expires_at=datetime.utcnow() + timedelta(minutes=data.expires_in_minutes),
+        created_at=datetime.utcnow(),
+    )
+    db.add(approval)
+    await db.commit()
+    await db.refresh(approval)
+
+    return {
+        "approval_id": approval.id,
+        "agent_id": agent.id,
+    }
+
+
+@router.post("/e2e/missions")
+async def create_e2e_mission(
+    data: E2EMissionCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    _ensure_testing_enabled()
+
+    if data.client_id:
+        client = await db.scalar(
+            select(Client).where(
+                Client.id == data.client_id,
+                Client.org_id == ctx.org.id,
+            )
+        )
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+
+    mission = Mission(
+        id=str(uuid4()),
+        org_id=ctx.org.id,
+        client_id=data.client_id,
+        goal=data.goal,
+        title=data.title,
+        status=data.status,
+        report=data.report,
+        report_delivered=data.report_delivered,
+        created_by=current_user.id,
+        created_at=datetime.utcnow(),
+        completed_at=datetime.utcnow() if data.status in {MissionStatus.completed, MissionStatus.failed} else None,
+    )
+    db.add(mission)
+    await db.flush()
+
+    for index, task in enumerate(data.tasks, start=1):
+        db.add(
+            MissionTask(
+                id=str(uuid4()),
+                mission_id=mission.id,
+                org_id=ctx.org.id,
+                sequence=index,
+                title=task.title,
+                description=task.description,
+                status=task.status,
+                output_summary=task.output_summary,
+                started_at=datetime.utcnow() if task.status != MissionTaskStatus.pending else None,
+                completed_at=datetime.utcnow()
+                if task.status in {MissionTaskStatus.completed, MissionTaskStatus.failed, MissionTaskStatus.skipped}
+                else None,
+            )
+        )
+
+    await db.commit()
+    await db.refresh(mission)
+
+    return {
+        "mission_id": mission.id,
+        "status": mission.status.value if hasattr(mission.status, "value") else str(mission.status),
     }

@@ -19,8 +19,8 @@ test.describe('Dashboard Shell', () => {
     await expect(page.getByRole('link', { name: /^Dashboard$/ })).toBeVisible()
     await expect(page.getByRole('link', { name: /Agency Chat/i })).toBeVisible()
     await expect(page.getByRole('link', { name: /^Agents$/ })).toBeVisible()
-    await expect(page.getByRole('link', { name: /Workflows/i })).toBeVisible()
-    await expect(page.getByRole('link', { name: /^Executions$/ })).toBeVisible()
+    await expect(page.getByRole('link', { name: /Processes/i })).toBeVisible()
+    await expect(page.getByRole('link', { name: /^Runs$/ })).toBeVisible()
     await expect(page.getByRole('link', { name: /^Approvals$/ })).toBeVisible()
     await expect(page.getByRole('link', { name: /^Settings$/ })).toBeVisible()
 

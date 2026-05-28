@@ -114,7 +114,7 @@ function PendingCard({
   onBlock: () => void
 }) {
   return (
-    <div className="glass-card-amber rounded-[24px] border-l-[3px] border-l-amber-400 bg-amber-500/[0.06] p-5">
+    <div className="card-amber rounded-[24px] border-l-[3px] border-l-amber-400 bg-amber-500/[0.06] p-5">
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 gap-3">
           <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${roleTint(agent.provider_name)}`}>
@@ -292,7 +292,7 @@ export function ExternalAgents() {
     <div className="space-y-6 p-6">
       <div>
         <h1 className="page-title">External Agents</h1>
-        <p className="page-subtitle">A2A-compatible agents you can call</p>
+        <p className="page-sub">A2A-compatible agents you can call</p>
       </div>
 
       <GlassCard padding="lg" className="rounded-[28px] border-white/[0.08] bg-white/[0.03]">
@@ -429,7 +429,7 @@ export function ExternalAgents() {
               const monthlyPct = Math.min(100, (row.monthlyUsed / row.monthlyBudget) * 100)
 
               return (
-                <div key={row.id} className="data-row">
+                <div key={row.id} className="row">
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold text-white">{row.agent}</div>
                     <div className="text-xs text-[#8B9DBE]">{row.category}</div>

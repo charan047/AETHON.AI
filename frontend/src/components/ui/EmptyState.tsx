@@ -36,7 +36,7 @@ export function EmptyState({
       ) : null}
       <p className="font-semibold text-ink-secondary">{title}</p>
       {description ? (
-        <p className="mt-1.5 max-w-xs text-sm text-ink-muted">{description}</p>
+        <p className="mt-1.5 max-w-md text-sm text-ink-muted">{description}</p>
       ) : null}
       {primaryAction ? (
         <button className="btn btn-secondary btn-sm mt-5" onClick={primaryAction.onClick}>

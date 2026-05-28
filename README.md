@@ -1,5 +1,8 @@
 # Aethon Agency OS
 
+> Your AI agency team. Handles the repeatable work. You approve before anything reaches clients.
+
+[![CI](https://img.shields.io/github/actions/workflow/status/charan047/AETHON.AI/test.yml?branch=main&label=CI&style=for-the-badge)](https://github.com/charan047/AETHON.AI/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-111827?style=for-the-badge)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-3B82F6?style=for-the-badge)](./backend)
 [![React](https://img.shields.io/badge/React-18-06B6D4?style=for-the-badge)](./frontend)
@@ -19,6 +22,10 @@ It combines:
 - workflow orchestration
 - live execution monitoring
 - approval and permission controls
+- persistent files and deliverables
+- collaborative documents with live editing
+- shared client memory across agents
+- client intake forms and direct workflow submission
 - a model control plane
 - marketplace templates
 - white-label client portals
@@ -33,6 +40,10 @@ This repository is the full product, not a demo frontend and not a single-agent 
 - approval flows for high-risk tool usage
 - trust scores and permission engine support
 - live execution streaming and monitoring
+- a Files workspace for uploads, exports, and approved outputs
+- collaborative document editing backed by Hocuspocus + Yjs
+- org-level template variables and client-scoped shared knowledge
+- public client intake forms that can trigger workflow runs
 - client portals for sharing recent work without client login
 - audit-friendly execution history, tool logging, and org isolation
 
@@ -71,7 +82,7 @@ Optional:
 docker compose up -d --build
 ```
 
-`docker-compose up` runs everything — Postgres, Redis, backend, Celery worker, and nginx. No external dependencies.
+`docker-compose up` runs everything — Postgres, Redis, backend, Celery worker, nginx, Garage object storage, and the Hocuspocus collaboration service. No external dependencies.
 
 5. Open the app:
 
@@ -109,6 +120,8 @@ npm run dev
 - app: `http://localhost`
 - API via load balancer: `http://localhost:8000`
 - backend health: `http://localhost:8000/health`
+- Garage S3 API: `http://localhost:3900`
+- Hocuspocus collaboration server: `ws://localhost:1234`
 - Flower: `http://localhost:5555`
 
 ## Development Setup
@@ -169,6 +182,7 @@ Frontend
   └─ React + TypeScript + Vite + Tailwind
       ├─ Agency dashboard
       ├─ Clients / portal UI
+      ├─ Files / document workspace
       ├─ Agents / workflows / approvals
       ├─ Monitoring / analytics
       └─ WebSocket-driven live execution views
@@ -177,6 +191,7 @@ Backend
   └─ FastAPI
       ├─ Auth + org context
       ├─ Client / agent / workflow APIs
+      ├─ Files / intake / org variable APIs
       ├─ Marketplace / onboarding / portal APIs
       ├─ Model control plane
       └─ Monitoring / approvals / analytics
@@ -193,6 +208,8 @@ Infra
   ├─ PostgreSQL
   ├─ Redis
   ├─ Celery workers
+  ├─ Garage (S3-compatible object storage)
+  ├─ Hocuspocus (collaborative document relay)
   ├─ Nginx
   └─ Docker Compose
 ```

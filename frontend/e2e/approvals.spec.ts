@@ -216,8 +216,8 @@ test.describe('Approvals', () => {
     await page.goto('/approvals')
 
     await expect(page.getByRole('heading', { name: 'Approvals' })).toBeVisible()
-    await expect(page.getByText('All clear — nothing needs your approval')).toBeVisible()
-    await expect(page.getByText('New workflow reviews and agent approvals will appear here in real time.')).toBeVisible()
+    await expect(page.getByText('All clear')).toBeVisible()
+    await expect(page.getByText('When an agent needs your sign-off before doing something sensitive, it shows up here.')).toBeVisible()
     await expect(page.getByText('DECISION HISTORY')).toBeVisible()
     await expect(page.getByText('No decisions yet.')).toBeVisible()
   })
@@ -237,7 +237,7 @@ test.describe('Approvals', () => {
     await page.getByRole('button', { name: /^Approve$/i }).click()
     await page.getByRole('button', { name: /^Confirm approval$/i }).click()
 
-    await expect(page.getByText('All clear — nothing needs your approval')).toBeVisible()
+    await expect(page.getByText('All clear')).toBeVisible()
     await expect.poll(() => state.workflowApproveCalls).toBe(1)
     await expect(page.getByRole('cell', { name: approval.title })).toBeVisible()
     await expect(page.locator('tbody tr').first().getByText('approved', { exact: true })).toBeVisible()
@@ -267,6 +267,6 @@ test.describe('Approvals', () => {
     await confirmReject.click()
 
     await expect.poll(() => state.agentRejectCalls).toBe(1)
-    await expect(page.getByText('All clear — nothing needs your approval')).toBeVisible()
+    await expect(page.getByText('All clear')).toBeVisible()
   })
 })

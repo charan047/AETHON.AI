@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage
 from runtime import agent_runner as agent_runner_module
 from datetime import datetime
 
-from database.models import AgentMemoryEntry, Execution, ExecutionStatus
+from database.models import AgentMemoryEntry, ClientKnowledge, Execution, ExecutionStatus, OrgVariable
 from runtime.agent_runner import AgentRunner
 
 
@@ -273,6 +273,110 @@ async def test_enhanced_system_prompt_injects_ceo_preferences_first(monkeypatch)
     assert "- Keep responses under 400 words." in prompt
     assert "BUSINESS CONTEXT" in prompt
     assert "LIVING MEMORY" in prompt
+
+
+@pytest.mark.asyncio
+async def test_enhanced_system_prompt_injects_client_knowledge_and_org_variables(monkeypatch):
+    config = SimpleNamespace(
+        id="agent-client",
+        name="Jordan",
+        org_id="org-1",
+        model="test-model",
+        tools=[],
+        system_prompt="You are writing for {{agency_name}} in a {{agency_voice}} voice.",
+        persona_name=None,
+    )
+    runner = AgentRunner(config, memory_service=_NoopMemoryService())
+    runner._context = {
+        "execution_client_id": "client-1",
+    }
+
+    class _FakeResult:
+        def __init__(self, items):
+            self._items = items
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._items
+
+    pref = AgentMemoryEntry(
+        id="pref-1",
+        agent_id="agent-client",
+        org_id="org-1",
+        mem0_memory_id="local:pref-1",
+        content_preview="Keep it concise.",
+        memory_type="ceo_preference",
+        importance_score=1.0,
+        always_inject=True,
+        source="manual",
+    )
+    knowledge = ClientKnowledge(
+        id="knowledge-1",
+        org_id="org-1",
+        client_id="client-1",
+        content="The client prefers direct recommendations over long prose.",
+        category="preference",
+        confidence=0.91,
+    )
+    agency_name = OrgVariable(
+        id="var-1",
+        org_id="org-1",
+        key="agency_name",
+        value="Aethon Labs",
+        description="Agency name",
+    )
+    agency_voice = OrgVariable(
+        id="var-2",
+        org_id="org-1",
+        key="agency_voice",
+        value="clear and executive",
+        description="House voice",
+    )
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def execute(self, statement, *_args, **_kwargs):
+            text = str(statement)
+            if "agent_memory_entries" in text:
+                return _FakeResult([pref])
+            if "client_knowledge" in text:
+                return _FakeResult([knowledge])
+            if "org_variables" in text:
+                return _FakeResult([agency_name, agency_voice])
+            return _FakeResult([])
+
+    monkeypatch.setattr(agent_runner_module, "AsyncSessionLocal", lambda: _FakeSession())
+
+    async def _business_context(_user_id=None):
+        return "BUSINESS CONTEXT"
+
+    async def _learning_context():
+        return "LEARNING CONTEXT"
+
+    async def _memory_context(**_kwargs):
+        return "LIVING MEMORY"
+
+    monkeypatch.setattr(runner, "_build_business_context", _business_context)
+    monkeypatch.setattr(runner, "_build_learning_context", _learning_context)
+    monkeypatch.setattr(agent_runner_module.agent_memory_service, "build_memory_context", _memory_context)
+
+    prompt = await runner._build_enhanced_system_prompt("Draft the update")
+
+    assert "WHAT WE KNOW ABOUT THIS CLIENT:" in prompt
+    assert "- The client prefers direct recommendations over long prose." in prompt
+    assert "ORG CONTEXT (use these in your responses):" in prompt
+    assert "agency_name: Aethon Labs" in prompt
+    assert "agency_voice: clear and executive" in prompt
+    assert "{{agency_name}}" not in prompt
+    assert "Aethon Labs" in prompt
+    assert "clear and executive voice" in prompt
 
 
 @pytest.mark.asyncio

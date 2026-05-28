@@ -22,6 +22,7 @@ from database.models import (
     User,
     Workflow,
 )
+from services.review_state_service import agent_status_presentation
 from services.websocket_manager import ws_manager
 
 
@@ -125,6 +126,7 @@ async def _team_status(org_id: str) -> list[dict]:
             status = "working"
             current_task = running_by_name[agent.name]
         rep = reputations.get(agent.id)
+        status_meta = agent_status_presentation(status)
         rows.append(
             {
                 "agent_id": agent.id,
@@ -134,7 +136,9 @@ async def _team_status(org_id: str) -> list[dict]:
                 "seniority_level": agent.seniority_level,
                 "autonomy_level": agent.autonomy_level,
                 "trust_score": agent.trust_score,
-                "status": status,
+                "status": status_meta["status"],
+                "status_label": status_meta["status_label"],
+                "requires_ceo_action": status_meta["requires_ceo_action"],
                 "current_task": current_task,
                 "last_active": _iso(last_messages.get(agent.name)),
                 "approval_rate": rep.approval_rate if rep and rep.total_tasks and rep.total_tasks > 5 else None,

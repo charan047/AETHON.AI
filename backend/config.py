@@ -88,6 +88,22 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     pod_id: str = f"{socket.gethostname()}:{os.getpid()}"
 
+    # ─── Object Storage ───────────────────────────────────────────
+    storage_provider: str = "local"
+    storage_endpoint: str = "http://localhost:3900"
+    storage_access_key: str = "minioadmin"
+    storage_secret_key: str = "minioadmin"
+    storage_bucket: str = "aethon-files"
+    storage_region: str = "garage"
+    storage_public_url: str = ""
+    storage_quota_per_org: int = 10 * 1024 * 1024 * 1024
+    storage_quota_per_file: int = 100 * 1024 * 1024
+
+    # ─── Hocuspocus ──────────────────────────────────────────────
+    hocuspocus_url: str = "ws://localhost:1234"
+    hocuspocus_http_url: str = "http://localhost:1235"
+    hocuspocus_secret: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @field_validator("database_url")

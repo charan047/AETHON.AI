@@ -168,7 +168,7 @@ export function CTOSettings() {
   if (!auth.activeOrg) {
     return (
       <div className="grid min-h-full place-items-center p-6 text-center">
-        <div className="glass-card max-w-md p-8">
+        <div className="card max-w-md p-8">
           <Zap className="mx-auto text-[#4B5A73]" size={44} />
           <h1 className="mt-4 text-2xl font-semibold text-white">No organization selected</h1>
           <p className="mt-2 text-sm text-[#8B9DBE]">Create or switch into an organization before configuring the CTO.</p>
@@ -182,7 +182,7 @@ export function CTOSettings() {
       <div className="page-header rounded-[24px] border border-white/[0.06] bg-white/[0.02]">
         <div>
           <h1 className="page-title">CTO Settings</h1>
-          <p className="page-subtitle">Configure your agency operator</p>
+          <p className="page-sub">Configure your agency operator</p>
         </div>
       </div>
 
@@ -205,7 +205,7 @@ export function CTOSettings() {
 
             <div className="space-y-3">
               {authorityRows.map(item => (
-                <div key={item.key} className="data-row min-h-[56px]">
+                <div key={item.key} className="row min-h-[56px]">
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold text-white">{item.title}</div>
                     <div className="text-xs text-[#8B9DBE]">{item.detail}</div>
