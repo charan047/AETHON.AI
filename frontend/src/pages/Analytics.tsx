@@ -27,6 +27,8 @@ import { format, subDays } from 'date-fns'
 import { clsx } from 'clsx'
 import { companyApi, extractApiError } from '../api/client'
 import { AgentPerformanceCard } from '../components/analytics/AgentPerformanceCard'
+import { HeroPanel } from '../components/ui/HeroPanel'
+import { NumberTicker } from '../components/ui/magicui/NumberTicker'
 import { GlowCard } from '../components/ui/GlowCard'
 import { Skeleton, SkeletonCard } from '../components/ui/Skeleton'
 import { useAnalytics } from '../hooks/useAnalytics'
@@ -206,6 +208,7 @@ export function Analytics() {
   const budgetPct = (totalCost / Math.max(budget, 1)) * 100
   const budgetTone = budgetPct >= 100 ? 'bg-red-500' : budgetPct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'
   const pendingReviewCount = analytics.overview?.pending_review_count || 0
+  const storageMetrics = analytics.overview?.storage_metrics
 
   const dailyExecutions = useMemo(
     () => normalizeExecutionData(analytics.overview?.daily_executions || [], period),
@@ -223,6 +226,10 @@ export function Analytics() {
   const firstDraftRate = analytics.overview?.first_draft_rate ?? 0
   const avgRevisions = analytics.overview?.avg_revisions ?? 1
   const hasReviewMetrics = (analytics.overview?.total_approved ?? 0) > 0
+  const storagePercent = storageMetrics?.storage_percent ?? 0
+  const storageRingColor =
+    storagePercent > 90 ? '#EF4444' : storagePercent > 75 ? '#F59E0B' : '#00D97E'
+  const topClientFileCount = Math.max(1, ...(storageMetrics?.files_by_client?.map(client => client.count) || [1]))
 
   const saveBudget = async () => {
     const next = Number(budgetDraft)
@@ -253,29 +260,27 @@ export function Analytics() {
 
   return (
     <div className="space-y-6 p-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <div className="mb-2 inline-flex rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1 font-mono text-[11px] uppercase tracking-[0.22em] text-blue-300">
-            Observability
-          </div>
-          <h1 className="text-4xl font-extrabold tracking-tight text-white">Analytics</h1>
-          <p className="mt-2 text-sm text-[#8B9DBE]">Cost, performance, reliability, and operating signals for your agency.</p>
-        </div>
-        <div className="card flex rounded-2xl p-1">
+      <HeroPanel
+        kicker="Observability"
+        title="Analytics"
+        subtitle="Cost, performance, reliability, and operating signals for your agency."
+        actions={
+          <div className="card flex rounded-2xl p-1">
           {PERIODS.map(item => (
             <button
               key={item.value}
               onClick={() => setPeriod(item.value)}
               className={clsx(
                 'rounded-xl px-4 py-2 text-sm transition',
-                period === item.value ? 'bg-blue-600 text-white shadow-glow-sm' : 'text-[#8B9DBE] hover:bg-white/[0.04] hover:text-white',
+                period === item.value ? 'bg-blue-600 text-white shadow-glow-sm' : 'text-[var(--t3)] hover:bg-white/[0.04] hover:text-[var(--t1)]',
               )}
             >
               {item.label}
             </button>
           ))}
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {pendingReviewCount > 0 ? (
         <div className="card card-amber flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -447,6 +452,88 @@ export function Analytics() {
           </div>
         </GlowCard>
       </section>
+
+      {storageMetrics ? (
+        <GlowCard glowColor={storagePercent > 90 ? 'red' : storagePercent > 75 ? 'amber' : 'emerald'} className="p-5">
+          <SectionTitle icon={BarChart3} title="File Storage" subtitle="Workspace usage, deliverable volume, and client distribution" />
+
+          <div className="mt-5 flex flex-col gap-5 lg:flex-row lg:items-center">
+            <div className="relative h-20 w-20 shrink-0">
+              <svg viewBox="0 0 80 80" className="h-20 w-20 -rotate-90">
+                <circle cx="40" cy="40" r="30" fill="none" stroke="var(--border)" strokeWidth="6" />
+                <circle
+                  cx="40"
+                  cy="40"
+                  r="30"
+                  fill="none"
+                  stroke={storageRingColor}
+                  strokeWidth="6"
+                  strokeLinecap="round"
+                  strokeDasharray={`${2 * Math.PI * 30}`}
+                  strokeDashoffset={2 * Math.PI * 30 * (1 - Math.min(storagePercent, 100) / 100)}
+                  style={{ transition: 'stroke-dashoffset 0.7s ease' }}
+                />
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="font-mono text-xs font-semibold text-white">
+                  {storagePercent}%
+                </span>
+              </div>
+            </div>
+
+            <div className="flex-1 space-y-1">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[#8B9DBE]">Used</span>
+                <span className="font-mono text-white">
+                  {(storageMetrics.storage_used_bytes / 1024 ** 3).toFixed(2)} GB
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[#8B9DBE]">Files this period</span>
+                <NumberTicker
+                  value={storageMetrics.files_this_period}
+                  className="font-mono text-white"
+                />
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[#8B9DBE]">Total quota</span>
+                <span className="font-mono text-[#8B9DBE]">
+                  {(storageMetrics.storage_quota_bytes / 1024 ** 3).toFixed(0)} GB
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {storageMetrics.files_by_client?.length > 0 ? (
+            <div className="mt-5">
+              <p className="mb-3 text-[11px] font-mono uppercase tracking-wider text-[#8B9DBE]">
+                Files by Client
+              </p>
+              <div className="space-y-2">
+                {storageMetrics.files_by_client.map(client => {
+                  const pct = (client.count / topClientFileCount) * 100
+                  return (
+                    <div key={client.name} className="flex items-center gap-3">
+                      <span className="w-32 shrink-0 truncate text-xs text-[#D7E2F0]">
+                        {client.name}
+                      </span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
+                        <div
+                          className="h-full rounded-full bg-indigo-500 transition-[width] duration-700 ease-out"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="w-8 shrink-0 text-right font-mono text-xs text-[#8B9DBE]">
+                        {client.count}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : null}
+        </GlowCard>
+      ) : null}
 
       <GlowCard glowColor="blue" className="overflow-hidden">
         <div className="border-b border-white/[0.08] p-5">

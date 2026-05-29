@@ -1,9 +1,11 @@
 import { DragEvent, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { motion } from 'framer-motion'
 import { AlertTriangle, Building2, ImageUp, Plus, Save, Trash2 } from 'lucide-react'
-import { extractApiError, organizationsApi, orgVariablesApi } from '../api/client'
+import { extractApiError, filesApi, organizationsApi, orgVariablesApi } from '../api/client'
 import { FloatingField } from '../components/AuthShell'
+import { HeroPanel } from '../components/ui/HeroPanel'
 import { AgentAvatar } from '../components/ui/AgentAvatar'
 import { useAuth } from '../contexts/AuthContext'
 import { toast } from '../lib/toast'
@@ -56,6 +58,12 @@ export function OrgSettings() {
   const orgVariablesQuery = useQuery({
     queryKey: ['org-variables'],
     queryFn: orgVariablesApi.list,
+    enabled: Boolean(org),
+  })
+  const storageUsageQuery = useQuery({
+    queryKey: ['storage-usage'],
+    queryFn: filesApi.storageUsage,
+    refetchInterval: 60_000,
     enabled: Boolean(org),
   })
 
@@ -143,6 +151,14 @@ export function OrgSettings() {
   const variableDraft = (variable: OrgVariableRecord) =>
     variableDrafts[variable.id] || { value: variable.value, description: variable.description || '' }
 
+  const storage = storageUsageQuery.data
+  const storageBarColor =
+    storage?.status === 'critical'
+      ? '#EF4444'
+      : storage?.status === 'warning'
+        ? '#F59E0B'
+        : '#00D97E'
+
   const handleLogoDrop = (event: DragEvent<HTMLLabelElement>) => {
     event.preventDefault()
     const file = event.dataTransfer.files?.[0]
@@ -179,19 +195,18 @@ export function OrgSettings() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <div className="page-header rounded-[24px] border border-white/[0.06] bg-white/[0.02]">
-        <div>
-          <h1 className="page-title">Organization Settings</h1>
-          <p className="page-sub">Manage identity, branding, and destructive controls for {org.name}.</p>
-        </div>
-      </div>
+      <HeroPanel
+        kicker="Agency Identity"
+        title="Organization Settings"
+        subtitle={`Manage identity, branding, and destructive controls for ${org.name}.`}
+      />
 
-      <section className="card rounded-[28px] p-6">
+      <section className="card rounded-[28px] p-7">
         <div className="section-title">Organization</div>
         <div className="mb-6 flex items-center gap-4">
           <AgentAvatar name={org.name} imageUrl={logoPreview || undefined} size="lg" />
-          <div className="text-sm text-[#8B9DBE]">
-            <div className="font-semibold text-white">{org.name}</div>
+          <div className="text-sm text-[var(--t2)]">
+            <div className="font-semibold text-[var(--t1)]">{org.name}</div>
             <div>Owner-only identity fields stay locked for non-owners.</div>
           </div>
         </div>
@@ -242,28 +257,87 @@ export function OrgSettings() {
         </div>
       </section>
 
-      <section className="card rounded-[28px] p-6">
+      <section className="card rounded-[28px] p-7">
         <div className="section-title">Branding</div>
         <label
           onDrop={handleLogoDrop}
           onDragOver={event => event.preventDefault()}
-          className="grid cursor-pointer place-items-center rounded-2xl border border-dashed border-white/[0.10] bg-white/[0.025] p-10 text-center transition hover:border-indigo-500/30"
+          className="grid cursor-pointer place-items-center rounded-[24px] border border-dashed border-[var(--border)] bg-[var(--bg-s)] p-10 text-center transition hover:border-indigo-500/30 hover:bg-indigo-500/[0.03]"
         >
-          <ImageUp className="text-[#8B9DBE]" />
-          <p className="mt-2 text-sm text-white">Drag a logo here for preview</p>
-          <p className="mt-1 text-xs text-[#8B9DBE]">Maximum 200x200px. Saving still uses the logo URL field above.</p>
+          <ImageUp className="text-[var(--t2)]" />
+          <p className="mt-2 text-sm font-medium text-[var(--t1)]">Drag a logo here for preview</p>
+          <p className="mt-1 text-xs text-[var(--t3)]">Maximum 200x200px. Saving still uses the logo URL field above.</p>
         </label>
       </section>
 
-      <section className="card rounded-[28px] p-6">
+      <section className="card rounded-[28px] p-7">
+        <div className="section-title">Storage</div>
+
+        {storageUsageQuery.isLoading ? (
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-s)] px-4 py-5 text-sm text-[var(--t3)]">
+            Loading storage usage…
+          </div>
+        ) : storageUsageQuery.isError ? (
+          <div className="rounded-2xl border border-red-400/20 bg-red-950/20 px-4 py-5 text-sm text-red-200">
+            {extractApiError(storageUsageQuery.error)}
+          </div>
+        ) : (
+          <>
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <p className="font-mono text-2xl font-bold text-[var(--t1)]">
+                  {storage?.used_gb ?? '—'} GB
+                </p>
+                <p className="mt-0.5 text-sm text-[var(--t3)]">
+                  of {storage?.quota_gb ?? '—'} GB used
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="font-mono text-sm text-[var(--t1)]">
+                  {storage?.file_count ?? '—'} files
+                </p>
+                <p className="font-mono text-xs text-[var(--t3)]">
+                  {storage?.percent_used ?? '—'}%
+                </p>
+              </div>
+            </div>
+
+            <div
+              className="mt-4 h-1.5 w-full overflow-hidden rounded-full"
+              style={{ background: 'var(--border)' }}
+            >
+              <motion.div
+                className="h-full rounded-full"
+                style={{ background: storageBarColor }}
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.min(storage?.percent_used ?? 0, 100)}%` }}
+                transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
+              />
+            </div>
+
+            {storage?.status === 'critical' ? (
+              <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/[0.06] px-3 py-2 text-xs text-red-400">
+                Storage is over 90% full. Old files may need to be removed.
+              </div>
+            ) : null}
+            {storage?.status === 'warning' ? (
+              <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2 text-xs text-amber-400">
+                Storage is over 75% full.
+              </div>
+            ) : null}
+          </>
+        )}
+      </section>
+
+      <section className="card rounded-[28px] p-7">
         <div className="section-title">Template Variables</div>
-        <p className="mb-5 text-sm text-[#8B9DBE]">
-          Define agency-wide variables once, then use them in any agent system prompt like <span className="font-mono text-xs text-white">{'{{agency_name}}'}</span>.
+        <p className="mb-5 max-w-3xl text-sm leading-6 text-[var(--t2)]">
+          Define agency-wide variables once, then use them in any agent system prompt like <span className="rounded-full border border-[var(--border)] bg-[var(--bg-s)] px-2 py-1 font-mono text-xs text-[var(--t1)]">{'{{agency_name}}'}</span>.
         </p>
 
         <div className="space-y-3">
           {orgVariablesQuery.isLoading && (
-            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-5 text-sm text-[#8B9DBE]">
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-s)] px-4 py-5 text-sm text-[var(--t3)]">
               Loading template variables…
             </div>
           )}
@@ -275,11 +349,11 @@ export function OrgSettings() {
           {orgVariablesQuery.data?.map(variable => {
             const draft = variableDraft(variable)
             return (
-              <div key={variable.id} className="row flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 md:flex-row md:items-start">
+              <div key={variable.id} className="row flex flex-col gap-3 rounded-[24px] border border-[var(--border)] bg-[var(--bg-s)] p-4 md:flex-row md:items-start">
                 <div className="min-w-0 flex-1 space-y-3">
                   <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-indigo-300">{variable.key}</div>
                   <textarea
-                    className="min-h-[92px] w-full rounded-2xl border border-white/[0.08] bg-black/20 px-3.5 py-3 text-sm text-white outline-none transition focus:border-indigo-400/50 focus:ring-2 focus:ring-indigo-500/20"
+                    className="min-h-[92px] w-full rounded-2xl border border-[var(--border)] bg-[var(--surface-card)] px-3.5 py-3 text-sm text-[var(--t1)] outline-none transition focus:border-indigo-400/50 focus:ring-2 focus:ring-indigo-500/20"
                     value={draft.value}
                     onChange={event =>
                       setVariableDrafts(current => ({
@@ -327,13 +401,13 @@ export function OrgSettings() {
           })}
 
           {!orgVariablesQuery.isLoading && !orgVariablesQuery.data?.length && (
-            <div className="rounded-2xl border border-dashed border-white/[0.10] bg-white/[0.02] px-4 py-8 text-center text-sm text-[#8B9DBE]">
+            <div className="rounded-[24px] border border-dashed border-[var(--border)] bg-[var(--bg-s)] px-4 py-8 text-center text-sm text-[var(--t3)]">
               No template variables yet. Add your agency name, standard voice, or signature once and reuse them everywhere.
             </div>
           )}
         </div>
 
-        <div className="mt-5 grid gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 md:grid-cols-[1.1fr,1.2fr,1fr,auto] md:items-end">
+        <div className="mt-5 grid gap-3 rounded-[24px] border border-[var(--border)] bg-[var(--bg-s)] p-4 md:grid-cols-[1.1fr,1.2fr,1fr,auto] md:items-end">
           <input
             className="input h-11"
             placeholder="agency_name"
@@ -363,7 +437,7 @@ export function OrgSettings() {
       </section>
 
       {isOwner && (
-        <section className="card-red rounded-[28px] border border-red-400/20 bg-red-950/20 p-6">
+        <section className="card-red rounded-[28px] border border-red-400/20 bg-red-950/20 p-7">
           <div className="section-title mb-4 border-red-400/20 text-red-200">Danger Zone</div>
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-1 text-red-300" />

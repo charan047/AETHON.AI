@@ -13,10 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth.security import create_access_token, hash_password
 from database.models import (
     Agent,
+    Client,
     Execution,
     ExecutionCostLog,
     ExecutionStatus,
+    FileStatus,
+    FileType,
     OrgMember,
+    OrgFile,
+    OrgStorageQuota,
     OrgMemberRole,
     Organization,
     User,
@@ -370,3 +375,91 @@ async def test_analytics_overview_includes_review_quality_metrics(client, org_pa
     assert payload["first_draft_rate"] == 50
     assert payload["avg_revisions"] == 1.5
     assert payload["pending_review_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_analytics_overview_includes_org_scoped_storage_metrics(client, org_pair, db: AsyncSession):
+    client_a = Client(
+        id=str(uuid4()),
+        org_id=org_pair["org_a"].id,
+        name="Atlas",
+        company_name="Atlas Corp",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    client_b = Client(
+        id=str(uuid4()),
+        org_id=org_pair["org_b"].id,
+        name="Hidden",
+        company_name="Hidden Corp",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add_all([client_a, client_b])
+    await db.commit()
+
+    db.add(
+        OrgStorageQuota(
+            org_id=org_pair["org_a"].id,
+            used_bytes=8 * 1024 * 1024 * 1024,
+            quota_bytes=10 * 1024 * 1024 * 1024,
+        )
+    )
+    db.add(
+        OrgStorageQuota(
+            org_id=org_pair["org_b"].id,
+            used_bytes=9 * 1024 * 1024 * 1024,
+            quota_bytes=10 * 1024 * 1024 * 1024,
+        )
+    )
+    db.add_all(
+        [
+            OrgFile(
+                id=str(uuid4()),
+                org_id=org_pair["org_a"].id,
+                client_id=client_a.id,
+                name="atlas-brief.md",
+                file_type=FileType.markdown,
+                status=FileStatus.ready,
+                size_bytes=1024,
+                created_at=datetime.utcnow() - timedelta(days=1),
+                updated_at=datetime.utcnow(),
+            ),
+            OrgFile(
+                id=str(uuid4()),
+                org_id=org_pair["org_a"].id,
+                client_id=client_a.id,
+                name="atlas-report.pdf",
+                file_type=FileType.pdf,
+                status=FileStatus.ready,
+                size_bytes=2048,
+                created_at=datetime.utcnow() - timedelta(days=2),
+                updated_at=datetime.utcnow(),
+            ),
+            OrgFile(
+                id=str(uuid4()),
+                org_id=org_pair["org_b"].id,
+                client_id=client_b.id,
+                name="hidden-report.pdf",
+                file_type=FileType.pdf,
+                status=FileStatus.ready,
+                size_bytes=4096,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            ),
+        ]
+    )
+    await db.commit()
+
+    response = await client.get("/api/analytics/overview?period_days=30", headers=org_pair["org_a_headers"])
+    assert response.status_code == 200
+    payload = response.json()
+
+    storage = payload["storage_metrics"]
+    assert storage["files_this_period"] == 2
+    assert storage["files_by_type"]["markdown"] == 1
+    assert storage["files_by_type"]["pdf"] == 1
+    assert storage["storage_used_bytes"] == 8 * 1024 * 1024 * 1024
+    assert storage["storage_quota_bytes"] == 10 * 1024 * 1024 * 1024
+    assert storage["storage_percent"] == 80.0
+    assert storage["files_by_client"] == [{"name": "Atlas Corp", "count": 2}]

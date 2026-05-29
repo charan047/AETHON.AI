@@ -134,6 +134,7 @@ class ToolRegistry:
             "backend.tools.code.code_executor",
             "backend.tools.file.csv_parser",
             "backend.tools.file.pdf_parser",
+            "backend.tools.storage.file_tools",
         ]
         for module_path in tool_modules:
             for candidate in (module_path, module_path.removeprefix("backend.")):

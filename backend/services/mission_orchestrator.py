@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text as text_q
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.executions import enqueue_workflow_execution
@@ -16,13 +16,18 @@ from database.models import (
     Execution,
     ExecutionStatus,
     ExecutionStep,
+    FileStatus,
+    FileType,
     Mission,
     MissionStatus,
     MissionTask,
     MissionTaskStatus,
+    OrgFile,
+    OrgStorageQuota,
     Workflow,
 )
 from services.model_service import model_service
+from services.storage_service import storage_service
 from services.websocket_manager import ws_manager
 
 
@@ -185,7 +190,8 @@ class MissionOrchestrator:
                 }:
                     continue
 
-                output_summary = await self._extract_output_summary(execution, db)
+                output_text = await self._extract_output_text(execution, db)
+                output_summary = output_text[:1200] if output_text else None
                 task_failed_for_capability = (
                     execution.status == ExecutionStatus.completed
                     and self._looks_like_capability_mismatch(output_summary, agent_map.get(task.agent_id))
@@ -197,8 +203,20 @@ class MissionOrchestrator:
                     if execution.status == ExecutionStatus.completed
                     else MissionTaskStatus.failed
                 )
-                task.output_summary = output_summary
+                task.output_summary = output_text[:500] if output_text else output_summary
                 task.completed_at = execution.completed_at or datetime.utcnow()
+                if (
+                    mission
+                    and execution.status == ExecutionStatus.completed
+                    and output_text
+                ):
+                    await self._persist_task_output_file(
+                        task=task,
+                        mission=mission,
+                        execution=execution,
+                        output_text=output_text,
+                        db=db,
+                    )
                 changed = True
 
             if mission and mission.status == MissionStatus.paused and changed:
@@ -271,14 +289,42 @@ class MissionOrchestrator:
         all_tasks: list[MissionTask],
         mission: Mission,
     ) -> None:
-        context_parts = [f"Goal: {mission.goal}"]
+        context_parts = [f"Mission goal: {mission.goal}"]
         dep_ids = {dep for dep in (task.depends_on or "").split(",") if dep}
-        for dep_id in dep_ids:
-            dep_task = next((item for item in all_tasks if item.id == dep_id), None)
-            if dep_task and dep_task.output_summary:
-                context_parts.append(
-                    f"Previous research ({dep_task.title}):\n{dep_task.output_summary[:800]}"
-                )
+        if dep_ids:
+            async with AsyncSessionLocal() as context_db:
+                for dep_id in dep_ids:
+                    dep_task = next((item for item in all_tasks if item.id == dep_id), None)
+                    if not dep_task:
+                        continue
+
+                    fallback_summary = dep_task.output_summary
+                    if dep_task.output_file_id:
+                        try:
+                            org_file = await context_db.scalar(
+                                select(OrgFile).where(
+                                    OrgFile.id == dep_task.output_file_id,
+                                    OrgFile.org_id == mission.org_id,
+                                )
+                            )
+                            if org_file and org_file.storage_key:
+                                full_content = await storage_service.read_document(org_file.storage_key)
+                                content_text = full_content.decode("utf-8", errors="replace")
+                                context_parts.append(
+                                    f"Full output from '{dep_task.title}':\n{content_text}"
+                                )
+                                continue
+                        except Exception as exc:
+                            logger.warning(
+                                "Could not load file-backed context for task %s: %s",
+                                dep_task.id,
+                                exc,
+                            )
+
+                    if fallback_summary:
+                        context_parts.append(
+                            f"Summary from '{dep_task.title}':\n{fallback_summary}"
+                        )
 
         async with AsyncSessionLocal() as exec_db:
             current_task = await exec_db.scalar(
@@ -432,7 +478,8 @@ class MissionOrchestrator:
                     ExecutionStatus.cancelled,
                     ExecutionStatus.timed_out,
                 }:
-                    output_summary = await self._extract_output_summary(execution, db)
+                    output_text = await self._extract_output_text(execution, db)
+                    output_summary = output_text[:1200] if output_text else None
                     task = await db.scalar(select(MissionTask).where(MissionTask.id == task_id))
                     if task:
                         task.status = (
@@ -440,8 +487,19 @@ class MissionOrchestrator:
                             if execution.status == ExecutionStatus.completed
                             else MissionTaskStatus.failed
                         )
-                        task.output_summary = output_summary
+                        task.output_summary = output_text[:500] if output_text else output_summary
                         task.completed_at = datetime.utcnow()
+                        if (
+                            execution.status == ExecutionStatus.completed
+                            and output_text
+                        ):
+                            await self._persist_task_output_file(
+                                task=task,
+                                mission=mission,
+                                execution=execution,
+                                output_text=output_text,
+                                db=db,
+                            )
                     if mission.status == MissionStatus.paused:
                         mission.status = MissionStatus.active
                     await db.commit()
@@ -472,8 +530,16 @@ class MissionOrchestrator:
         execution: Execution,
         db: AsyncSession,
     ) -> str | None:
+        output_text = await self._extract_output_text(execution, db)
+        return output_text[:1200] if output_text else None
+
+    async def _extract_output_text(
+        self,
+        execution: Execution,
+        db: AsyncSession,
+    ) -> str | None:
         if execution.output_message:
-            return str(execution.output_message)[:1200]
+            return str(execution.output_message)
 
         last_step = await db.scalar(
             select(ExecutionStep)
@@ -485,8 +551,86 @@ class MissionOrchestrator:
             .limit(1)
         )
         if last_step:
-            return str(last_step.content)[:1200]
+            return str(last_step.content)
         return None
+
+    async def _persist_task_output_file(
+        self,
+        *,
+        task: MissionTask,
+        mission: Mission,
+        execution: Execution,
+        output_text: str,
+        db: AsyncSession,
+    ) -> None:
+        if not output_text or len(output_text) <= 100 or task.output_file_id:
+            return
+
+        file_id = str(uuid4())
+        safe_name = (
+            (task.title or "task-output")
+            .replace(" ", "-")
+            .lower()[:60]
+        )
+        filename = f"{safe_name}-{task.id[:8]}.md"
+        output_bytes = output_text.encode("utf-8")
+
+        try:
+            storage_key = await storage_service.write_document(
+                org_id=str(mission.org_id),
+                file_id=file_id,
+                content=output_bytes,
+                content_type="text/markdown",
+                client_id=str(mission.client_id) if mission.client_id else None,
+                filename=filename,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist mission task output for task %s: %s",
+                task.id,
+                exc,
+            )
+            return
+
+        org_file = OrgFile(
+            id=file_id,
+            org_id=str(mission.org_id),
+            client_id=str(mission.client_id) if mission.client_id else None,
+            agent_id=str(task.agent_id) if task.agent_id else None,
+            execution_id=str(execution.id),
+            mission_id=str(mission.id),
+            name=filename,
+            file_type=FileType.markdown,
+            status=FileStatus.ready,
+            storage_key=storage_key,
+            size_bytes=len(output_bytes),
+            content_type="text/markdown",
+            extracted_text=output_text[:50_000],
+            created_by=str(mission.created_by) if mission.created_by else None,
+        )
+        db.add(org_file)
+        await db.flush()
+
+        if "sqlite" in str(db.bind.url):
+            org_file.search_vector = output_text[:50_000]
+        else:
+            await db.execute(
+                text_q(
+                    "UPDATE org_files SET search_vector = to_tsvector('english', :txt) WHERE id = :id"
+                ),
+                {"txt": output_text[:50_000], "id": file_id},
+            )
+
+        quota = await db.scalar(
+            select(OrgStorageQuota).where(OrgStorageQuota.org_id == str(mission.org_id))
+        )
+        if not quota:
+            quota = OrgStorageQuota(org_id=str(mission.org_id))
+            db.add(quota)
+            await db.flush()
+        quota.used_bytes = int(quota.used_bytes or 0) + len(output_bytes)
+
+        task.output_file_id = file_id
 
     async def _finalize_mission(
         self,

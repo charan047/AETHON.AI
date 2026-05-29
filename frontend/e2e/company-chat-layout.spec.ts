@@ -54,7 +54,7 @@ test.describe('Agency Chat layout', () => {
 
     await page.goto('/company-chat')
 
-    const search = page.getByPlaceholder('Search conversations').last()
+    const search = page.getByPlaceholder('Search').last()
     const conversationButton = page.getByRole('button', { name: /Acme weekly thread/i }).first()
     await expect(search).toBeVisible()
     await expect(conversationButton).toBeVisible()
@@ -67,15 +67,16 @@ test.describe('Agency Chat layout', () => {
     await loginHelper(page, request)
     await page.goto('/company-chat')
 
-    const composer = page.getByPlaceholder(/Type a message/i)
-    const sendButton = page.getByTitle('Send')
+    const composer = page.getByPlaceholder(/Type a command or @mention an agent/i)
+    const sendButton = page.getByRole('button', { name: 'Send' })
     const composerFooter = page.locator('footer').filter({ has: composer }).first()
-    const transcript = page.locator('main').locator('div.overflow-y-auto').first()
+    const transcript = page.locator('main').locator('div.overflow-y-auto.overscroll-contain').first()
 
     await expect(composer).toBeVisible()
     await expect(sendButton).toBeVisible()
     await expect(composerFooter).toBeVisible()
     await expect(transcript).toBeVisible()
+    await expect(page.getByText(/Use @ to mention agents/i)).toBeVisible()
 
     await expect(composerFooter).toHaveClass(/sticky/)
     await expect(transcript).toHaveClass(/overflow-y-auto/)

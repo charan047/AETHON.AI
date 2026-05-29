@@ -37,7 +37,10 @@ from database.models import (
     MarketplaceInstall,
     MarketplaceListing,
     MissionTask,
+    FileStatus,
+    FileType,
     NotificationPriority,
+    OrgFile,
     Organization,
     User,
     Workflow,
@@ -46,6 +49,7 @@ from runtime.agent_runner import _extract_text, build_llm
 from services.cto_operator_service import cto_operator_service, looks_like_cto_ownership_request
 from services.cto_service import evaluate_action_authority, get_or_create_authority
 from services.session_store import SessionStore
+from services.storage_service import storage_service
 from services.versioning_service import VersioningService
 from services.websocket_manager import ws_manager
 
@@ -100,6 +104,9 @@ SUPPORTED_ACTION_TYPES = {
     "create_cto_task",
     "cto_memory_add",
     "cto_status",
+    "search_files",
+    "open_document",
+    "reference_file",
 }
 versioning_service = VersioningService()
 
@@ -381,6 +388,23 @@ def _attachment_context(attachments: list[dict[str, Any]]) -> str:
     return "\n\nAttached file context:\n" + "\n\n".join(parts)
 
 
+async def _resolve_client_id_by_ref(client_ref: str | None, org_id: str, db: AsyncSession) -> str | None:
+    ref = str(client_ref or "").strip()
+    if not ref:
+        return None
+
+    clients = (
+        await db.execute(
+            select(Client).where(Client.org_id == org_id)
+        )
+    ).scalars().all()
+    for client in clients:
+        haystacks = [str(client.id), client.name or "", client.company_name or ""]
+        if any(ref.lower() in value.lower() for value in haystacks if value):
+            return str(client.id)
+    return None
+
+
 async def _load_company_context(user_id: str, db: AsyncSession, org_id: str) -> dict:
     authority = await get_or_create_authority(db, org_id)
     profile = (
@@ -607,6 +631,18 @@ Available actions. Only use these exact action types, and never invent new ones:
 <action>{{"type": "create_cto_task", "request": "Handle Acme weekly deliverables", "plan": "1. Maya research 2. Jordan write 3. Deliver portal"}}</action>
 <action>{{"type": "cto_memory_add", "memory_type": "client_preference", "content": "Acme always wants bullet points", "entity_name": "Acme"}}</action>
 <action>{{"type": "cto_status"}}</action>
+
+FILE OPERATIONS (use these when user asks about documents or files):
+<action>{{"type": "search_files", "query": "Acme Corp Q2 research", "client_name": "Acme"}}</action>
+→ Search the organization's files. Use when user asks to find a document,
+  reference previous work, or look up past research.
+
+<action>{{"type": "open_document", "name": "Content Strategy Q3", "client_name": "Acme"}}</action>
+→ Create a new collaborative document. Use when user wants to start
+  writing a document, create a report, or draft content.
+
+<action>{{"type": "reference_file", "file_id": "uuid", "context": "Use this as background"}}</action>
+→ Inject a file as context into the conversation.
 
 For status updates, analysis, summaries, or questions, answer in normal text without an action tag.
 """
@@ -921,6 +957,137 @@ async def _execute_action(
             "label": f"Running workflow \"{workflow.name}\"",
             "execution_id": execution.id,
             "workflow_id": workflow.id,
+        }
+
+    if action_type == "search_files":
+        query = str(action.get("query") or "").strip()
+        client_name = str(action.get("client_name") or "").strip() or None
+
+        from tools.storage.file_tools import search_org_files
+
+        results_text = await search_org_files(
+            query=query,
+            org_id=org_id,
+            client_name=client_name,
+            limit=6,
+        )
+
+        base_q = (
+            select(OrgFile)
+            .where(
+                OrgFile.org_id == org_id,
+                OrgFile.status == FileStatus.ready,
+            )
+            .order_by(OrgFile.created_at.desc())
+            .limit(6)
+        )
+        if client_name:
+            client_id = await _resolve_client_id_by_ref(client_name, org_id, db)
+            if client_id:
+                base_q = base_q.where(OrgFile.client_id == client_id)
+
+        q = base_q
+        if query:
+            q = q.where(
+                or_(
+                    OrgFile.name.ilike(f"%{query}%"),
+                    OrgFile.extracted_text.ilike(f"%{query}%"),
+                )
+            )
+
+        files = (await db.execute(q)).scalars().all()
+        if query and not files:
+            files = (await db.execute(base_q)).scalars().all()
+            if files and results_text.startswith("No files found matching"):
+                results_text = (
+                    f"No exact matches for '{query}'. "
+                    "Showing the latest files in your workspace instead."
+                )
+
+        file_cards = [
+            {
+                "id": str(item.id),
+                "name": item.name,
+                "type": item.file_type.value if item.file_type else "other",
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+                "navigate_to": f"/files/{item.id}/edit" if getattr(item.file_type, "value", item.file_type) == "document" else f"/files?selected={item.id}",
+            }
+            for item in files
+        ]
+
+        return {
+            "type": "search_files",
+            "success": True,
+            "results_text": results_text,
+            "files": file_cards,
+            "message": results_text,
+            "label": f"Found {len(file_cards)} file(s) for '{query or 'all files'}'",
+        }
+
+    if action_type == "open_document":
+        name = str(action.get("name") or "Untitled Document").strip() or "Untitled Document"
+        client_id = await _resolve_client_id_by_ref(
+            str(action.get("client_id") or action.get("client_name") or "").strip(),
+            org_id,
+            db,
+        )
+
+        file = OrgFile(
+            org_id=org_id,
+            client_id=client_id,
+            name=name,
+            description=str(action.get("description") or "").strip() or None,
+            file_type=FileType.document,
+            status=FileStatus.ready,
+            collab_room="",
+            content_type="application/json",
+            created_by=user_id,
+        )
+        db.add(file)
+        await db.flush()
+        file.collab_room = f"org-{org_id}-doc-{file.id}"
+        initial_doc = b'{"type":"doc","content":[]}'
+        file.storage_key = await storage_service.write_document(
+            org_id=org_id,
+            file_id=file.id,
+            content=initial_doc,
+            content_type="application/json",
+            client_id=client_id,
+            filename="document.json",
+        )
+        file.yjs_storage_key = file.storage_key
+        file.size_bytes = len(initial_doc)
+        file.extracted_text = ""
+        await db.commit()
+
+        return {
+            "type": "open_document",
+            "success": True,
+            "file_id": file.id,
+            "collab_room": file.collab_room,
+            "name": name,
+            "navigate_to": f"/files/{file.id}/edit",
+            "label": f"Created document: {name}",
+            "message": f"Created **{name}**. Open editor →",
+        }
+
+    if action_type == "reference_file":
+        file_id = str(action.get("file_id") or "").strip()
+        from tools.storage.file_tools import read_org_file
+
+        content = await read_org_file(file_id=file_id, org_id=org_id)
+        preview = content[:2000]
+        history_message = (
+            f"Referenced file context ({action.get('context') or 'background'}):\n\n{preview}"
+        )
+        return {
+            "type": "reference_file",
+            "success": True,
+            "file_id": file_id,
+            "content": preview,
+            "message": f"File loaded as context:\n\n{content[:500]}...",
+            "label": f"Loaded file {file_id[:8]}",
+            "history_message": history_message,
         }
 
     if action_type == "run_agent":
@@ -2213,7 +2380,12 @@ async def company_chat(
             if action_results:
                 action_summaries = []
                 for result in action_results:
-                    action_summaries.append(result.get("label") or result.get("message") or str(result))
+                    action_summaries.append(
+                        result.get("history_message")
+                        or result.get("label")
+                        or result.get("message")
+                        or str(result)
+                    )
                     yield _json_line({"type": "action", "action": result})
 
                 summary_text = "Action results:\n" + "\n".join(f"- {summary}" for summary in action_summaries)
@@ -2282,7 +2454,12 @@ async def company_chat(
             action.setdefault("conversation_id", conversation_id)
             result = await _execute_action(action, current_user.id, ctx.org.id, db, cto_authority)
             action_results.append(result)
-            action_summaries.append(result.get("label") or result.get("message") or str(result))
+            action_summaries.append(
+                result.get("history_message")
+                or result.get("label")
+                or result.get("message")
+                or str(result)
+            )
             yield _json_line({"type": "action", "action": result})
         await _sync_cto_dispatch_for_conversation(
             org_id=ctx.org.id,

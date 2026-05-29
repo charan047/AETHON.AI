@@ -38,6 +38,7 @@ class MissionTaskResponse(BaseModel):
     depends_on: str | None = None
     status: str
     output_summary: str | None = None
+    output_file_id: str | None = None
     execution_id: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None

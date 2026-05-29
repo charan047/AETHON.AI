@@ -1,4 +1,4 @@
-import { ChangeEvent, useDeferredValue, useMemo, useRef, useState } from 'react'
+import { ChangeEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Download,
@@ -13,10 +13,11 @@ import {
   Search,
   Upload,
 } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { agentsApi, clientsApi, extractApiError, filesApi } from '../api/client'
 import { EmptyState } from '../components/ui/EmptyState'
+import { HeroPanel } from '../components/ui/HeroPanel'
 import { StatusBadge } from '../components/ui/StatusBadge'
 import { toast } from '../lib/toast'
 import { uploadFile } from '../lib/upload'
@@ -55,14 +56,16 @@ function matchesType(file: OrgFileRecord, typeFilter: TypeFilter) {
 }
 
 export function Files() {
+  const { fileId: routeFileId } = useParams<{ fileId?: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const uploadInputRef = useRef<HTMLInputElement | null>(null)
   const [search, setSearch] = useState('')
   const [selectedClientId, setSelectedClientId] = useState<string>('all')
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const [viewMode, setViewMode] = useState<ViewMode>('grid')
-  const [selectedFileId, setSelectedFileId] = useState<string | null>(null)
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(routeFileId || searchParams.get('selected'))
   const [draftName, setDraftName] = useState('')
   const deferredSearch = useDeferredValue(search)
 
@@ -92,6 +95,22 @@ export function Files() {
     () => files.find(file => file.id === selectedFileId) || filesQuery.data?.files.find(file => file.id === selectedFileId) || null,
     [files, filesQuery.data?.files, selectedFileId],
   )
+
+  useEffect(() => {
+    if (routeFileId && routeFileId !== selectedFileId) {
+      setSelectedFileId(routeFileId)
+      return
+    }
+    const selected = searchParams.get('selected')
+    if (!routeFileId && selected && selected !== selectedFileId) {
+      setSelectedFileId(selected)
+    }
+  }, [routeFileId, searchParams, selectedFileId])
+
+  useEffect(() => {
+    setDraftName(selectedFile?.name || '')
+  }, [selectedFile?.id, selectedFile?.name])
+
 
   const versionsQuery = useQuery({
     queryKey: ['file-versions', selectedFileId],
@@ -136,6 +155,12 @@ export function Files() {
     mutationFn: (fileId: string) => filesApi.delete(fileId),
     onSuccess: async () => {
       setSelectedFileId(null)
+      navigate('/files')
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev)
+        next.delete('selected')
+        return next
+      })
       await queryClient.invalidateQueries({ queryKey: ['files'] })
       toast.success('File removed from workspace')
     },
@@ -158,6 +183,7 @@ export function Files() {
       toast.success(`${uploaded.name} uploaded`)
       await queryClient.invalidateQueries({ queryKey: ['files'] })
       setSelectedFileId(uploaded.fileId)
+      navigate(`/files/${uploaded.fileId}`)
     } catch (error) {
       toast.error(extractApiError(error))
     } finally {
@@ -195,15 +221,14 @@ export function Files() {
 
   return (
     <div className="page-shell">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Files</h1>
-          <p className="page-sub">Persistent deliverables, shared documents, and agency exports all live here.</p>
-        </div>
-      </div>
+      <HeroPanel
+        kicker="Agency Workspace"
+        title="Files"
+        subtitle="Persistent deliverables, shared documents, and agency exports all live here."
+      />
 
       <div className="grid gap-5 xl:grid-cols-[240px_minmax(0,1fr)_360px]">
-        <aside className="card p-4">
+        <aside className="card h-fit p-5">
           <div className="section-title">Filters</div>
           <label className="relative block">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--t3)]" />
@@ -262,7 +287,7 @@ export function Files() {
 
         <section className="space-y-4">
           <div className="card flex flex-wrap items-center justify-between gap-3 p-4">
-            <div className="inline-flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-s)] p-1">
+            <div className="inline-flex items-center gap-1 rounded-2xl border border-[var(--border)] bg-[var(--bg-s)] p-1.5">
               <button
                 type="button"
                 onClick={() => setViewMode('grid')}
@@ -319,6 +344,7 @@ export function Files() {
                     onClick={() => {
                       setSelectedFileId(file.id)
                       setDraftName(file.name)
+                      navigate(`/files/${file.id}`)
                     }}
                     className={`card cursor-pointer p-4 text-left transition ${selectedFileId === file.id ? 'card-indigo' : ''}`}
                   >
@@ -359,6 +385,7 @@ export function Files() {
                     onClick={() => {
                       setSelectedFileId(file.id)
                       setDraftName(file.name)
+                      navigate(`/files/${file.id}`)
                     }}
                     className={`row flex w-full items-center gap-3 text-left ${selectedFileId === file.id ? 'row-indigo bg-white/[0.03]' : ''}`}
                   >

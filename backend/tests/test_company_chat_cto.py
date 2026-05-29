@@ -16,10 +16,13 @@ from database.models import (
     CompanyChatMessage,
     Execution,
     ExecutionStatus,
+    FileStatus,
+    FileType,
     HumanApprovalRequest,
     Mission,
     MissionTask,
     MissionTaskStatus,
+    OrgFile,
     Workflow,
 )
 
@@ -88,6 +91,9 @@ def test_system_prompt_includes_cto_sections():
     assert "create_cto_task" in prompt
     assert "cto_memory_add" in prompt
     assert "cto_status" in prompt
+    assert "search_files" in prompt
+    assert "open_document" in prompt
+    assert "reference_file" in prompt
 
 
 def test_cto_ownership_detector_handles_report_back_language():
@@ -152,6 +158,131 @@ async def test_execute_action_handles_cto_actions(db, test_org, test_user):
     assert status_result["success"] is True
     assert len(status_result["tasks"]) == 1
     assert status_result["tasks"][0]["request"] == "Handle Acme weekly deliverables"
+
+
+@pytest.mark.asyncio
+async def test_execute_action_handles_file_actions(monkeypatch, db, test_org, test_user):
+    from api import company_chat as company_chat_module
+
+    client = Client(org_id=test_org.id, name="Acme", company_name="Acme Corp")
+    db.add(client)
+    await db.commit()
+    await db.refresh(client)
+
+    ready_file = OrgFile(
+        id="file-acme-1",
+        org_id=test_org.id,
+        client_id=client.id,
+        name="Acme Q2 Research.md",
+        file_type=FileType.markdown,
+        status=FileStatus.ready,
+        storage_key="orgs/org-1/clients/acme/documents/file-acme-1/research.md",
+        extracted_text="Acme competitor research and positioning notes",
+        content_type="text/markdown",
+    )
+    db.add(ready_file)
+    await db.commit()
+
+    async def fake_search_org_files(query, org_id, client_name=None, limit=8):
+        return f"Found 1 file(s) matching '{query}':\n- ID: file-acme-1"
+
+    async def fake_read_org_file(file_id, org_id):
+        if org_id != test_org.id:
+            return "File not found or not accessible."
+        return "=== File: Acme Q2 Research.md ===\n---\nFull file content for strategy planning."
+
+    async def fake_write_document(*, org_id, file_id, content, content_type, client_id=None, filename="document.json"):
+        assert org_id == test_org.id
+        assert content_type == "application/json"
+        return f"orgs/{org_id}/clients/{client_id}/documents/{file_id}/{filename}"
+
+    monkeypatch.setattr("api.company_chat.search_org_files", fake_search_org_files, raising=False)
+    monkeypatch.setattr("tools.storage.file_tools.search_org_files", fake_search_org_files)
+    monkeypatch.setattr("tools.storage.file_tools.read_org_file", fake_read_org_file)
+    monkeypatch.setattr("api.company_chat.storage_service.write_document", fake_write_document)
+
+    search_result = await company_chat_module._execute_action(
+        {"type": "search_files", "query": "Acme Q2 research", "client_name": "Acme"},
+        test_user.id,
+        test_org.id,
+        db,
+    )
+    assert search_result["type"] == "search_files"
+    assert search_result["success"] is True
+    assert len(search_result["files"]) == 1
+    assert search_result["files"][0]["id"] == "file-acme-1"
+
+    open_result = await company_chat_module._execute_action(
+        {"type": "open_document", "name": "Content Strategy Q3", "client_name": "Acme"},
+        test_user.id,
+        test_org.id,
+        db,
+    )
+    assert open_result["type"] == "open_document"
+    assert open_result["success"] is True
+    assert open_result["navigate_to"] == f"/files/{open_result['file_id']}/edit"
+
+    created_doc = await db.scalar(select(OrgFile).where(OrgFile.id == open_result["file_id"]))
+    assert created_doc is not None
+    assert created_doc.file_type == FileType.document
+    assert created_doc.collab_room == open_result["collab_room"]
+
+    reference_result = await company_chat_module._execute_action(
+        {"type": "reference_file", "file_id": "file-acme-1", "context": "Use this as background"},
+        test_user.id,
+        test_org.id,
+        db,
+    )
+    assert reference_result["type"] == "reference_file"
+    assert reference_result["success"] is True
+    assert "Full file content for strategy planning." in reference_result["content"]
+    assert "Referenced file context" in reference_result["history_message"]
+
+
+@pytest.mark.asyncio
+async def test_search_files_falls_back_to_latest_files_for_broad_queries(monkeypatch, db, test_org, test_user):
+    from api import company_chat as company_chat_module
+
+    client = Client(
+        org_id=test_org.id,
+        name="Atlas",
+        company_name="Atlas Corp",
+        color="#6366F1",
+    )
+    db.add(client)
+    await db.commit()
+    await db.refresh(client)
+
+    ready_file = OrgFile(
+        id="file-atlas-1",
+        org_id=test_org.id,
+        client_id=client.id,
+        name="atlas-research.md",
+        file_type=FileType.markdown,
+        status=FileStatus.ready,
+        storage_key="orgs/test/clients/atlas/documents/atlas-research.md",
+        extracted_text="Atlas positioning and customer research",
+        content_type="text/markdown",
+    )
+    db.add(ready_file)
+    await db.commit()
+
+    async def fake_search_org_files(query, org_id, client_name=None, limit=8):
+        return f"No files found matching '{query}'. The organization may not have any stored files yet."
+
+    monkeypatch.setattr("tools.storage.file_tools.search_org_files", fake_search_org_files)
+
+    result = await company_chat_module._execute_action(
+        {"type": "search_files", "query": "What research have we done for clients?"},
+        test_user.id,
+        test_org.id,
+        db,
+    )
+
+    assert result["success"] is True
+    assert len(result["files"]) == 1
+    assert result["files"][0]["id"] == "file-atlas-1"
+    assert result["message"] == "No exact matches for 'What research have we done for clients?'. Showing the latest files in your workspace instead."
 
 
 @pytest.mark.asyncio

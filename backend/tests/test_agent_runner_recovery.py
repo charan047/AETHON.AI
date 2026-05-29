@@ -249,6 +249,9 @@ async def test_enhanced_system_prompt_injects_ceo_preferences_first(monkeypatch)
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
+        async def scalar(self, *_args, **_kwargs):
+            return 0
+
         async def execute(self, *_args, **_kwargs):
             return _FakeResult([pref])
 
@@ -341,6 +344,9 @@ async def test_enhanced_system_prompt_injects_client_knowledge_and_org_variables
 
         async def __aexit__(self, exc_type, exc, tb):
             return False
+
+        async def scalar(self, *_args, **_kwargs):
+            return 0
 
         async def execute(self, statement, *_args, **_kwargs):
             text = str(statement)

@@ -57,6 +57,15 @@ const EVENT_BADGES: Record<string, string> = {
   in_app_notification: 'bg-emerald-900/40 text-emerald-400 border-emerald-900/60',
   budget_warning: 'bg-amber-900/40 text-amber-400 border-amber-900/60',
   budget_exceeded: 'bg-red-900/40 text-red-400 border-red-900/60',
+  file_ready: 'bg-indigo-900/40 text-indigo-300 border-indigo-900/60',
+}
+
+function formatBytes(bytes?: number | null) {
+  const value = Number(bytes || 0)
+  if (!value) return '—'
+  if (value < 1024) return `${value}B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)}KB`
+  return `${(value / (1024 * 1024)).toFixed(1)}MB`
 }
 
 function eventContent(event: MonitoringEvent): string {
@@ -131,6 +140,8 @@ function eventContent(event: MonitoringEvent): string {
       return `Budget warning: $${event.monthly_spend || 0} of $${event.monthly_budget || 0}`
     case 'budget_exceeded':
       return `Budget exceeded: $${event.monthly_spend || 0} of $${event.monthly_budget || 0}`
+    case 'file_ready':
+      return `${event.name || 'File'} saved${event.client_name ? ` · ${event.client_name}` : ''}`
     case 'thought':
     case 'action':
     case 'observation':
@@ -157,10 +168,44 @@ function LogEntry({
   event: MonitoringEvent
   onOpenExecution: (executionId: string) => void
 }) {
+  const navigate = useNavigate()
   const [expanded, setExpanded] = useState(false)
   const badgeClass = EVENT_BADGES[event.type] || 'bg-slate-800 text-slate-400 border-slate-700'
   const hasExecution = Boolean(event.execution_id)
   const canExpandInline = !hasExecution
+
+  if (event.type === 'file_ready') {
+    return (
+      <div className="group">
+        <div
+          onClick={() => {
+            if (typeof event.navigate_to === 'string' && event.navigate_to.trim()) {
+              navigate(event.navigate_to)
+            }
+          }}
+          className="row flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-slate-800/50"
+        >
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10">
+            <FileText size={13} className="text-indigo-400" />
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-sm font-medium text-white">
+              {String(event.name || 'Untitled file')}
+            </span>
+            {event.client_name ? (
+              <span className="text-[11px] text-[var(--t3)]">
+                {String(event.client_name)}
+              </span>
+            ) : null}
+          </div>
+          <span className="shrink-0 font-mono text-[11px] text-[var(--t3)]">
+            {formatBytes(Number(event.size_bytes || 0))}
+          </span>
+          <span className="badge badge-indigo">saved</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="group">

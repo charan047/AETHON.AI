@@ -35,6 +35,7 @@ import type {
   AgencyOverview,
   FeedbackType,
   DashboardSummary,
+  DocumentCommentRecord,
   WorkflowVersion,
   WorkflowVersionDetail,
   WorkflowVersionDiff,
@@ -60,11 +61,13 @@ import type {
   ModelConfigRecord,
   ModelTemplate,
   ModelTestResult,
+  InAppNotificationRecord,
   Organization,
   OrgInvite,
   OrgMember,
   OrgMemberRole,
   OrgVariableRecord,
+  StorageUsageSummary,
   ScoringMethod,
   CEOInboxResponse,
   InboxMessage,
@@ -257,6 +260,8 @@ export const portalApi = {
 export const filesApi = {
   list: (params?: { client_id?: string; file_type?: string; search?: string; limit?: number; offset?: number }) =>
     api.get<OrgFileListResponse>('/files', { params }).then(r => r.data),
+  storageUsage: () =>
+    api.get<StorageUsageSummary>('/files/storage/usage').then(r => r.data),
   get: (fileId: string) => api.get<OrgFileRecord>(`/files/${fileId}`).then(r => r.data),
   versions: (fileId: string) => api.get<OrgFileRecord[]>(`/files/${fileId}/versions`).then(r => r.data),
   delete: (fileId: string) => api.delete<{ file_id: string; status: string }>(`/files/${fileId}`).then(r => r.data),
@@ -284,6 +289,17 @@ export const filesApi = {
     })),
   agentWrite: (fileId: string, data: { content: string; agent_name?: string }) =>
     api.post<{ file_id: string; status: string; room: string }>(`/files/${fileId}/agent-write`, data).then(r => r.data),
+}
+
+export const commentsApi = {
+  list: (fileId: string) =>
+    api.get<DocumentCommentRecord[]>(`/files/${fileId}/comments`).then(r => r.data),
+  create: (fileId: string, data: { comment_id: string; content: string; quoted_text?: string | null }) =>
+    api.post<DocumentCommentRecord>(`/files/${fileId}/comments`, data).then(r => r.data),
+  resolve: (fileId: string, commentId: string) =>
+    api.patch<DocumentCommentRecord>(`/files/${fileId}/comments/${commentId}/resolve`).then(r => r.data),
+  remove: (fileId: string, commentId: string) =>
+    api.delete<{ comment_id: string; deleted: boolean }>(`/files/${fileId}/comments/${commentId}`).then(r => r.data),
 }
 
 export const a2aApi = {
@@ -633,7 +649,14 @@ export const integrationsApi = {
 }
 
 export const notificationsApi = {
-  list: (unreadOnly = true) => api.get('/notifications', { params: { unread_only: unreadOnly } }).then(r => r.data),
+  list: (params?: { unread_only?: boolean; limit?: number }) =>
+    api.get<InAppNotificationRecord[]>('/notifications', { params }).then(r => r.data),
+  markRead: (ids: string[]) =>
+    api.post<{ updated: number }>('/notifications/mark-read', { notification_ids: ids }).then(r => r.data),
+  markAllRead: () =>
+    api.post<{ updated: number }>('/notifications/mark-read', { all: true }).then(r => r.data),
+  unreadCount: () => api.get<{ count: number }>('/notifications/unread-count').then(r => r.data),
+  dismiss: (id: string) => api.delete(`/notifications/${id}`).then(r => r.data),
   count: () => api.get<{ unread: number }>('/notifications/count').then(r => r.data),
   preferences: () => api.get<NotificationPreference>('/notifications/preferences').then(r => r.data),
   updatePreferences: (data: NotificationPreference) =>

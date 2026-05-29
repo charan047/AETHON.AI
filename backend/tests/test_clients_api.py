@@ -204,6 +204,8 @@ async def test_portal_includes_ready_deliverable_files(authed_client, db, test_o
     assert response.status_code == 200
     payload = response.json()
     assert len(payload["files"]) == 1
+    assert payload["deliverable_count"] == 1
+    assert len(payload["deliverables"]) == 1
     assert payload["files"][0]["name"] == "atlas-brief.pdf"
     assert payload["files"][0]["file_type"] == "pdf"
     assert payload["files"][0]["download_url"]

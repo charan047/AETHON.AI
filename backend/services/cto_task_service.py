@@ -388,7 +388,7 @@ class CTOTaskService:
                 title="CTO Update",
                 message=message_text[:120],
                 priority=NotificationPriority.normal,
-                action_url="/agency-chat",
+                action_url="/company-chat",
             )
         )
 

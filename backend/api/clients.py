@@ -197,16 +197,26 @@ def _knowledge_payload(entry: ClientKnowledge) -> dict:
 
 
 async def _portal_file_payload(file: OrgFile, request: Request, portal_token: str) -> dict:
-    if storage_service._uses_local_storage():
-        download_url = str(
-            request.url_for(
-                "download_portal_file_content",
-                portal_token=portal_token,
-                file_id=file.id,
-            )
+    download_url: str | None = None
+    fallback_url = str(
+        request.url_for(
+            "download_portal_file_content",
+            portal_token=portal_token,
+            file_id=file.id,
         )
-    else:
-        download_url = await storage_service.generate_download_url(file.storage_key or "", file.name)
+    )
+    if file.storage_key:
+        try:
+            if storage_service._uses_local_storage():
+                download_url = fallback_url
+            else:
+                download_url = await storage_service.generate_download_url(
+                    storage_key=file.storage_key,
+                    filename=file.name,
+                    expires_in=3600,
+                )
+        except Exception:
+            download_url = fallback_url
 
     return {
         "id": file.id,
@@ -539,10 +549,9 @@ async def get_client_portal(
                 OrgFile.org_id == client.org_id,
                 OrgFile.client_id == client.id,
                 OrgFile.status == FileStatus.ready,
-                OrgFile.is_latest.is_(True),
             )
             .order_by(OrgFile.created_at.desc())
-            .limit(25)
+            .limit(30)
         )
     ).scalars().all()
 
@@ -630,6 +639,8 @@ async def get_client_portal(
             }
         )
 
+    portal_files = [await _portal_file_payload(file, request, portal_token) for file in ready_files]
+
     return {
         "client_name": client.company_name or client.name,
         "service_type": client.service_type,
@@ -648,7 +659,9 @@ async def get_client_portal(
             }
             for mission in recent_mission_rows
         ],
-        "files": [await _portal_file_payload(file, request, portal_token) for file in ready_files],
+        "files": portal_files,
+        "deliverables": portal_files,
+        "deliverable_count": len(portal_files),
         "agents": [
             {
                 "name": agent.persona_name or agent.name,
@@ -673,8 +686,6 @@ async def download_portal_file_content(
     file_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    if not storage_service._uses_local_storage():
-        raise HTTPException(status_code=404, detail="Local portal file content route is disabled")
     client = await db.scalar(
         select(Client).where(
             Client.portal_token == portal_token,

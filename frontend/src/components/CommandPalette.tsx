@@ -12,10 +12,12 @@ import {
   CheckCircle,
   CheckCircle2,
   Cpu,
+  FileText,
   GitBranch,
   LayoutDashboard,
   Plus,
   Plug,
+  Search,
   Settings,
   Store,
   Target,
@@ -23,11 +25,15 @@ import {
   UserPlus,
   Users,
 } from 'lucide-react'
-import { agentsApi, clientsApi } from '../api/client'
+import { agentsApi, api, clientsApi } from '../api/client'
+import { useDebounce } from '../hooks/useDebounce'
+import type { GlobalSearchResponse, SearchResult } from '../types'
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false)
+  const [searchValue, setSearchValue] = useState('')
   const navigate = useNavigate()
+  const debouncedQ = useDebounce(searchValue.trim(), 300)
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -43,6 +49,12 @@ export function CommandPalette() {
     return () => document.removeEventListener('keydown', down)
   }, [])
 
+  useEffect(() => {
+    if (!open) {
+      setSearchValue('')
+    }
+  }, [open])
+
   const { data: agents = [] } = useQuery({
     queryKey: ['agents-cmdk'],
     queryFn: () => agentsApi.list(),
@@ -55,8 +67,28 @@ export function CommandPalette() {
     enabled: open,
     staleTime: 30_000,
   })
+  const { data: searchResults, isFetching } = useQuery({
+    queryKey: ['global-search', debouncedQ],
+    queryFn: () =>
+      debouncedQ.length >= 2
+        ? api.get<GlobalSearchResponse>('/search', { params: { q: debouncedQ } }).then(r => r.data)
+        : Promise.resolve({ results: [], total: 0, query: debouncedQ }),
+    enabled: open && debouncedQ.length >= 2,
+    staleTime: 30_000,
+  })
 
   const clients = clientsResponse?.clients || []
+  const showingSearchResults = searchValue.trim().length >= 2
+  const results = searchResults?.results || []
+
+  const ICON_MAP = {
+    agent: Bot,
+    client: Building,
+    file: FileText,
+    execution: Activity,
+    mission: Target,
+    workflow: GitBranch,
+  } satisfies Record<SearchResult['type'], typeof Bot>
 
   const PAGES = [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/' },
@@ -100,87 +132,143 @@ export function CommandPalette() {
             transition={{ duration: 0.15 }}
             onClick={e => e.stopPropagation()}
           >
-            <Command>
+            <Command shouldFilter={false}>
               <Command.Input
                 className="cmdk-input"
                 placeholder="Search or run commands..."
                 autoFocus
+                value={searchValue}
+                onValueChange={setSearchValue}
               />
               <Command.List style={{ maxHeight: 340, overflowY: 'auto' }}>
-                <Command.Empty>
-                  <div className="p-6 text-center text-sm" style={{ color: 'rgba(255,255,255,0.35)' }}>
-                    No results
-                  </div>
-                </Command.Empty>
-
-                <Command.Group heading={<span className="cmdk-group">Quick Actions</span>}>
-                  {ACTIONS.map(a => (
-                    <Command.Item key={a.label} className="cmdk-row-item" onSelect={a.action}>
-                      <a.icon size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
-                      {a.label}
-                    </Command.Item>
-                  ))}
-                </Command.Group>
-
-                <Command.Group heading={<span className="cmdk-group">Navigate</span>}>
-                  {PAGES.map(p => (
-                    <Command.Item
-                      key={p.path}
-                      className="cmdk-row-item"
-                      onSelect={() => {
-                        navigate(p.path)
-                        setOpen(false)
-                      }}
-                    >
-                      <p.icon size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
-                      {p.label}
-                      <span
-                        className="ml-auto rounded font-mono text-[10px]"
-                        style={{ color: 'rgba(255,255,255,0.25)', background: 'rgba(255,255,255,0.06)', padding: '2px 5px' }}
+                {showingSearchResults ? (
+                  <>
+                    {results.length > 0 || isFetching ? (
+                      <Command.Group
+                        heading={(
+                          <span className="cmdk-group">
+                            Search Results
+                            {isFetching ? <span className="ml-2 text-t4">...</span> : null}
+                          </span>
+                        )}
                       >
-                        ↵
-                      </span>
-                    </Command.Item>
-                  ))}
-                </Command.Group>
+                        {results.map(result => {
+                          const Icon = ICON_MAP[result.type] ?? Search
+                          return (
+                            <Command.Item
+                              key={`${result.type}-${result.id}`}
+                              value={`${result.title} ${result.subtitle} ${result.type}`}
+                              className="cmdk-row-item"
+                              onSelect={() => {
+                                navigate(result.navigate_to)
+                                setOpen(false)
+                              }}
+                            >
+                              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white/[0.06]">
+                                <Icon size={12} style={{ color: 'rgba(255,255,255,0.55)' }} />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <span className="block truncate text-sm text-white">
+                                  {result.title}
+                                </span>
+                                {result.subtitle ? (
+                                  <span className="block truncate text-[11px] text-t3">
+                                    {result.subtitle}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <span className="shrink-0 rounded bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-t4">
+                                {result.type}
+                              </span>
+                            </Command.Item>
+                          )
+                        })}
+                        {results.length === 0 && isFetching ? (
+                          <div className="px-4 py-3 text-sm text-t3">
+                            Searching…
+                          </div>
+                        ) : null}
+                      </Command.Group>
+                    ) : null}
 
-                {agents.length > 0 && (
-                  <Command.Group heading={<span className="cmdk-group">Team Members</span>}>
-                    {agents.slice(0, 5).map(a => (
-                      <Command.Item
-                        key={a.id}
-                        className="cmdk-row-item"
-                        onSelect={() => {
-                          navigate(`/agents?agent=${a.id}`)
-                          setOpen(false)
-                        }}
-                      >
-                        <Bot size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
-                        {a.persona_name || a.name}
-                        <span className="ml-1 text-xs" style={{ color: 'rgba(255,255,255,0.30)' }}>
-                          {a.role}
-                        </span>
-                      </Command.Item>
-                    ))}
-                  </Command.Group>
-                )}
+                    {debouncedQ.length >= 2 && results.length === 0 && !isFetching ? (
+                      <div className="py-6 text-center text-sm text-t3">
+                        No results for "{debouncedQ}"
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <Command.Group heading={<span className="cmdk-group">Quick Actions</span>}>
+                      {ACTIONS.map(a => (
+                        <Command.Item key={a.label} className="cmdk-row-item" onSelect={a.action}>
+                          <a.icon size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
+                          {a.label}
+                        </Command.Item>
+                      ))}
+                    </Command.Group>
 
-                {clients.length > 0 && (
-                  <Command.Group heading={<span className="cmdk-group">Clients</span>}>
-                    {clients.slice(0, 5).map(c => (
-                      <Command.Item
-                        key={c.id}
-                        className="cmdk-row-item"
-                        onSelect={() => {
-                          navigate(`/clients/${c.id}`)
-                          setOpen(false)
-                        }}
-                      >
-                        <Building size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
-                        {c.company_name || c.name}
-                      </Command.Item>
-                    ))}
-                  </Command.Group>
+                    <Command.Group heading={<span className="cmdk-group">Navigate</span>}>
+                      {PAGES.map(p => (
+                        <Command.Item
+                          key={p.path}
+                          className="cmdk-row-item"
+                          onSelect={() => {
+                            navigate(p.path)
+                            setOpen(false)
+                          }}
+                        >
+                          <p.icon size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
+                          {p.label}
+                          <span
+                            className="ml-auto rounded font-mono text-[10px]"
+                            style={{ color: 'rgba(255,255,255,0.25)', background: 'rgba(255,255,255,0.06)', padding: '2px 5px' }}
+                          >
+                            ↵
+                          </span>
+                        </Command.Item>
+                      ))}
+                    </Command.Group>
+
+                    {agents.length > 0 && (
+                      <Command.Group heading={<span className="cmdk-group">Team Members</span>}>
+                        {agents.slice(0, 5).map(a => (
+                          <Command.Item
+                            key={a.id}
+                            className="cmdk-row-item"
+                            onSelect={() => {
+                              navigate(`/agents?agent=${a.id}`)
+                              setOpen(false)
+                            }}
+                          >
+                            <Bot size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
+                            {a.persona_name || a.name}
+                            <span className="ml-1 text-xs" style={{ color: 'rgba(255,255,255,0.30)' }}>
+                              {a.role}
+                            </span>
+                          </Command.Item>
+                        ))}
+                      </Command.Group>
+                    )}
+
+                    {clients.length > 0 && (
+                      <Command.Group heading={<span className="cmdk-group">Clients</span>}>
+                        {clients.slice(0, 5).map(c => (
+                          <Command.Item
+                            key={c.id}
+                            className="cmdk-row-item"
+                            onSelect={() => {
+                              navigate(`/clients/${c.id}`)
+                              setOpen(false)
+                            }}
+                          >
+                            <Building size={14} style={{ color: 'rgba(255,255,255,0.40)' }} />
+                            {c.company_name || c.name}
+                          </Command.Item>
+                        ))}
+                      </Command.Group>
+                    )}
+                  </>
                 )}
               </Command.List>
 

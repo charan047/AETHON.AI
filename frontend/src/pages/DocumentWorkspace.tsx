@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -15,6 +16,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { clientsApi, extractApiError, filesApi } from '../api/client'
 import { DocumentEditor } from '../components/editor/DocumentEditor'
+import { useAnchoredFloating } from '../hooks/useAnchoredFloating'
 import { toast } from '../lib/toast'
 
 function formatTimestamp(value?: string | null) {
@@ -48,6 +50,18 @@ export function DocumentWorkspace() {
   const [showSidebar, setShowSidebar] = useState(true)
   const [collaborators, setCollaborators] = useState<Array<{ name: string; color: string }>>([])
   const [latestText, setLatestText] = useState('')
+  const exportTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const exportMenuRef = useRef<HTMLDivElement | null>(null)
+  const sidebarRef = useRef<HTMLElement | null>(null)
+  const exportMenuStyle = useAnchoredFloating({
+    open: showExportMenu,
+    anchorRef: exportTriggerRef,
+    panelRef: exportMenuRef,
+    vertical: 'below',
+    horizontal: 'end',
+    offset: 8,
+    avoidRef: showSidebar ? sidebarRef : undefined,
+  })
 
   const fileQuery = useQuery({
     queryKey: ['org-file', fileId],
@@ -68,6 +82,30 @@ export function DocumentWorkspace() {
     setLatestText(fileQuery.data.extracted_text || '')
     setWordCount(fileQuery.data.extracted_text?.trim() ? fileQuery.data.extracted_text.trim().split(/\s+/).length : 0)
   }, [fileQuery.data])
+
+  useEffect(() => {
+    if (!showExportMenu) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (!exportTriggerRef.current?.contains(target) && !exportMenuRef.current?.contains(target)) {
+        setShowExportMenu(false)
+      }
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowExportMenu(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [showExportMenu])
 
   const renameMutation = useMutation({
     mutationFn: (name: string) => filesApi.update(fileId, { name }),
@@ -186,7 +224,7 @@ export function DocumentWorkspace() {
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--t1)]">
-      <header className="border-b border-[var(--border)] bg-[var(--bg)]/95 backdrop-blur">
+      <header className="border-b border-[var(--border-soft)] bg-[var(--bg)]/95 backdrop-blur">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-3 px-5 py-4">
           <button
             type="button"
@@ -197,12 +235,13 @@ export function DocumentWorkspace() {
             Back
           </button>
 
-          <div className="min-w-[220px] flex-1">
+          <div className="min-w-[220px] flex-1 rounded-[24px] border border-[var(--border)] bg-[var(--surface-card)] px-4 py-3 shadow-[var(--shadow-soft)]">
+            <div className="page-kicker">Collaborative Document</div>
             <input
               value={draftName}
               onChange={event => setDraftName(event.target.value)}
               onBlur={handleRenameBlur}
-              className="w-full border-0 bg-transparent text-lg font-semibold tracking-tight text-[var(--t1)] outline-none"
+              className="mt-1 w-full border-0 bg-transparent text-lg font-semibold tracking-tight text-[var(--t1)] outline-none"
             />
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--t3)]">
               {clientName ? (
@@ -214,62 +253,73 @@ export function DocumentWorkspace() {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => handleRenameBlur()}
-            className="btn-secondary btn-sm"
-            disabled={renameMutation.isPending}
-          >
-            {renameMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check size={14} />}
-            Save
-          </button>
-
-          <div className="relative">
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
-              onClick={() => setShowExportMenu(current => !current)}
-              className="btn-primary btn-sm"
+              onClick={() => handleRenameBlur()}
+              className="btn-secondary btn-sm"
+              disabled={renameMutation.isPending}
             >
-              <Download size={14} />
-              Export
-              <ChevronDown size={14} />
+              {renameMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check size={14} />}
+              Save
             </button>
-            {showExportMenu ? (
-              <div className="absolute right-0 top-[calc(100%+8px)] z-20 w-40 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-2 shadow-xl">
-                {([
-                  ['pdf', 'Export PDF'],
-                  ['docx', 'Export DOCX'],
-                  ['markdown', 'Export Markdown'],
-                ] as const).map(([format, label]) => (
-                  <button
-                    key={format}
-                    type="button"
-                    onClick={() => {
-                      setShowExportMenu(false)
-                      exportMutation.mutate(format)
-                    }}
-                    className="row w-full rounded-xl px-3 py-2 text-left text-sm text-[var(--t2)] hover:text-[var(--t1)]"
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
 
-          <button
-            type="button"
-            onClick={() => setShowSidebar(current => !current)}
-            className="btn-ghost btn-sm"
-          >
-            {showSidebar ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
-            {showSidebar ? 'Hide panel' : 'Show panel'}
-          </button>
+            <div className="relative">
+              <button
+                ref={exportTriggerRef}
+                type="button"
+                onClick={() => setShowExportMenu(current => !current)}
+                className="btn-primary btn-sm"
+                data-testid="document-export-trigger"
+              >
+                <Download size={14} />
+                Export
+                <ChevronDown size={14} />
+              </button>
+              {showExportMenu && typeof document !== 'undefined'
+                ? createPortal(
+                <div
+                  ref={exportMenuRef}
+                  data-testid="document-export-menu"
+                  className="z-[90] w-40 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-2 shadow-xl"
+                  style={exportMenuStyle}
+                >
+                  {([
+                    ['pdf', 'Export PDF'],
+                    ['docx', 'Export DOCX'],
+                    ['markdown', 'Export Markdown'],
+                  ] as const).map(([format, label]) => (
+                    <button
+                      key={format}
+                      type="button"
+                      onClick={() => {
+                        setShowExportMenu(false)
+                        exportMutation.mutate(format)
+                      }}
+                      className="row w-full rounded-xl px-3 py-2 text-left text-sm text-[var(--t2)] hover:text-[var(--t1)]"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>,
+                document.body,
+              ) : null}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowSidebar(current => !current)}
+              className="btn-ghost btn-sm"
+            >
+              {showSidebar ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+              {showSidebar ? 'Hide panel' : 'Show panel'}
+            </button>
+          </div>
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-[1600px] gap-0 lg:grid-cols-[minmax(0,1fr)_280px]">
-        <main className="min-w-0 border-r border-[var(--border)] px-5 py-5 lg:px-8">
+      <div className="mx-auto grid max-w-[1600px] gap-0 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <main className="min-w-0 px-5 py-5 xl:border-r xl:border-r-[var(--border)] xl:px-8">
           <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               {presenceList.map((user, index) => (
@@ -290,25 +340,27 @@ export function DocumentWorkspace() {
             </span>
           </div>
 
-          <div className="mx-auto max-w-2xl">
-            <DocumentEditor
-              room={fileQuery.data.collab_room || `org-doc-${fileQuery.data.id}`}
-              fileId={fileQuery.data.id}
-              minimalChrome
-              editorClassName="mx-auto max-w-2xl"
-              onSaveStateChange={state => setSaveState(state)}
-              onPresenceChange={setCollaborators}
-              onSave={({ text, wordCount: nextWordCount }) => {
-                setLatestText(text)
-                setWordCount(nextWordCount)
-                setLastSavedAt(new Date().toISOString())
-              }}
-            />
-          </div>
+          <DocumentEditor
+            room={fileQuery.data.collab_room || `org-doc-${fileQuery.data.id}`}
+            fileId={fileQuery.data.id}
+            minimalChrome
+            editorClassName="mx-auto max-w-2xl"
+            onSaveStateChange={state => setSaveState(state)}
+            onPresenceChange={setCollaborators}
+            onContentChange={({ text, wordCount: nextWordCount }) => {
+              setLatestText(text)
+              setWordCount(nextWordCount)
+            }}
+            onSave={({ text, wordCount: nextWordCount }) => {
+              setLatestText(text)
+              setWordCount(nextWordCount)
+              setLastSavedAt(new Date().toISOString())
+            }}
+          />
         </main>
 
         {showSidebar ? (
-          <aside className="border-t border-[var(--border)] bg-[var(--bg-s)] px-5 py-5 lg:border-l lg:border-t-0">
+          <aside ref={sidebarRef} data-testid="document-workspace-sidebar" className="border-t border-[var(--border)] bg-[var(--bg-s)] px-5 py-5 xl:border-l xl:border-t-0">
             <div className="space-y-5">
               <section className="card p-4">
                 <div className="section-title">AI Assistant</div>

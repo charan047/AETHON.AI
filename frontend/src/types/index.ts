@@ -209,6 +209,48 @@ export interface OrgFileListResponse {
   offset: number
 }
 
+export interface DocumentCommentRecord {
+  id: string
+  comment_id: string
+  content: string
+  quoted_text?: string | null
+  resolved: boolean
+  created_by?: string | null
+  created_by_name?: string | null
+  created_at: string
+  resolved_at?: string | null
+  resolved_by?: string | null
+}
+
+export interface StorageUsageSummary {
+  used_bytes: number
+  quota_bytes: number
+  used_gb: number
+  quota_gb: number
+  percent_used: number
+  file_count: number
+  status: 'healthy' | 'warning' | 'critical'
+}
+
+export type SearchResultType = 'agent' | 'client' | 'file' | 'execution' | 'mission' | 'workflow'
+
+export interface SearchResult {
+  type: SearchResultType
+  id: string
+  title: string
+  subtitle: string
+  navigate_to: string
+  score: number
+  created_at: string
+  icon: string
+}
+
+export interface GlobalSearchResponse {
+  results: SearchResult[]
+  total: number
+  query: string
+}
+
 export interface LongTaskStatus {
   task_id: string
   agent_id?: string
@@ -413,6 +455,17 @@ export interface NotificationPreference {
   daily_digest_enabled: boolean
   daily_digest_time: string
   notification_email?: string | null
+}
+
+export interface InAppNotificationRecord {
+  id: string
+  title: string
+  message: string
+  priority: string
+  notification_type: string
+  is_read: boolean
+  action_url?: string | null
+  created_at?: string | null
 }
 
 export interface WorkflowVersion {
@@ -1018,6 +1071,17 @@ export interface AnalyticsOverview {
   avg_revisions: number
   pending_review_count: number
   tool_calls: number
+  storage_metrics?: {
+    files_this_period: number
+    files_by_type: Record<string, number>
+    storage_used_bytes: number
+    storage_quota_bytes: number
+    storage_percent: number
+    files_by_client: Array<{
+      name: string
+      count: number
+    }>
+  }
   api_calls_last_minute: number
 }
 
@@ -1326,6 +1390,7 @@ export interface ChatActionResult {
   success: boolean
   label?: string
   message?: string
+  history_message?: string
   page?: string
   execution_id?: string
   agent_id?: string
@@ -1346,6 +1411,19 @@ export interface ChatActionResult {
   mission_id?: string
   mission_title?: string
   task_count?: number
+  file_id?: string
+  collab_room?: string
+  name?: string
+  navigate_to?: string
+  content?: string
+  files?: Array<{
+    id: string
+    name: string
+    type?: string
+    created_at?: string | null
+    navigate_to?: string
+  }>
+  results_text?: string
 }
 
 export interface CompanyChatStreamEvent {
@@ -1395,6 +1473,14 @@ export interface WsEvent {
   node_id?: string
   response?: string
   step?: ExecutionStep
+  file_id?: string
+  file_type?: string
+  client_id?: string | null
+  client_name?: string | null
+  agent_id?: string | null
+  size_bytes?: number
+  created_at?: string
+  navigate_to?: string
   [key: string]: unknown
 }
 

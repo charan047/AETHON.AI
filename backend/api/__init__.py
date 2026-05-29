@@ -33,6 +33,7 @@ from .missions import router as missions_router
 from .files import router as files_router
 from .org_variables import router as org_variables_router
 from .intake import router as intake_router, public_router as public_intake_router
+from .search import router as search_router
 from .a2a import internal_router as a2a_internal_router
 from .system_settings import router as settings_router
 if settings.enable_testing_api or settings.environment == "test":
@@ -74,6 +75,7 @@ api_router.include_router(roles_router, prefix="/roles", tags=["roles"])
 api_router.include_router(messages_router, prefix="/messages", tags=["messages"])
 api_router.include_router(missions_router, tags=["missions"])
 api_router.include_router(files_router, prefix="/files", tags=["files"])
+api_router.include_router(search_router, prefix="/search", tags=["search"])
 api_router.include_router(org_variables_router, prefix="/org", tags=["org-variables"])
 api_router.include_router(intake_router, prefix="/intake", tags=["intake"])
 api_router.include_router(public_intake_router, prefix="/intake", tags=["intake-public"])

@@ -302,10 +302,6 @@ function AppFrame() {
           }
         />
         <Route
-          path="files/:fileId"
-          element={<Navigate to="edit" replace />}
-        />
-        <Route
           element={
             <ProtectedRoute>
               <OnboardingGate>
@@ -322,6 +318,7 @@ function AppFrame() {
           <Route path="clients" element={<Clients />} />
           <Route path="clients/:clientId" element={<Clients />} />
           <Route path="files" element={<Files />} />
+          <Route path="files/:fileId" element={<Files />} />
           <Route path="messages" element={<DirectMessages />} />
           <Route path="messages/:agentId" element={<DirectMessages />} />
           <Route path="agents" element={<Agents />} />

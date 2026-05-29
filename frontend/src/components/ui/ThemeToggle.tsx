@@ -39,7 +39,7 @@ export function ThemeToggle() {
       type="button"
       onClick={toggleTheme}
       aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-      className="btn-icon relative overflow-hidden border border-white/[0.08] bg-white/[0.03] text-white/55 hover:text-white"
+      className="btn-icon relative overflow-hidden"
     >
       <span
         className="absolute inset-0 transition-transform duration-200"

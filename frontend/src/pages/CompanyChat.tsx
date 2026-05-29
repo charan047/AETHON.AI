@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
@@ -23,6 +24,7 @@ import {
   CirclePause,
   Clock3,
   Copy,
+  Edit3,
   FileText,
   Loader2,
   MoreHorizontal,
@@ -48,6 +50,7 @@ import { MarkdownContent, cleanMarkdownContent } from '../components/ui/Markdown
 import { AnimatedList, AnimatedListItem } from '../components/ui/magicui/AnimatedList'
 import { useAuth } from '../contexts/AuthContext'
 import { useWebSocket } from '../contexts/WebSocketContext'
+import { useAnchoredFloating } from '../hooks/useAnchoredFloating'
 import { toast } from '../lib/toast'
 import type {
   Agent,
@@ -339,6 +342,56 @@ function ExecutionProgressCard({
   )
 }
 
+function FileSearchResults({
+  files,
+}: {
+  files: NonNullable<ChatActionResult['files']>
+}) {
+  const navigate = useNavigate()
+  if (!files?.length) return null
+
+  return (
+    <div className="mt-3 space-y-1.5">
+      {files.map(file => (
+        <button
+          key={file.id}
+          onClick={() => navigate(file.navigate_to || `/files?selected=${file.id}`)}
+          className="flex w-full items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-left transition-all duration-150 hover:border-white/[0.12] hover:bg-white/[0.04]"
+        >
+          <FileText size={14} className="shrink-0 text-[var(--t3)]" />
+          <span className="flex-1 truncate text-sm font-medium text-white">
+            {file.name}
+          </span>
+          <span className="shrink-0 font-mono text-[11px] text-[var(--t3)]">
+            {file.created_at ? new Date(file.created_at).toLocaleDateString() : ''}
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function DocumentCreatedCard({ action }: { action: ChatActionResult }) {
+  const navigate = useNavigate()
+
+  if (!action.navigate_to) return null
+
+  return (
+    <button
+      onClick={() => navigate(action.navigate_to!)}
+      className="mt-3 flex w-full items-center gap-3 rounded-xl border border-indigo-500/20 bg-indigo-500/[0.06] px-4 py-3 text-left transition-all duration-150 hover:border-indigo-500/35"
+    >
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-500/15">
+        <Edit3 size={15} className="text-indigo-400" />
+      </div>
+      <div>
+        <p className="text-sm font-semibold text-white">{action.name}</p>
+        <p className="text-[11px] text-indigo-300">Open editor →</p>
+      </div>
+    </button>
+  )
+}
+
 function ActionCard({
   action,
   activeExecutions,
@@ -387,6 +440,10 @@ function ActionCard({
         </div>
       </div>
     )
+  }
+
+  if (action.type === 'open_document') {
+    return <DocumentCreatedCard action={action} />
   }
 
   return (
@@ -441,6 +498,10 @@ function ActionCard({
               <MarkdownMessage content={action.analysis} />
             </div>
           )}
+
+          {action.type === 'search_files' && action.files?.length ? (
+            <FileSearchResults files={action.files} />
+          ) : null}
 
           {action.type === 'show_analytics' && action.data && (
             <div className="mt-3 rounded-2xl border border-white/[0.08] bg-black/15 p-3 text-sm text-white/85">
@@ -709,6 +770,7 @@ export function CompanyChat() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null)
   const messagesRef = useRef<ChatMessage[]>([])
   const seenEventRef = useRef<string | null>(null)
   const streamingConversationRef = useRef<string | null>(null)
@@ -740,6 +802,14 @@ export function CompanyChat() {
   })
 
   messagesRef.current = messages
+  const menuStyle = useAnchoredFloating({
+    open: showMenu,
+    anchorRef: menuButtonRef,
+    panelRef: menuRef,
+    vertical: 'below',
+    horizontal: 'end',
+    offset: 8,
+  })
 
   const founderName = initialsFromEmail(auth.email)
   const conversationStorageKey = auth.userId ? `company_chat_conversation:${auth.userId}` : null
@@ -829,7 +899,8 @@ export function CompanyChat() {
     if (!showMenu) return
 
     const handlePointerDown = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node
+      if (!menuRef.current?.contains(target) && !menuButtonRef.current?.contains(target)) {
         setShowMenu(false)
       }
     }
@@ -1241,14 +1312,14 @@ export function CompanyChat() {
 
   const conversationSidebar = (
     <aside
-      className="flex h-full w-[260px] shrink-0 flex-col border-r border-white/[0.07] bg-transparent"
+      className="flex h-full w-[260px] shrink-0 flex-col border-r border-[var(--border-soft)] bg-[var(--surface)]/85 backdrop-blur-xl"
     >
       <div className="flex h-14 items-center justify-between px-4">
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white">
             <Building2 size={15} />
           </div>
-          <span className="text-sm font-bold tracking-tight text-white">Agency Chat</span>
+          <span className="text-sm font-bold tracking-tight text-[var(--t1)]">Agency Chat</span>
         </div>
         <button
           type="button"
@@ -1261,19 +1332,19 @@ export function CompanyChat() {
       </div>
 
       <div className="px-4 pb-3">
-        <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2">
-          <Search size={14} className="text-[#4B5A73]" />
+        <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-s)] px-3 py-2">
+          <Search size={14} className="text-[var(--t3)]" />
           <input
             value={search}
             onChange={event => setSearch(event.target.value)}
             placeholder="Search"
-            className="w-full bg-transparent text-sm text-white outline-none placeholder:text-[#4B5A73]"
+            className="w-full bg-transparent text-sm text-[var(--t1)] outline-none placeholder:text-[var(--t3)]"
           />
         </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-        <p className="px-3 pb-1 pt-1 font-mono text-[9px] font-semibold uppercase tracking-[0.22em]" style={{ color: 'rgba(255,255,255,0.18)' }}>
+        <p className="px-3 pb-1 pt-1 font-mono text-[9px] font-semibold uppercase tracking-[0.22em] text-[var(--t4)]">
           Recent
         </p>
         <div className="space-y-1">
@@ -1286,10 +1357,10 @@ export function CompanyChat() {
                 type="button"
                 onClick={() => void loadConversation(conversation.id)}
                 className={clsx(
-                  'row relative min-h-[44px] w-full rounded-xl border border-transparent px-3 py-2.5 text-left transition-all',
+                  'row relative min-h-[44px] w-full rounded-2xl border border-transparent px-3 py-2.5 text-left transition-all',
                   conversationId === conversation.id
-                    ? 'bg-indigo-500/[0.08] border-l-2 border-indigo-500'
-                    : 'hover:bg-white/[0.04]',
+                    ? 'border-indigo-500/20 bg-indigo-500/[0.08]'
+                    : 'hover:bg-[var(--bg-s)]',
                 )}
               >
                 <div className="flex items-center gap-2.5">
@@ -1297,8 +1368,8 @@ export function CompanyChat() {
                     {conversationTitle.charAt(0).toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold text-white">{conversationTitle}</div>
-                    <div className="mt-0.5 truncate text-xs text-[#8B9DBE]">
+                    <div className="truncate text-sm font-semibold text-[var(--t1)]">{conversationTitle}</div>
+                    <div className="mt-0.5 truncate text-xs text-[var(--t3)]">
                       {conversation.message_count} messages · {formatRelative(conversation.last_message_at)}
                     </div>
                   </div>
@@ -1310,17 +1381,17 @@ export function CompanyChat() {
         </div>
       </div>
 
-      <div className="border-t border-white/[0.07] p-3">
+      <div className="border-t border-[var(--border-soft)] p-3">
         <button
           type="button"
           onClick={() => setSidebarOpen(false)}
-          className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs text-[#8B9DBE] transition hover:bg-white/[0.04] hover:text-white"
+          className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs text-[var(--t3)] transition hover:bg-[var(--bg-s)] hover:text-[var(--t1)]"
         >
           <span className="flex items-center gap-2">
             <PanelLeftClose size={14} className="transition-colors hover:text-indigo-300" />
             Hide sidebar
           </span>
-          <span className="font-mono text-[10px] text-[#4B5A73]">⌘\</span>
+          <span className="font-mono text-[10px] text-[var(--t4)]">⌘\</span>
         </button>
       </div>
     </aside>
@@ -1369,14 +1440,14 @@ export function CompanyChat() {
             </button>
           </div>
         )}
-        <header className="relative z-20 flex h-16 shrink-0 items-center justify-between overflow-visible border-b border-white/[0.08] bg-[rgba(8,13,26,0.82)] px-5 backdrop-blur-xl">
+        <header className="relative z-20 flex h-16 shrink-0 items-center justify-between overflow-visible border-b border-[var(--border-soft)] bg-[var(--surface-card)]/88 px-5 backdrop-blur-xl">
           <div className="flex items-center gap-3">
             <div className="grid h-10 w-10 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500/20 to-violet-500/12 text-indigo-100 shadow-glow-sm ring-1 ring-white/10">
               <Building2 size={20} />
             </div>
             <div>
-              <h1 className="text-lg font-semibold tracking-tight text-white">{currentConversation?.title || 'Agency Chat'}</h1>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[#8B9DBE]">
+              <h1 className="text-lg font-semibold tracking-tight text-[var(--t1)]">{currentConversation?.title || 'Agency Chat'}</h1>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--t3)]">
                 <span className={clsx('badge', connected ? 'badge-emerald' : 'badge-amber')}>{connected ? 'Realtime' : 'Reconnecting'}</span>
                 <span className="badge badge-glass">{activeAgentCount} active agents</span>
                 <button
@@ -1392,18 +1463,23 @@ export function CompanyChat() {
 
           <div className="flex items-center gap-2">
             {conversationId && (
-              <div ref={menuRef} className="relative z-30">
+              <div className="relative z-30">
                 <button
+                  ref={menuButtonRef}
                   type="button"
                   onClick={() => setShowMenu(value => !value)}
-                  className="rounded-xl border border-white/[0.08] p-2 text-white/55 transition hover:bg-white/5 hover:text-white"
+                  className="rounded-xl border border-[var(--border)] p-2 text-[var(--t3)] transition hover:bg-[var(--bg-s)] hover:text-[var(--t1)]"
                   aria-label="Conversation actions"
                   aria-expanded={showMenu}
                 >
                   <MoreHorizontal size={16} />
                 </button>
-                {showMenu && currentConversation && (
-                  <div className="absolute right-0 top-[calc(100%+8px)] z-50 w-56 rounded-2xl border border-white/[0.08] bg-[#0f1520]/95 p-2 shadow-2xl backdrop-blur-xl">
+                {showMenu && currentConversation && typeof document !== 'undefined' && createPortal(
+                  <div
+                    ref={menuRef}
+                    className="z-[90] w-56 rounded-2xl border border-white/[0.08] bg-[#0f1520]/95 p-2 shadow-2xl backdrop-blur-xl"
+                    style={menuStyle}
+                  >
                     <button
                       type="button"
                       onClick={() => {
@@ -1435,7 +1511,8 @@ export function CompanyChat() {
                     >
                       <Trash2 size={14} /> Delete conversation
                     </button>
-                  </div>
+                  </div>,
+                  document.body,
                 )}
               </div>
             )}
@@ -1456,8 +1533,8 @@ export function CompanyChat() {
                   <div className="flex h-20 w-20 items-center justify-center rounded-[24px] bg-gradient-to-br from-indigo-500/20 to-violet-500/12 text-indigo-200 animate-float">
                     <Building2 size={34} />
                   </div>
-                  <h2 className="mt-6 text-4xl font-semibold tracking-tight text-white">Agency Chat</h2>
-                  <p className="mt-3 max-w-2xl text-sm leading-6 text-[#8B9DBE]">
+                  <h2 className="mt-6 text-4xl font-semibold tracking-tight text-[var(--t1)]">Agency Chat</h2>
+                  <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--t2)]">
                     Command your AI agency in plain language.
                   </p>
 
@@ -1473,7 +1550,7 @@ export function CompanyChat() {
                         key={chip}
                         type="button"
                         onClick={() => setInput(chip)}
-                        className="rounded-full border border-white/[0.08] bg-white/[0.03] px-4 py-2 text-xs text-[#8B9DBE] transition hover:border-indigo-500/25 hover:bg-indigo-600/[0.06] hover:text-indigo-300"
+                        className="rounded-full border border-[var(--border)] bg-[var(--bg-s)] px-4 py-2 text-xs text-[var(--t3)] transition hover:border-indigo-500/25 hover:bg-indigo-600/[0.06] hover:text-indigo-300"
                       >
                         {chip}
                       </button>
@@ -1490,7 +1567,7 @@ export function CompanyChat() {
                         {showDaySeparator && (
                           <div className="my-4 flex items-center gap-3">
                             <div className="h-px flex-1 bg-white/[0.06]" />
-                            <span className="text-[10px] font-medium uppercase tracking-widest text-white/25">
+                            <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--t4)]">
                               {formatDayGroup(message.createdAt)}
                             </span>
                             <div className="h-px flex-1 bg-white/[0.06]" />
@@ -1518,7 +1595,7 @@ export function CompanyChat() {
               )}
             </div>
 
-            <footer className="sticky bottom-0 z-10 shrink-0 border-t border-white/[0.08] bg-[rgba(8,13,26,0.95)] px-5 py-4 backdrop-blur-xl">
+            <footer className="sticky bottom-0 z-10 shrink-0 border-t border-[var(--border-soft)] bg-[var(--surface-card)]/92 px-5 py-4 backdrop-blur-xl">
               <div className="mx-auto max-w-5xl">
                 <div className="mb-3 flex flex-wrap gap-2">
                   {dynamicChips.map(chip => (
@@ -1526,7 +1603,7 @@ export function CompanyChat() {
                       key={chip}
                       type="button"
                       onClick={() => setInput(chip)}
-                      className="cursor-pointer rounded-full border border-white/[0.08] bg-white/[0.03] px-4 py-2 text-xs font-medium text-[#8B9DBE] transition duration-150 hover:border-indigo-500/25 hover:bg-indigo-600/[0.06] hover:text-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 backdrop-blur-sm"
+                      className="cursor-pointer rounded-full border border-[var(--border)] bg-[var(--bg-s)] px-4 py-2 text-xs font-medium text-[var(--t3)] transition duration-150 hover:border-indigo-500/25 hover:bg-indigo-600/[0.06] hover:text-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 backdrop-blur-sm"
                     >
                       {chip}
                     </button>

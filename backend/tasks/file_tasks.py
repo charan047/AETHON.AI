@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+from datetime import datetime
 
 from sqlalchemy import select, text as text_q
 
@@ -73,7 +74,7 @@ async def _update_quota(org_id: str, used_bytes_delta: int, db) -> None:
 
 async def activate_file(file_id: str, session_factory=None) -> None:
     from database.db import AsyncSessionLocal
-    from database.models import FileStatus, OrgFile
+    from database.models import Client, FileStatus, OrgFile
     from services.storage_service import storage_service
     from services.websocket_manager import ws_manager
 
@@ -112,13 +113,28 @@ async def activate_file(file_id: str, session_factory=None) -> None:
             await _update_quota(file.org_id, int(file.size_bytes or 0), db)
             await db.commit()
 
+            client_name = None
+            if file.client_id:
+                async with session_factory() as resolve_db:
+                    client = await resolve_db.scalar(
+                        select(Client).where(Client.id == file.client_id)
+                    )
+                    if client:
+                        client_name = client.company_name or client.name
+
             await ws_manager.broadcast_to_channel(
                 f"org:{file.org_id}",
                 {
                     "event": "file_ready",
-                    "file_id": file_id,
+                    "file_id": str(file.id),
                     "name": file.name,
-                    "client_id": str(file.client_id or ""),
+                    "file_type": file.file_type.value if file.file_type else "other",
+                    "client_id": str(file.client_id) if file.client_id else None,
+                    "client_name": client_name,
+                    "agent_id": str(file.agent_id) if file.agent_id else None,
+                    "size_bytes": int(file.size_bytes or 0),
+                    "created_at": datetime.utcnow().isoformat(),
+                    "navigate_to": f"/files/{file.id}",
                 },
             )
         except Exception:

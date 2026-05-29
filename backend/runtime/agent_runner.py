@@ -9,11 +9,11 @@ from typing import Any
 from uuid import uuid4
 
 from config import settings
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import AsyncSessionLocal
-from database.models import Agent, AgentContract, AgentMemoryEntry, AgentRole, ClientKnowledge, CompanyProfile, Execution, ExecutionStep, ExternalAgent, IntegrationType, Organization, OrgVariable, UserIntegration, Workflow
+from database.models import Agent, AgentContract, AgentMemoryEntry, AgentRole, ClientKnowledge, CompanyProfile, Execution, ExecutionStep, ExternalAgent, FileStatus, IntegrationType, OrgFile, Organization, OrgVariable, UserIntegration, Workflow
 from runtime.tools import make_custom_tool
 from services.agent_memory_service import agent_memory_service
 from services.agent_messenger import agent_messenger
@@ -1016,6 +1016,7 @@ class AgentRunner:
         ceo_preferences_block = ""
         client_knowledge = ""
         var_block = ""
+        file_context = ""
 
         try:
             async with AsyncSessionLocal() as db:
@@ -1031,7 +1032,6 @@ class AgentRunner:
                         .order_by(AgentMemoryEntry.created_at.asc())
                     )
                 ).scalars().all()
-            if prefs:
                 pref_lines = "\n".join(
                     f"- {p.content_preview}"
                     for p in prefs
@@ -1079,11 +1079,25 @@ class AgentRunner:
                     if facts:
                         lines = "\n".join(f"- {fact.content}" for fact in facts)
                         client_knowledge = f"WHAT WE KNOW ABOUT THIS CLIENT:\n{lines}\n"
+
+                file_count = await db.scalar(
+                    select(func.count(OrgFile.id)).where(
+                        OrgFile.org_id == str(self.config.org_id),
+                        OrgFile.status == FileStatus.ready,
+                    )
+                )
+                if file_count and file_count > 0:
+                    file_context = (
+                        f"ORGANIZATION FILE STORAGE: {file_count} file(s) available.\n"
+                        "Use search_org_files(query) to find relevant documents.\n"
+                        "Use read_org_file(file_id) to read a specific file.\n"
+                    )
         except Exception as exc:
             logger.warning("Prompt context retrieval failed for agent %s: %s", self.config.id, exc)
             ceo_preferences_block = ""
             client_knowledge = ""
             var_block = ""
+            file_context = ""
 
         if getattr(self.config, "persona_name", None):
             company_name = await self._get_company_name(user_id)
@@ -1116,6 +1130,7 @@ class AgentRunner:
                 ceo_preferences_block,
                 identity_block,
                 client_knowledge,
+                file_context,
                 var_block,
                 business_context,
                 living_memory_context,

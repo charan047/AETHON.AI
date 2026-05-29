@@ -494,6 +494,7 @@ class MissionTask(Base):
         nullable=False,
     )
     output_summary = Column(Text, nullable=True)
+    output_file_id = Column(String, ForeignKey("org_files.id", ondelete="SET NULL"), nullable=True)
     execution_id = Column(String, ForeignKey("executions.id", ondelete="SET NULL"), nullable=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -581,6 +582,30 @@ class CollabDocument(Base):
     room = Column(String(255), primary_key=True)
     yjs_state = Column(Text, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DocumentComment(Base):
+    """
+    Inline comment on a collaborative document.
+    comment_id matches the Tiptap mark ID.
+    """
+
+    __tablename__ = "document_comments"
+    __table_args__ = (
+        Index("ix_doc_comments_file", "file_id"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid4str)
+    file_id = Column(String, ForeignKey("org_files.id", ondelete="CASCADE"), nullable=False)
+    org_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    comment_id = Column(String(255), nullable=False)
+    content = Column(Text, nullable=False)
+    quoted_text = Column(Text, nullable=True)
+    resolved = Column(Boolean, default=False, nullable=False)
+    created_by = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    resolved_at = Column(DateTime, nullable=True)
+    resolved_by = Column(String, nullable=True)
 
 
 class CTOTask(Base):

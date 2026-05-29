@@ -24,6 +24,8 @@ import { useQuery } from '@tanstack/react-query'
 import { clsx } from 'clsx'
 import { useAuth } from '../../contexts/AuthContext'
 import { a2aApi, approvalsApi, messagesApi, missionsApi, modelsApi } from '../../api/client'
+import { NotificationCenter } from '../NotificationCenter'
+import { ShinyText } from '../reactbits/ShinyText'
 import { ThemeToggle } from '../ui/ThemeToggle'
 import { OrgSwitcher } from '../org/OrgSwitcher'
 
@@ -202,13 +204,16 @@ export function Sidebar({
         mobileOpen ? 'translate-x-0' : '-translate-x-full',
       )}
     >
-      <div className="flex h-14 items-center gap-2.5 px-4">
-        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500 shadow-[0_0_18px_rgba(99,102,241,0.3)]">
+      <div className="flex h-16 items-center gap-3 px-4">
+        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-500 shadow-[0_0_18px_rgba(99,102,241,0.3)]">
           <Zap size={16} className="text-white" />
         </div>
-        <div className="text-sm font-bold tracking-tight text-white">Aethon</div>
-        <div className="flex-1" />
-        <ThemeToggle />
+        <div>
+          <div className="text-sm font-bold tracking-tight text-white">Aethon</div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/35">
+            <ShinyText>Agency OS</ShinyText>
+          </div>
+        </div>
       </div>
 
       <div className="px-3 pb-2">
@@ -261,18 +266,20 @@ export function Sidebar({
         </nav>
 
         <div className="mt-auto border-t border-white/[0.07] p-3">
-          <div className="group flex items-center gap-3 rounded-xl px-1">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/20 text-xs font-bold text-indigo-300">
-              {userInitials}
+          <div className="sidebar-footer-card p-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/20 text-xs font-bold text-indigo-300">
+                {userInitials}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-white">{profileName}</div>
+                <div className="truncate text-[11px] text-t3">{userRole}</div>
+              </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-semibold text-white">{profileName}</div>
-              <div className="truncate text-[11px] text-t3">{userRole}</div>
-            </div>
-            <div className="flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-              <span className="rounded-md border border-white/[0.06] bg-white/[0.02] px-1.5 py-0.5 font-mono text-[10px] text-t3">
-                ⌘K
-              </span>
+
+            <div className="sidebar-utility-rail" data-testid="sidebar-footer-utilities">
+              <NotificationCenter />
+              <ThemeToggle />
               <Link
                 to="/settings/org"
                 onClick={handleNavClick}
@@ -281,6 +288,9 @@ export function Sidebar({
               >
                 <Settings size={16} />
               </Link>
+              <span className="sidebar-command-pill">
+                ⌘K
+              </span>
             </div>
           </div>
         </div>

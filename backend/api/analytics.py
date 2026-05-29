@@ -1,3 +1,4 @@
+import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -7,12 +8,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.dependencies import get_current_user
 from auth.org_context import OrgContext, get_org_context
+from config import settings
 from database import get_db
+from database.db import AsyncSessionLocal
 from database.models import (
     Agent,
+    Client,
     Execution,
     ExecutionCostLog,
     ExecutionStatus,
+    FileStatus,
+    OrgFile,
+    OrgStorageQuota,
     ToolCallLog,
     User,
     Workflow,
@@ -44,6 +51,179 @@ def _normalize_daily_series(
         }
         for index in range(period_days)
     ]
+
+
+async def _run_in_fresh_session(fn, *args):
+    async with AsyncSessionLocal() as db:
+        return await fn(*args, db)
+
+
+async def _get_costs_for_overview(
+    period_days: int,
+    current_user: User,
+    ctx: OrgContext,
+    db: AsyncSession,
+):
+    return await get_costs(period_days=period_days, db=db, current_user=current_user, ctx=ctx)
+
+
+async def _get_storage_metrics(
+    org_id: str,
+    date_from: datetime,
+    db: AsyncSession,
+) -> dict:
+    files_this_period = await db.scalar(
+        select(func.count(OrgFile.id))
+        .where(
+            OrgFile.org_id == org_id,
+            OrgFile.status == FileStatus.ready,
+            OrgFile.created_at >= date_from,
+        )
+    )
+
+    files_by_type = (
+        await db.execute(
+            select(
+                OrgFile.file_type,
+                func.count(OrgFile.id).label("count"),
+            )
+            .where(
+                OrgFile.org_id == org_id,
+                OrgFile.status == FileStatus.ready,
+            )
+            .group_by(OrgFile.file_type)
+        )
+    ).all()
+
+    quota = await db.scalar(
+        select(OrgStorageQuota).where(OrgStorageQuota.org_id == org_id)
+    )
+
+    files_by_client = (
+        await db.execute(
+            select(
+                Client.name,
+                Client.company_name,
+                func.count(OrgFile.id).label("file_count"),
+            )
+            .join(Client, OrgFile.client_id == Client.id)
+            .where(
+                OrgFile.org_id == org_id,
+                OrgFile.status == FileStatus.ready,
+            )
+            .group_by(Client.id, Client.name, Client.company_name)
+            .order_by(func.count(OrgFile.id).desc())
+            .limit(5)
+        )
+    ).all()
+
+    used_bytes = int(quota.used_bytes or 0) if quota else 0
+    quota_bytes = int(quota.quota_bytes or settings.storage_quota_per_org) if quota else settings.storage_quota_per_org
+
+    return {
+        "files_this_period": int(files_this_period or 0),
+        "files_by_type": {
+            row.file_type.value if row.file_type else "other": int(row.count or 0)
+            for row in files_by_type
+        },
+        "storage_used_bytes": used_bytes,
+        "storage_quota_bytes": quota_bytes,
+        "storage_percent": round((used_bytes / max(quota_bytes, 1)) * 100, 1),
+        "files_by_client": [
+            {
+                "name": row.company_name or row.name,
+                "count": int(row.file_count or 0),
+            }
+            for row in files_by_client
+        ],
+    }
+
+
+async def _get_execution_counts(org_id: str, since: datetime, db: AsyncSession):
+    return (
+        await db.execute(
+            select(
+                func.count(Execution.id).label("total"),
+                func.count(case((Execution.status == ExecutionStatus.completed, 1))).label("completed"),
+                func.count(case((Execution.status == ExecutionStatus.failed, 1))).label("failed"),
+            )
+            .where(
+                Execution.org_id == org_id,
+                Execution.started_at >= since,
+            )
+        )
+    ).one()
+
+
+async def _get_approved_counts(org_id: str, since: datetime, db: AsyncSession):
+    return (
+        await db.execute(
+            select(
+                func.count(Execution.id).label("total_approved"),
+                func.count(
+                    case(
+                        (
+                            (Execution.approved_by.is_not(None))
+                            & (Execution.revision_number == 1),
+                            1,
+                        )
+                    )
+                ).label("first_draft_approved"),
+                func.coalesce(func.avg(Execution.revision_number), 1.0).label("avg_revisions"),
+            )
+            .where(
+                Execution.org_id == org_id,
+                Execution.started_at >= since,
+                Execution.approved_by.is_not(None),
+            )
+        )
+    ).one()
+
+
+async def _get_pending_review_count(org_id: str, db: AsyncSession) -> int:
+    return int(
+        await db.scalar(
+            select(func.count(Execution.id)).where(
+                Execution.org_id == org_id,
+                Execution.status == ExecutionStatus.pending_review,
+            )
+        )
+        or 0
+    )
+
+
+async def _get_daily_execution_rows(org_id: str, since: datetime, db: AsyncSession):
+    return (
+        await db.execute(
+            select(
+                func.date(Execution.started_at).label("day"),
+                func.count(Execution.id).label("count"),
+            )
+            .where(
+                Execution.org_id == org_id,
+                Execution.started_at >= since,
+            )
+            .group_by(func.date(Execution.started_at))
+            .order_by(func.date(Execution.started_at).asc())
+        )
+    ).all()
+
+
+async def _get_tool_call_count(org_id: str, user_id: str, db: AsyncSession) -> int:
+    return int(
+        await db.scalar(
+            select(func.count(ToolCallLog.id))
+            .outerjoin(Execution, Execution.id == ToolCallLog.execution_id)
+            .where(
+                ToolCallLog.user_id == user_id,
+                or_(
+                    and_(ToolCallLog.execution_id.is_(None), ToolCallLog.org_id == org_id),
+                    Execution.org_id == org_id,
+                ),
+            )
+        )
+        or 0
+    )
 
 
 @router.get("/costs")
@@ -296,74 +476,33 @@ async def get_analytics_overview(
     current_user: User = Depends(get_current_user),
     ctx: OrgContext = Depends(get_org_context),
 ):
-    costs = await get_costs(period_days=period_days, db=db, current_user=current_user, ctx=ctx)
     since = datetime.utcnow() - timedelta(days=period_days)
-    execution_counts = (
-        await db.execute(
-            select(
-                func.count(Execution.id).label("total"),
-                func.count(case((Execution.status == ExecutionStatus.completed, 1))).label("completed"),
-                func.count(case((Execution.status == ExecutionStatus.failed, 1))).label("failed"),
-            )
-            .where(
-                Execution.org_id == ctx.org.id,
-                Execution.started_at >= since,
-            )
+    if "sqlite" in str(db.bind.url).lower():
+        costs = await _get_costs_for_overview(period_days, current_user, ctx, db)
+        execution_counts = await _get_execution_counts(ctx.org.id, since, db)
+        approved_counts = await _get_approved_counts(ctx.org.id, since, db)
+        pending_review_count = await _get_pending_review_count(ctx.org.id, db)
+        daily_execution_rows = await _get_daily_execution_rows(ctx.org.id, since, db)
+        tool_calls = await _get_tool_call_count(ctx.org.id, current_user.id, db)
+        storage_metrics = await _get_storage_metrics(ctx.org.id, since, db)
+    else:
+        (
+            costs,
+            execution_counts,
+            approved_counts,
+            pending_review_count,
+            daily_execution_rows,
+            tool_calls,
+            storage_metrics,
+        ) = await asyncio.gather(
+            _run_in_fresh_session(_get_costs_for_overview, period_days, current_user, ctx),
+            _run_in_fresh_session(_get_execution_counts, ctx.org.id, since),
+            _run_in_fresh_session(_get_approved_counts, ctx.org.id, since),
+            _run_in_fresh_session(_get_pending_review_count, ctx.org.id),
+            _run_in_fresh_session(_get_daily_execution_rows, ctx.org.id, since),
+            _run_in_fresh_session(_get_tool_call_count, ctx.org.id, current_user.id),
+            _run_in_fresh_session(_get_storage_metrics, ctx.org.id, since),
         )
-    ).one()
-    approved_counts = (
-        await db.execute(
-            select(
-                func.count(Execution.id).label("total_approved"),
-                func.count(
-                    case(
-                        (
-                            (Execution.approved_by.is_not(None))
-                            & (Execution.revision_number == 1),
-                            1,
-                        )
-                    )
-                ).label("first_draft_approved"),
-                func.coalesce(func.avg(Execution.revision_number), 1.0).label("avg_revisions"),
-            )
-            .where(
-                Execution.org_id == ctx.org.id,
-                Execution.started_at >= since,
-                Execution.approved_by.is_not(None),
-            )
-        )
-    ).one()
-    pending_review_count = await db.scalar(
-        select(func.count(Execution.id)).where(
-            Execution.org_id == ctx.org.id,
-            Execution.status == ExecutionStatus.pending_review,
-        )
-    ) or 0
-    daily_execution_rows = (
-        await db.execute(
-            select(
-                func.date(Execution.started_at).label("day"),
-                func.count(Execution.id).label("count"),
-            )
-            .where(
-                Execution.org_id == ctx.org.id,
-                Execution.started_at >= since,
-            )
-            .group_by(func.date(Execution.started_at))
-            .order_by(func.date(Execution.started_at).asc())
-        )
-    ).all()
-    tool_calls = await db.scalar(
-        select(func.count(ToolCallLog.id))
-        .outerjoin(Execution, Execution.id == ToolCallLog.execution_id)
-        .where(
-            ToolCallLog.user_id == current_user.id,
-            or_(
-                and_(ToolCallLog.execution_id.is_(None), ToolCallLog.org_id == ctx.org.id),
-                Execution.org_id == ctx.org.id,
-            ),
-        )
-    ) or 0
     total_approved = int(approved_counts.total_approved or 0)
     first_draft_approved = int(approved_counts.first_draft_approved or 0)
     first_draft_rate = (
@@ -390,5 +529,6 @@ async def get_analytics_overview(
         "avg_revisions": avg_revisions,
         "pending_review_count": int(pending_review_count),
         "tool_calls": tool_calls,
+        "storage_metrics": storage_metrics,
         "api_calls_last_minute": telemetry_service.get_api_calls_last_minute(),
     }

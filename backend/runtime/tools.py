@@ -351,6 +351,50 @@ def text_analysis(text: str) -> str:
     )
 
 
+SEARCH_ORG_FILES_DEFINITION = {
+    "name": "search_org_files",
+    "description": (
+        "Search the organization's file storage for documents, "
+        "research briefs, reports, and other files. "
+        "Use this when you need to find previous work, research, "
+        "or documents created by other agents."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "What to search for. Be specific: e.g. 'Acme Corp competitor research Q2'",
+            },
+            "client_name": {
+                "type": "string",
+                "description": "Optional: filter results to a specific client name",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+
+READ_ORG_FILE_DEFINITION = {
+    "name": "read_org_file",
+    "description": (
+        "Read the full content of a specific file from storage. "
+        "Use the file_id returned by search_org_files."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "file_id": {
+                "type": "string",
+                "description": "The file ID to read (from search_org_files results)",
+            },
+        },
+        "required": ["file_id"],
+    },
+}
+
+
 TOOL_REGISTRY = {
     "web_search": web_search,
     "calculator": calculator,
@@ -371,6 +415,7 @@ SPECIAL_TOOL_IDS = {
     "research",
 }
 BUILTIN_TOOL_IDS = set(TOOL_REGISTRY.keys()) | SPECIAL_TOOL_IDS
+BUILTIN_TOOL_IDS.update({"search_org_files", "read_org_file"})
 
 EXTERNAL_AGENT_TOOL_PREFIX = "agent:"
 

@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy import select
 
-from database.models import Agent, Client, Execution, ExecutionStatus, Mission, MissionStatus, MissionTask, MissionTaskStatus, Workflow
+from database.models import Agent, Client, Execution, ExecutionStatus, FileStatus, FileType, Mission, MissionStatus, MissionTask, MissionTaskStatus, OrgFile, OrgStorageQuota, Workflow
 from services.mission_orchestrator import MissionOrchestrator
 
 
@@ -165,10 +165,108 @@ async def test_dispatch_task_includes_dependency_output_context(monkeypatch, db,
     assert stored_task.status == MissionTaskStatus.running
     assert execution is not None
     assert execution.status == ExecutionStatus.pending
-    assert "Goal: Build an Acme strategy brief" in captured["input_message"]
-    assert "Previous research (Research)" in captured["input_message"]
+    assert "Mission goal: Build an Acme strategy brief" in captured["input_message"]
+    assert "Summary from 'Research':" in captured["input_message"]
     assert "Acme competitors are Alpha and Beta" in captured["input_message"]
     assert "Your task: Write the final client brief." in captured["input_message"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_prefers_full_dependency_file_context(monkeypatch, db, db_engine, test_org, test_user, test_agent):
+    mission = Mission(
+        org_id=test_org.id,
+        goal="Build an Acme strategy brief",
+        title="Acme strategy",
+        status=MissionStatus.active,
+        created_by=test_user.id,
+    )
+    db.add(mission)
+    await db.commit()
+    await db.refresh(mission)
+
+    test_agent.org_id = test_org.id
+    test_agent.is_active = True
+    await db.commit()
+
+    workflow = Workflow(
+        org_id=test_org.id,
+        name="Agent Workflow",
+        description="Single agent workflow",
+        nodes=[{"id": "node_1", "type": "agentNode", "data": {"agent_id": test_agent.id, "label": test_agent.name}}],
+        edges=[],
+        trigger="manual",
+        status="draft",
+    )
+    db.add(workflow)
+    await db.commit()
+    await db.refresh(workflow)
+
+    dep = MissionTask(
+        org_id=test_org.id,
+        mission_id=mission.id,
+        sequence=1,
+        title="Research",
+        status=MissionTaskStatus.completed,
+        output_summary="Short summary that should not be used when a file exists.",
+        output_file_id="file-dep-1",
+    )
+    org_file = OrgFile(
+        id="file-dep-1",
+        org_id=test_org.id,
+        mission_id=mission.id,
+        name="research-output.md",
+        file_type=FileType.markdown,
+        status=FileStatus.ready,
+        storage_key="orgs/test/documents/research-output.md",
+        size_bytes=4096,
+        content_type="text/markdown",
+    )
+    db.add_all([dep, org_file])
+    await db.commit()
+    await db.refresh(dep)
+
+    task = MissionTask(
+        org_id=test_org.id,
+        mission_id=mission.id,
+        sequence=2,
+        title="Write brief",
+        description="Write the final client brief.",
+        agent_id=test_agent.id,
+        depends_on=dep.id,
+        status=MissionTaskStatus.pending,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+
+    long_content = "Acme full research brief.\n" + ("Detailed finding.\n" * 120)
+    captured = {}
+
+    async def fake_enqueue(execution_id, workflow_id, input_message, user_id, org_id, **_kwargs):
+        captured["input_message"] = input_message
+        return "background"
+
+    async def fake_broadcast(*_args, **_kwargs):
+        return None
+
+    async def fake_read_document(_storage_key):
+        return long_content.encode("utf-8")
+
+    monkeypatch.setattr(
+        "services.mission_orchestrator.AsyncSessionLocal",
+        async_sessionmaker(db_engine, expire_on_commit=False),
+    )
+    monkeypatch.setattr("services.mission_orchestrator.enqueue_workflow_execution", fake_enqueue)
+    monkeypatch.setattr("services.mission_orchestrator.ws_manager.broadcast_to_channel", fake_broadcast)
+    monkeypatch.setattr("services.mission_orchestrator.storage_service.read_document", fake_read_document)
+    monkeypatch.setattr(MissionOrchestrator, "_monitor_task_completion", fake_broadcast)
+
+    orchestrator = MissionOrchestrator()
+    await orchestrator._dispatch_task(task, [dep, task], mission)
+
+    assert "Full output from 'Research':" in captured["input_message"]
+    assert long_content.strip() in captured["input_message"]
+    assert "Short summary that should not be used" not in captured["input_message"]
 
 
 @pytest.mark.asyncio
@@ -364,6 +462,80 @@ async def test_orchestrator_reconciles_completed_execution_without_monitor(monke
     assert stored_task.output_summary == "final answer"
     assert finalized["mission_id"] == mission.id
     assert stored_mission.status == MissionStatus.completed
+
+
+@pytest.mark.asyncio
+async def test_monitor_task_completion_saves_full_output_as_org_file(monkeypatch, db, db_engine, test_org, test_user):
+    mission = Mission(
+        org_id=test_org.id,
+        goal="Prepare a market brief",
+        title="Market brief",
+        status=MissionStatus.active,
+        created_by=test_user.id,
+    )
+    db.add(mission)
+    await db.commit()
+    await db.refresh(mission)
+
+    execution = Execution(
+        org_id=test_org.id,
+        workflow_id="wf-1",
+        trigger="mission",
+        status=ExecutionStatus.completed,
+        input_message="run",
+        output_message="## Acme Research\n\n" + ("Long form finding. " * 40),
+        started_at=mission.created_at,
+        completed_at=mission.created_at,
+    )
+    db.add(execution)
+    await db.commit()
+    await db.refresh(execution)
+
+    task = MissionTask(
+        org_id=test_org.id,
+        mission_id=mission.id,
+        sequence=1,
+        title="Research the market",
+        status=MissionTaskStatus.running,
+        execution_id=execution.id,
+        started_at=mission.created_at,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+
+    async def fake_broadcast(*_args, **_kwargs):
+        return None
+
+    async def fake_write_document(*, org_id, file_id, content, content_type, client_id=None, filename="document.json"):
+        assert org_id == test_org.id
+        assert content_type == "text/markdown"
+        assert filename.endswith(".md")
+        return f"orgs/{org_id}/shared/documents/{file_id}/{filename}"
+
+    monkeypatch.setattr(
+        "services.mission_orchestrator.AsyncSessionLocal",
+        async_sessionmaker(db_engine, expire_on_commit=False),
+    )
+    monkeypatch.setattr("services.mission_orchestrator.ws_manager.broadcast_to_channel", fake_broadcast)
+    monkeypatch.setattr("services.mission_orchestrator.storage_service.write_document", fake_write_document)
+
+    orchestrator = MissionOrchestrator()
+    await orchestrator._monitor_task_completion(task.id, execution.id, mission.id)
+
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as verify_db:
+        stored_task = await verify_db.scalar(select(MissionTask).where(MissionTask.id == task.id))
+        stored_file = await verify_db.scalar(select(OrgFile).where(OrgFile.id == stored_task.output_file_id))
+        quota = await verify_db.scalar(select(OrgStorageQuota).where(OrgStorageQuota.org_id == test_org.id))
+
+    assert stored_task.status == MissionTaskStatus.completed
+    assert stored_task.output_file_id is not None
+    assert stored_file is not None
+    assert stored_file.mission_id == mission.id
+    assert stored_file.execution_id == execution.id
+    assert stored_file.status == FileStatus.ready
+    assert quota is not None
+    assert int(quota.used_bytes or 0) >= len(execution.output_message.encode("utf-8"))
 
 
 @pytest.mark.asyncio

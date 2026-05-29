@@ -20,6 +20,7 @@ from config import settings
 from database import get_db
 from database.models import (
     Client,
+    DocumentComment,
     FileStatus,
     FileType,
     OrgFile,
@@ -67,6 +68,12 @@ class FileUpdateRequest(BaseModel):
 class FileAgentWriteRequest(BaseModel):
     content: str = Field(..., min_length=1)
     agent_name: str = Field("Aethon Agent", min_length=1, max_length=120)
+
+
+class FileCommentCreateRequest(BaseModel):
+    comment_id: str = Field(..., min_length=1, max_length=255)
+    content: str = Field(..., min_length=1)
+    quoted_text: str | None = None
 
 
 class FileExportFormat(str):
@@ -163,6 +170,27 @@ async def _serialize_file(file: OrgFile, request: Request) -> dict[str, Any]:
         "updated_at": file.updated_at,
         "last_accessed_at": file.last_accessed_at,
         "download_url": await _resolve_download_url(file, request),
+    }
+
+
+def _display_name(user: User | None) -> str | None:
+    if not user:
+        return None
+    return user.full_name or user.email
+
+
+def _serialize_comment(comment: DocumentComment, created_by_name: str | None) -> dict[str, Any]:
+    return {
+        "id": comment.id,
+        "comment_id": comment.comment_id,
+        "content": comment.content,
+        "quoted_text": comment.quoted_text,
+        "resolved": comment.resolved,
+        "created_by": comment.created_by,
+        "created_by_name": created_by_name,
+        "created_at": comment.created_at,
+        "resolved_at": comment.resolved_at,
+        "resolved_by": comment.resolved_by,
     }
 
 
@@ -332,6 +360,52 @@ async def list_files(
     }
 
 
+@router.get("/storage/usage")
+async def get_storage_usage(
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    quota = await db.scalar(
+        select(OrgStorageQuota).where(OrgStorageQuota.org_id == ctx.org.id)
+    )
+    if not quota:
+        quota = OrgStorageQuota(
+            org_id=ctx.org.id,
+            used_bytes=0,
+            quota_bytes=settings.storage_quota_per_org,
+        )
+        db.add(quota)
+        await db.commit()
+        await db.refresh(quota)
+
+    file_count = await db.scalar(
+        select(func.count(OrgFile.id)).where(
+            OrgFile.org_id == ctx.org.id,
+            OrgFile.status == FileStatus.ready,
+        )
+    )
+
+    used_bytes = int(quota.used_bytes or 0)
+    quota_bytes = int(quota.quota_bytes or settings.storage_quota_per_org or 1)
+    percent_used = round((used_bytes / max(quota_bytes, 1)) * 100, 1)
+
+    return {
+        "used_bytes": used_bytes,
+        "quota_bytes": quota_bytes,
+        "used_gb": round(used_bytes / (1024 ** 3), 3),
+        "quota_gb": round(quota_bytes / (1024 ** 3), 1),
+        "percent_used": percent_used,
+        "file_count": int(file_count or 0),
+        "status": (
+            "critical"
+            if used_bytes > quota_bytes * 0.9
+            else "warning"
+            if used_bytes > quota_bytes * 0.75
+            else "healthy"
+        ),
+    }
+
+
 @router.post("/upload-url", status_code=201)
 async def create_upload_url(
     data: FileUploadUrlRequest,
@@ -451,6 +525,119 @@ async def get_file(
     await db.commit()
     await db.refresh(file)
     return await _serialize_file(file, request)
+
+
+@router.get("/{file_id}/comments")
+async def list_file_comments(
+    file_id: str,
+    db: AsyncSession = Depends(get_db),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await _org_file_or_404(file_id, ctx.org.id, db)
+    rows = (
+        await db.execute(
+            select(DocumentComment, User)
+            .outerjoin(User, User.id == DocumentComment.created_by)
+            .where(
+                DocumentComment.file_id == file_id,
+                DocumentComment.org_id == ctx.org.id,
+                DocumentComment.resolved == False,  # noqa: E712
+            )
+            .order_by(DocumentComment.created_at.asc())
+        )
+    ).all()
+    return [_serialize_comment(comment, _display_name(user)) for comment, user in rows]
+
+
+@router.post("/{file_id}/comments", status_code=201)
+async def create_file_comment(
+    file_id: str,
+    data: FileCommentCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    file = await _org_file_or_404(file_id, ctx.org.id, db)
+    if _enum_value(file.file_type) != FileType.document.value:
+        raise HTTPException(status_code=409, detail="Comments are only available for documents")
+
+    existing = await db.scalar(
+        select(DocumentComment).where(
+            DocumentComment.file_id == file_id,
+            DocumentComment.org_id == ctx.org.id,
+            DocumentComment.comment_id == data.comment_id,
+        )
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Comment already exists for this document")
+
+    comment = DocumentComment(
+        file_id=file_id,
+        org_id=ctx.org.id,
+        comment_id=data.comment_id,
+        content=data.content.strip(),
+        quoted_text=(data.quoted_text or "").strip() or None,
+        created_by=str(current_user.id),
+    )
+    db.add(comment)
+    await db.commit()
+    await db.refresh(comment)
+    return _serialize_comment(comment, _display_name(current_user))
+
+
+@router.patch("/{file_id}/comments/{comment_id}/resolve")
+async def resolve_file_comment(
+    file_id: str,
+    comment_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await _org_file_or_404(file_id, ctx.org.id, db)
+    comment = await db.scalar(
+        select(DocumentComment).where(
+            DocumentComment.file_id == file_id,
+            DocumentComment.org_id == ctx.org.id,
+            DocumentComment.comment_id == comment_id,
+        )
+    )
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    comment.resolved = True
+    comment.resolved_at = datetime.utcnow()
+    comment.resolved_by = str(current_user.id)
+    await db.commit()
+    await db.refresh(comment)
+    return _serialize_comment(comment, _display_name(current_user))
+
+
+@router.delete("/{file_id}/comments/{comment_id}")
+async def delete_file_comment(
+    file_id: str,
+    comment_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_editor),
+    ctx: OrgContext = Depends(get_org_context),
+):
+    await _org_file_or_404(file_id, ctx.org.id, db)
+    comment = await db.scalar(
+        select(DocumentComment).where(
+            DocumentComment.file_id == file_id,
+            DocumentComment.org_id == ctx.org.id,
+            DocumentComment.comment_id == comment_id,
+        )
+    )
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    is_admin = ctx.effective_role.value in {"owner", "admin"}
+    if comment.created_by != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=403, detail="Only the comment creator or an org admin can delete this comment")
+
+    await db.delete(comment)
+    await db.commit()
+    return {"comment_id": comment_id, "deleted": True}
 
 
 @router.patch("/{file_id}")
