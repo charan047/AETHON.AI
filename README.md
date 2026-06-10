@@ -2,7 +2,6 @@
 
 > Your AI agency team. Handles the repeatable work. You approve before anything reaches clients.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/charan047/AETHON.AI/test.yml?branch=main&label=CI&style=for-the-badge)](https://github.com/charan047/AETHON.AI/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-111827?style=for-the-badge)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-3B82F6?style=for-the-badge)](./backend)
 [![React](https://img.shields.io/badge/React-18-06B6D4?style=for-the-badge)](./frontend)
